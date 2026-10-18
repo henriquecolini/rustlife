@@ -1,0 +1,79 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "bins/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/henriquecolini/rustlife"
+authors = ["Henrique Colini <henriquecolini@gmail.com>"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates.
+rl_config = { path = "crates/rl_config" }
+source_fs = { path = "crates/source_fs" }
+
+# External crates.
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1"
+directories = "6"
+memmap2 = "0.9"
+proptest = "1"
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unreachable_pub = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints we deliberately allow, with the reasoning kept here so it is
+# visible to every contributor:
+# - module_name_repetitions: `vpk::VpkArchive` reads better than `vpk::Archive`
+#   once re-exported at the crate root.
+module_name_repetitions = "allow"
+# - cast_*: binary formats are full of fixed-width integer conversions; every
+#   such cast is reviewed at the parse site and checked with `try_from` where a
+#   value can actually overflow.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# - Bevy systems take many `Query`/`Res` parameters by value by design.
+needless_pass_by_value = "allow"
+too_many_arguments = "allow"
+# - assert_is_empty: `assert!(x.is_empty())` reads naturally in tests and the
+#   suggested `assert_eq!(x, [] as [T; 0])` is noisier than the benefit.
+assert_is_empty = "allow"
+# Robustness: library code must report errors instead of panicking.
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.dev]
+# Bevy is painfully slow unoptimised; optimise dependencies but keep our own
+# code quick to compile and debuggable.
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

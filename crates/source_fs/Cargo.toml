@@ -1,0 +1,30 @@
+[package]
+name = "source_fs"
+description = "Read-only virtual filesystem over Source engine content: Steam discovery, gameinfo search paths, VPK archives, loose directories, map pakfiles and workshop items."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Exposes builders that synthesise VPK archives and Steam directory layouts so
+# that tests in this and other crates never depend on real game content.
+testing = []
+
+[dependencies]
+crc32fast.workspace = true
+serde = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

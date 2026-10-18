@@ -1,0 +1,20 @@
+/target
+*.swp
+.idea/
+.vscode/
+
+# rustlife never ships or commits Valve content. These patterns guard against
+# accidentally adding files copied out of a game install.
+*.bsp
+*.vpk
+*.vtf
+*.vmt
+*.mdl
+*.vvd
+*.vtx
+*.phy
+*.ani
+*.wav
+*.mp3
+*.pcf
+*.nav
