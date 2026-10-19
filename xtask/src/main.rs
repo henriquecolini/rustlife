@@ -59,15 +59,28 @@ type TaskResult = Result<(), String>;
 fn ci() -> TaskResult {
     cargo(&["fmt", "--all", "--", "--check"], &[])?;
     cargo(
-        &["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"],
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--",
+            "-D",
+            "warnings",
+        ],
         &[],
     )?;
     cargo(&["test", "--workspace", "--all-features"], &[])?;
-    cargo(&["doc", "--workspace", "--no-deps", "--all-features"], &[("RUSTDOCFLAGS", "-D warnings")])?;
+    cargo(
+        &["doc", "--workspace", "--no-deps", "--all-features"],
+        &[("RUSTDOCFLAGS", "-D warnings")],
+    )?;
     if has_cargo_subcommand("deny") {
         cargo(&["deny", "check"], &[])?;
     } else {
-        eprintln!("xtask: cargo-deny not installed; skipping dependency audit (cargo install cargo-deny)");
+        eprintln!(
+            "xtask: cargo-deny not installed; skipping dependency audit (cargo install cargo-deny)"
+        );
     }
     check_assets()?;
     println!("xtask: all CI checks passed");
@@ -75,7 +88,10 @@ fn ci() -> TaskResult {
 }
 
 fn content_tests() -> TaskResult {
-    cargo(&["test", "--workspace", "--all-features", "--", "--ignored"], &[])
+    cargo(
+        &["test", "--workspace", "--all-features", "--", "--ignored"],
+        &[],
+    )
 }
 
 /// Fails if any tracked or staged file has a forbidden extension or content
@@ -83,7 +99,13 @@ fn content_tests() -> TaskResult {
 fn check_assets() -> TaskResult {
     let root = workspace_root()?;
     let output = Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
         .current_dir(&root)
         .output()
         .map_err(|e| format!("failed to run git: {e}"))?;
@@ -95,8 +117,14 @@ fn check_assets() -> TaskResult {
     for name in output.stdout.split(|&b| b == 0).filter(|n| !n.is_empty()) {
         let relative = String::from_utf8_lossy(name);
         let path = root.join(relative.as_ref());
-        let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-        if extension.as_deref().is_some_and(|e| FORBIDDEN_EXTENSIONS.contains(&e)) {
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        if extension
+            .as_deref()
+            .is_some_and(|e| FORBIDDEN_EXTENSIONS.contains(&e))
+        {
             violations.push(format!("{relative}: forbidden content extension"));
         } else if let Some(kind) = sniff_magic(&path) {
             violations.push(format!("{relative}: looks like a {kind}"));
@@ -117,7 +145,10 @@ fn check_assets() -> TaskResult {
 fn sniff_magic(path: &Path) -> Option<&'static str> {
     let mut header = [0u8; 4];
     File::open(path).ok()?.read_exact(&mut header).ok()?;
-    FORBIDDEN_MAGIC.iter().find(|(magic, _)| header == **magic).map(|(_, kind)| *kind)
+    FORBIDDEN_MAGIC
+        .iter()
+        .find(|(magic, _)| header == **magic)
+        .map(|(_, kind)| *kind)
 }
 
 fn cargo(args: &[&str], env: &[(&str, &str)]) -> TaskResult {
@@ -129,7 +160,11 @@ fn cargo(args: &[&str], env: &[(&str, &str)]) -> TaskResult {
         .current_dir(workspace_root()?)
         .status()
         .map_err(|e| format!("failed to run cargo: {e}"))?;
-    if status.success() { Ok(()) } else { Err(format!("`cargo {}` failed", args.join(" "))) }
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("`cargo {}` failed", args.join(" ")))
+    }
 }
 
 fn has_cargo_subcommand(name: &str) -> bool {

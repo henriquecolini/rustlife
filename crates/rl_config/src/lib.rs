@@ -67,9 +67,11 @@ pub enum ConfigError {
     Parse {
         /// The config file.
         path: PathBuf,
-        /// Parser error with position.
+        /// Parser error with position. Boxed because `SpannedError` is large,
+        /// and without boxing it would inflate every `Result<_, ConfigError>`
+        /// (see clippy's `result_large_err`).
         #[source]
-        source: ron::error::SpannedError,
+        source: Box<ron::error::SpannedError>,
     },
 }
 
@@ -91,7 +93,7 @@ impl UserConfig {
         match fs::read_to_string(path) {
             Ok(text) => Self::parse(&text).map_err(|source| ConfigError::Parse {
                 path: path.to_owned(),
-                source,
+                source: Box::new(source),
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(source) => Err(ConfigError::Io {
@@ -128,7 +130,7 @@ impl UserConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub struct ContentArgs {
     /// Half-Life 2: Deathmatch install folder (the one containing `hl2mp/`).
-    /// Overrides the HL2DM_DIR environment variable and the config file.
+    /// Overrides the `HL2DM_DIR` environment variable and the config file.
     #[arg(long, value_name = "DIR")]
     pub game_dir: Option<PathBuf>,
 
