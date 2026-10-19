@@ -1,0 +1,26 @@
+[package]
+name = "rl_assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Bevy asset integration that loads Source engine content through the rustlife VFS."
+
+[dependencies]
+source_fs.workspace = true
+source_formats.workspace = true
+bevy_app.workspace = true
+bevy_asset.workspace = true
+bevy_image.workspace = true
+futures-lite.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
