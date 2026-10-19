@@ -15,6 +15,25 @@
 
 #![forbid(unsafe_code)]
 
+use bevy_app::{App, Plugin};
+use bevy_asset::AssetApp;
+
 pub mod source;
+pub mod texture;
 
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
+pub use texture::{VtfLoadError, VtfLoader};
+
+/// Registers rustlife's asset loaders (VTF, and more in later milestones).
+///
+/// Unlike [`SourceAssetPlugin`], which must be added *before* Bevy's
+/// `AssetPlugin`, this plugin registers loaders and must be added *after* it
+/// (i.e. after `DefaultPlugins`), once the `AssetServer` and the `Image` asset
+/// type exist.
+pub struct SourceLoadersPlugin;
+
+impl Plugin for SourceLoadersPlugin {
+    fn build(&self, app: &mut App) {
+        app.register_asset_loader(VtfLoader);
+    }
+}

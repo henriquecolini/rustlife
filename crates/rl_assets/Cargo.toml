@@ -15,9 +15,11 @@ source_formats.workspace = true
 bevy_app.workspace = true
 bevy_asset.workspace = true
 bevy_image.workspace = true
+bevy_reflect.workspace = true
 futures-lite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+wgpu-types.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -25,7 +25,11 @@ anyhow = "1"
 bevy_app = "0.20"
 bevy_asset = "0.20"
 bevy_image = "0.20"
+bevy_reflect = "0.20"
 futures-lite = "2"
+# wgpu texture types (Extent3d/TextureFormat/...), pinned to the major version
+# Bevy's `bevy_image` uses so the `Image::new` argument types unify.
+wgpu-types = { version = "30", default-features = false }
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
 directories = "6"

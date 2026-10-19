@@ -2073,12 +2073,14 @@ dependencies = [
  "bevy_app",
  "bevy_asset",
  "bevy_image",
+ "bevy_reflect",
  "futures-lite",
  "source_formats",
  "source_fs",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "wgpu-types",
 ]
 
 [[package]]
