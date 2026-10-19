@@ -1,11 +1,24 @@
 # cargo-deny configuration: run `cargo deny check`.
 
+# Audit the dependency graph as rustlife actually builds it. We deliberately do
+# NOT set `all-features = true`: that would pull in crates' optional *fuzzing*
+# features (e.g. `libfuzzer-sys`, licensed NCSA) that we never ship, and fail
+# the license check on code that is never compiled into the game.
 [graph]
-all-features = true
 
 [advisories]
 version = 2
 yanked = "deny"
+# Advisories we have reviewed and consciously accept. Keep this list short, and
+# document *why* each one is safe to ignore so the next contributor can re-judge
+# it. Real vulnerabilities must be fixed, never ignored.
+ignore = [
+    # `cgmath` is unmaintained (an advisory, not a vulnerability). It reaches us
+    # only transitively through `vbsp`/`vbsp-common` (BSP parsing); there is no
+    # upgrade available and no way to drop it short of replacing the BSP parser.
+    # Revisit if `vbsp` stops depending on it or a real vulnerability is filed.
+    "RUSTSEC-2026-0196",
+]
 
 [licenses]
 version = 2
@@ -23,6 +36,10 @@ allow = [
     "CC0-1.0",
     "BSL-1.0",
     "MPL-2.0",
+    # `lzma` (pulled in by `vbsp` to decompress BSP lumps) is WTFPL, which is
+    # FSF-approved and strictly more permissive than MIT, so it is compatible
+    # with distributing rustlife under MIT OR Apache-2.0.
+    "WTFPL",
 ]
 confidence-threshold = 0.9
 

@@ -49,14 +49,17 @@ impl ZipMount {
         })?;
         let mut index = HashMap::with_capacity(archive.len());
         for position in 0..archive.len() {
-            let Some(name) = archive.name_for_index(position) else {
+            // zip 9's `name_for_index` yields `Option<Result<Cow<str>>>`: skip
+            // entries with no name or an undecodable one rather than failing the
+            // whole mount over a single bad record.
+            let Some(Ok(name)) = archive.name_for_index(position) else {
                 continue;
             };
             if name.ends_with('/') {
                 continue; // directory entry
             }
             // On duplicate (case-insensitive) names the first entry wins.
-            index.entry(normalize(name)).or_insert(position);
+            index.entry(normalize(&name)).or_insert(position);
         }
         Ok(Self {
             label,

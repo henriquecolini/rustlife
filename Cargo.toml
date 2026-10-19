@@ -14,6 +14,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates.
 rl_config = { path = "crates/rl_config" }
+source_formats = { path = "crates/source_formats" }
 source_fs = { path = "crates/source_fs" }
 
 # External crates.
@@ -27,9 +28,13 @@ ron = "0.12"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 thiserror = "2"
+# Source-engine format parsers (wrapped and gap-filled by `source_formats`).
+vbsp = "0.9"
+vmt-parser = "0.2"
+vtf = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 missing_docs = "warn"

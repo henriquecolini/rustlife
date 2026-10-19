@@ -1,0 +1,30 @@
+[package]
+name = "source_formats"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Typed wrappers and gap-fills over the Source engine format parsers rustlife uses."
+
+[dependencies]
+source_fs.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+vbsp.workspace = true
+vmt-parser.workspace = true
+vtf.workspace = true
+
+[dev-dependencies]
+# `image` matches the version the `vtf` crate re-exports, so synthetic VTF
+# fixtures built with `vtf::create` share its `DynamicImage` type. Default
+# features are off: the tests only build in-memory RGBA buffers, so pulling in
+# image's codec tree (EXR/AVIF via `exr`/`rav1e`, and the unmaintained `paste`)
+# would add risk and licence surface for no benefit.
+image = { version = "0.25", default-features = false }
+proptest.workspace = true
+
+[lints]
+workspace = true

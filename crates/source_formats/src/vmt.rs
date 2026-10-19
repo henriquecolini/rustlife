@@ -1,0 +1,247 @@
+//! Parsing Valve Material (VMT) files into an engine-independent description.
+//!
+//! A VMT names a shader (`LightmappedGeneric`, `VertexLitGeneric`, `Water`, ...)
+//! and a set of `$parameters`. rustlife does not reimplement Source's shaders;
+//! instead it reduces each material to a [`MaterialDesc`] — the shader *family*
+//! ([`MaterialKind`]) plus the handful of parameters the renderer acts on — and
+//! builds an appropriate Bevy material from that in the `rl_assets` layer.
+//!
+//! # Patches
+//!
+//! Many world materials are `patch` shaders: a thin file that `include`s a base
+//! material and overrides a few parameters. Resolving a patch means reading
+//! another VMT, which is I/O this pure crate does not do itself. [`parse`]
+//! therefore leaves a patch unresolved (reporting [`MaterialKind::Patch`]),
+//! while [`parse_resolved`] takes a loader callback — supplied by the
+//! VFS-aware caller — that fetches the included file's text.
+
+use thiserror::Error;
+use vmt_parser::VdfError;
+use vmt_parser::material::Material;
+
+/// The family of shader a material uses, reduced to the set rustlife's renderer
+/// knows how to build. Shaders outside this set render with the unlit fallback
+/// ([`MaterialKind::Other`]); an unresolved `patch` is [`MaterialKind::Patch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterialKind {
+    /// `LightmappedGeneric`: world brushes lit by the baked lightmap.
+    LightmappedGeneric,
+    /// `WorldVertexTransition`: two-texture blend driven by vertex alpha, used
+    /// by displacements.
+    WorldVertexTransition,
+    /// `VertexLitGeneric`: models and props lit per vertex / by ambient cubes.
+    VertexLitGeneric,
+    /// `UnlitGeneric` (and `UnlitTwoTexture`): fullbright surfaces.
+    UnlitGeneric,
+    /// `Water`: a translucent, fogged water surface.
+    Water,
+    /// `Sky`: a 2D skybox face.
+    Sky,
+    /// `Refract`: a refracting surface (glass, heat haze).
+    Refract,
+    /// A recognised shader rustlife has no special handling for yet.
+    Other,
+    /// A `patch` that was parsed but not resolved (see [`parse_resolved`]).
+    Patch,
+}
+
+/// An engine-independent summary of a parsed material: everything the renderer
+/// needs, and nothing tied to the `vmt-parser` crate's types.
+///
+/// Texture fields hold the material-relative path exactly as written in the
+/// VMT (lower-cased by the parser), e.g. `concrete/concretefloor001a`. Turning
+/// that into a mountable VFS path (`materials/.../*.vtf`) is the `rl_assets`
+/// layer's job, since only it knows the virtual filesystem.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialDesc {
+    /// The shader family to build a Bevy material for.
+    pub kind: MaterialKind,
+    /// `$basetexture`, if any.
+    pub base_texture: Option<String>,
+    /// `$bumpmap` (normal map), if any.
+    pub bump_map: Option<String>,
+    /// `$surfaceprop`, used by the physics/material layer for friction and
+    /// impact sounds.
+    pub surface_prop: Option<String>,
+    /// Whether the surface is translucent (`$translucent`, or inherent to the
+    /// shader as with water).
+    pub translucent: bool,
+    /// The `$alphatest` reference value, if alpha testing is enabled.
+    pub alpha_test: Option<f32>,
+    /// Whether back-face culling is disabled (`$nocull`).
+    pub no_cull: bool,
+}
+
+/// Errors from parsing a VMT.
+#[derive(Debug, Error)]
+pub enum VmtError {
+    /// The text is not valid VMT / KeyValues, or does not match any known
+    /// shader schema. The message comes from the underlying parser.
+    #[error("could not parse VMT: {0}")]
+    Parse(String),
+}
+
+impl From<VdfError> for VmtError {
+    fn from(error: VdfError) -> Self {
+        Self::Parse(error.to_string())
+    }
+}
+
+/// Parses VMT `text` into a [`MaterialDesc`] without resolving patches.
+///
+/// A `patch` material parses successfully but yields [`MaterialKind::Patch`]
+/// with no textures; use [`parse_resolved`] when patches must be followed.
+///
+/// # Errors
+///
+/// Returns [`VmtError::Parse`] on malformed input.
+pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
+    Ok(describe(&vmt_parser::from_str(text)?))
+}
+
+/// Parses VMT `text`, resolving a `patch` by loading the text of the material
+/// it includes through `load_base`.
+///
+/// `load_base` receives the `include` path from the patch (e.g.
+/// `materials/brick/brickwall.vmt`) and must return that file's contents.
+///
+/// # Errors
+///
+/// Returns [`VmtError::Parse`] if either the patch or the base fails to parse,
+/// or if `load_base` reports an error.
+pub fn parse_resolved<F>(text: &str, load_base: F) -> Result<MaterialDesc, VmtError>
+where
+    F: FnOnce(&str) -> Result<String, VmtError>,
+{
+    let material = vmt_parser::from_str(text)?;
+    let resolved = material.resolve(|include| load_base(include))?;
+    Ok(describe(&resolved))
+}
+
+/// Reduces a parsed [`Material`] to a [`MaterialDesc`].
+fn describe(material: &Material) -> MaterialDesc {
+    MaterialDesc {
+        kind: kind_of(material),
+        base_texture: material.base_texture().map(str::to_owned),
+        bump_map: material.bump_map().map(str::to_owned),
+        surface_prop: material.surface_prop().map(str::to_owned),
+        translucent: material.translucent(),
+        alpha_test: material.alpha_test(),
+        no_cull: material.no_cull(),
+    }
+}
+
+/// Maps a `vmt-parser` shader variant to our coarser [`MaterialKind`].
+fn kind_of(material: &Material) -> MaterialKind {
+    match material {
+        Material::LightMappedGeneric(_) => MaterialKind::LightmappedGeneric,
+        Material::WorldVertexTransition(_) => MaterialKind::WorldVertexTransition,
+        Material::VertexLitGeneric(_) | Material::VertexLitGenericDx6(_) => {
+            MaterialKind::VertexLitGeneric
+        }
+        Material::UnlitGeneric(_) | Material::UnlitTwoTexture(_) => MaterialKind::UnlitGeneric,
+        Material::Water(_) => MaterialKind::Water,
+        Material::Sky(_) => MaterialKind::Sky,
+        Material::Refract(_) => MaterialKind::Refract,
+        Material::Patch(_) => MaterialKind::Patch,
+        _ => MaterialKind::Other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_a_lightmapped_world_material() {
+        let desc = parse(
+            r#"
+            "LightmappedGeneric"
+            {
+                "$basetexture" "concrete/concretefloor001a"
+                "$surfaceprop" "concrete"
+                "$translucent" "1"
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(desc.kind, MaterialKind::LightmappedGeneric);
+        assert_eq!(
+            desc.base_texture.as_deref(),
+            Some("concrete/concretefloor001a")
+        );
+        assert_eq!(desc.surface_prop.as_deref(), Some("concrete"));
+        assert!(desc.translucent);
+        assert_eq!(desc.alpha_test, None);
+    }
+
+    #[test]
+    fn reads_a_model_material_with_bumpmap_and_alphatest() {
+        let desc = parse(
+            r#"
+            "VertexLitGeneric"
+            {
+                "$basetexture" "models/props/crate"
+                "$bumpmap" "models/props/crate_normal"
+                "$alphatest" "1"
+                "$alphatestreference" "0.5"
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(desc.kind, MaterialKind::VertexLitGeneric);
+        assert_eq!(desc.bump_map.as_deref(), Some("models/props/crate_normal"));
+        assert_eq!(desc.alpha_test, Some(0.5));
+    }
+
+    #[test]
+    fn an_unresolved_patch_is_reported_as_such() {
+        let desc = parse(
+            r#"
+            "patch"
+            {
+                "include" "materials/brick/brickwall.vmt"
+                "replace" { "$basetexture" "brick/override" }
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(desc.kind, MaterialKind::Patch);
+        assert_eq!(desc.base_texture, None);
+    }
+
+    #[test]
+    fn a_patch_is_resolved_and_overrides_the_base() {
+        let base = r#"
+            "LightmappedGeneric"
+            {
+                "$basetexture" "brick/brickwall001a"
+                "$surfaceprop" "brick"
+            }
+        "#;
+        let desc = parse_resolved(
+            r#"
+            "patch"
+            {
+                "include" "materials/brick/brickwall.vmt"
+                "replace" { "$basetexture" "brick/override" }
+            }
+            "#,
+            |include| {
+                assert_eq!(include, "materials/brick/brickwall.vmt");
+                Ok(base.to_owned())
+            },
+        )
+        .expect("resolve");
+        assert_eq!(desc.kind, MaterialKind::LightmappedGeneric);
+        // The patch replaced the base texture but kept the base's surfaceprop.
+        assert_eq!(desc.base_texture.as_deref(), Some("brick/override"));
+        assert_eq!(desc.surface_prop.as_deref(), Some("brick"));
+    }
+
+    #[test]
+    fn malformed_vmt_errors_without_panicking() {
+        assert!(parse("this is not a material").is_err());
+        assert!(parse("").is_err());
+    }
+}
