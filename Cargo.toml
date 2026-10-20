@@ -13,12 +13,16 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates.
+rl_assets = { path = "crates/rl_assets" }
+rl_client = { path = "crates/rl_client" }
 rl_config = { path = "crates/rl_config" }
 source_formats = { path = "crates/source_formats" }
 source_fs = { path = "crates/source_fs" }
 
 # External crates.
 anyhow = "1"
+# The full Bevy engine, used only by the client (rendering, windowing, input).
+bevy = "0.20"
 # Bevy, split into the sub-crates each rustlife crate actually needs so the
 # headless server and the format layers don't pull in the full renderer. The
 # client crate depends on the umbrella `bevy` crate for rendering.

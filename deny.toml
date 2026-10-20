@@ -11,13 +11,29 @@ version = 2
 yanked = "deny"
 # Advisories we have reviewed and consciously accept. Keep this list short, and
 # document *why* each one is safe to ignore so the next contributor can re-judge
-# it. Real vulnerabilities must be fixed, never ignored.
+# it. A *reachable* vulnerability must be fixed, never ignored; an entry is only
+# acceptable here when it is unmaintained-only, or a vulnerability in a code
+# path rustlife never executes and that upstream controls.
 ignore = [
     # `cgmath` is unmaintained (an advisory, not a vulnerability). It reaches us
     # only transitively through `vbsp`/`vbsp-common` (BSP parsing); there is no
     # upgrade available and no way to drop it short of replacing the BSP parser.
     # Revisit if `vbsp` stops depending on it or a real vulnerability is filed.
     "RUSTSEC-2026-0196",
+    # `ttf-parser` is unmaintained (an advisory, not a vulnerability). It reaches
+    # us only through `winit`'s window decorations (winit -> sctk-adwaita ->
+    # ab_glyph), deep in Bevy's windowing stack, with no upgrade available.
+    # Revisit when winit's dependency tree drops it.
+    "RUSTSEC-2026-0192",
+    # `ruzstd` <0.9.1 decompression-bomb OOM (a real vulnerability). It is only
+    # reachable when decoding a zstd-supercompressed KTX2 texture from untrusted
+    # input; rustlife loads VTF and BSP content exclusively and never decodes
+    # KTX2, so this code path is never executed. The decoder is pulled in by
+    # Bevy's `3d_api` feature (`zstd_rust`), which bakes it into the 3D feature
+    # set, so it cannot be excluded without reconstructing Bevy's whole feature
+    # tree. MUST be removed once Bevy bumps `ruzstd` to >=0.9.1; until then the
+    # path stays unreachable in rustlife.
+    "RUSTSEC-2026-0344",
 ]
 
 [licenses]
