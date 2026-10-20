@@ -13,7 +13,11 @@
 //! built-in copies. Files it adds to `weapons/` and `items/` add weapons and
 //! items.
 //!
-//! As of M5 the data set is:
+//! A server sends its data to every client that joins ([`GameData::to_files`],
+//! [`GameData::from_files`]), so both run the same rules; [`content_hash`]
+//! lets a client that already has identical data skip the transfer.
+//!
+//! As of M6 the data set is:
 //!
 //! | File | Type | Contents |
 //! |------|------|----------|
@@ -28,6 +32,7 @@
 //! | `player.ron` | [`PlayerConfig`] | Health, armor, player models. |
 //! | `rules/deathmatch.ron` | [`RulesConfig`] | Limits, respawning, loadout, fall damage. |
 //! | `hud.ron` | [`HudConfig`] | HUD layout and colours. |
+//! | `net.ron` | [`NetConfig`] | Ports, snapshot rate, interpolation, lag compensation. |
 
 #![forbid(unsafe_code)]
 
@@ -43,6 +48,7 @@ pub mod hud;
 pub mod items;
 pub mod manipulator;
 pub mod movement;
+pub mod net;
 pub mod physics;
 pub mod player;
 pub mod rules;
@@ -59,6 +65,7 @@ pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,
     MovementConfig, WaterConfig,
 };
+pub use net::NetConfig;
 pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};
 pub use player::{ArmorConfig, HealthConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, RespawnConfig, RulesConfig};
@@ -89,6 +96,8 @@ pub const ENTITY_MAP_FILE: &str = "entity_map.ron";
 pub const PLAYER_FILE: &str = "player.ron";
 /// File name of the HUD layout.
 pub const HUD_FILE: &str = "hud.ron";
+/// File name of the networking data.
+pub const NET_FILE: &str = "net.ron";
 pub use rules::DEATHMATCH_FILE;
 
 /// Pairs each data file's path (relative to `data/`) with its built-in text.
@@ -109,6 +118,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "player.ron",
     "rules/deathmatch.ron",
     "hud.ron",
+    "net.ron",
     "weapons/bar.ron",
     "weapons/boltcaster.ron",
     "weapons/frag.ron",
@@ -156,6 +166,21 @@ pub enum DataError {
         #[source]
         source: Box<ron::error::SpannedError>,
     },
+    /// A data set held in memory (one a server sent) lacks a file.
+    #[error("{file}: missing from the data set")]
+    Missing {
+        /// The missing file's path, relative to the data directory.
+        file: String,
+    },
+    /// A data file could not be written out as RON.
+    #[error("{file}: cannot serialise: {source}")]
+    Serialize {
+        /// The file's path, relative to the data directory.
+        file: String,
+        /// Serialiser error.
+        #[source]
+        source: ron::Error,
+    },
     /// The file parsed, but some values make no sense. For problems between
     /// files, `file` is `references` and each field names its file.
     #[error("{file}: {}", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
@@ -192,6 +217,18 @@ pub struct GameData {
     pub rules: RulesConfig,
     /// The HUD.
     pub hud: HudConfig,
+    /// Networking.
+    pub net: NetConfig,
+}
+
+/// Where data files come from.
+#[derive(Debug, Clone, Copy)]
+enum Files<'a> {
+    /// The built-in set, each file overridden by its copy in this
+    /// directory, if any.
+    Overlay(Option<&'a Path>),
+    /// A complete set in memory, text by path: what a server sends.
+    Memory(&'a BTreeMap<String, String>),
 }
 
 impl GameData {
@@ -213,18 +250,75 @@ impl GameData {
     /// Fails on the first file that cannot be read, parsed or validated, or
     /// with every disagreement between files.
     pub fn load(dir: Option<&Path>) -> Result<Self, DataError> {
+        Self::assemble(Files::Overlay(dir))
+    }
+
+    /// Loads a complete data set from memory, text by path relative to the
+    /// data directory (as [`to_files`](Self::to_files) makes it), with the
+    /// same validation as files on disk. Nothing falls back to the
+    /// built-in data: a set lacking a file is an error.
+    ///
+    /// # Errors
+    ///
+    /// Fails on the first file that is missing, cannot be parsed or is
+    /// invalid, or with every disagreement between files.
+    pub fn from_files(files: &BTreeMap<String, String>) -> Result<Self, DataError> {
+        Self::assemble(Files::Memory(files))
+    }
+
+    /// Writes the data set out as RON text by path relative to the data
+    /// directory: what a server sends its clients.
+    ///
+    /// # Errors
+    ///
+    /// Only if a value cannot be written as RON.
+    pub fn to_files(&self) -> Result<BTreeMap<String, String>, DataError> {
+        let mut files = BTreeMap::new();
+        let mut put = |file: String, text: Result<String, ron::Error>| {
+            let text = text.map_err(|source| DataError::Serialize {
+                file: file.clone(),
+                source,
+            })?;
+            files.insert(file, text);
+            Ok::<(), DataError>(())
+        };
+        put(MOVEMENT_FILE.to_owned(), ron::to_string(&self.movement))?;
+        put(SIMULATION_FILE.to_owned(), ron::to_string(&self.simulation))?;
+        put(PHYSICS_FILE.to_owned(), ron::to_string(&self.physics))?;
+        put(
+            MANIPULATOR_FILE.to_owned(),
+            ron::to_string(&self.manipulator),
+        )?;
+        put(AMMO_FILE.to_owned(), ron::to_string(&self.ammo))?;
+        for (id, weapon) in &self.weapons {
+            put(format!("{WEAPONS_DIR}/{id}.ron"), ron::to_string(weapon))?;
+        }
+        for (id, item) in &self.items {
+            put(format!("{ITEMS_DIR}/{id}.ron"), ron::to_string(item))?;
+        }
+        put(ENTITY_MAP_FILE.to_owned(), ron::to_string(&self.entity_map))?;
+        put(PLAYER_FILE.to_owned(), ron::to_string(&self.player))?;
+        put(DEATHMATCH_FILE.to_owned(), ron::to_string(&self.rules))?;
+        put(HUD_FILE.to_owned(), ron::to_string(&self.hud))?;
+        put(NET_FILE.to_owned(), ron::to_string(&self.net))?;
+        Ok(files)
+    }
+
+    /// Loads every file from `files` and checks they agree.
+    fn assemble(files: Files<'_>) -> Result<Self, DataError> {
         let data = Self {
-            movement: load_file(dir, MOVEMENT_FILE, MovementConfig::validate)?,
-            simulation: load_file(dir, SIMULATION_FILE, SimulationConfig::validate)?,
-            physics: load_file(dir, PHYSICS_FILE, PhysicsConfig::validate)?,
-            manipulator: load_file(dir, MANIPULATOR_FILE, ManipulatorConfig::validate)?,
-            ammo: load_file(dir, AMMO_FILE, AmmoConfig::validate)?,
-            weapons: load_dir(dir, WEAPONS_DIR, WeaponConfig::validate)?,
-            items: load_dir(dir, ITEMS_DIR, ItemConfig::validate)?,
-            entity_map: load_file(dir, ENTITY_MAP_FILE, EntityMapConfig::validate)?,
-            player: load_file(dir, PLAYER_FILE, PlayerConfig::validate)?,
-            rules: load_file(dir, DEATHMATCH_FILE, RulesConfig::validate)?,
-            hud: load_file(dir, HUD_FILE, HudConfig::validate)?,
+            movement: load_file(files, MOVEMENT_FILE, MovementConfig::validate)?,
+            simulation: load_file(files, SIMULATION_FILE, SimulationConfig::validate)?,
+            physics: load_file(files, PHYSICS_FILE, PhysicsConfig::validate)?,
+            manipulator: load_file(files, MANIPULATOR_FILE, ManipulatorConfig::validate)?,
+            ammo: load_file(files, AMMO_FILE, AmmoConfig::validate)?,
+            weapons: load_dir(files, WEAPONS_DIR, WeaponConfig::validate)?,
+            items: load_dir(files, ITEMS_DIR, ItemConfig::validate)?,
+            entity_map: load_file(files, ENTITY_MAP_FILE, EntityMapConfig::validate)?,
+            player: load_file(files, PLAYER_FILE, PlayerConfig::validate)?,
+            rules: load_file(files, DEATHMATCH_FILE, RulesConfig::validate)?,
+            hud: load_file(files, HUD_FILE, HudConfig::validate)?,
+            net: load_file(files, NET_FILE, NetConfig::validate)?,
         };
         let problems = data.reference_problems();
         if problems.is_empty() {
@@ -312,12 +406,45 @@ impl GameData {
     }
 }
 
+/// A fingerprint of a data set written out by [`GameData::to_files`]: equal
+/// sets hash equally, so a client holding the server's data need not be
+/// sent it again.
+///
+/// The hash is 64-bit FNV-1a over every path and text in path order. It
+/// guards against accidental mismatches, not deliberate ones: the server
+/// validates nothing a client claims, it only skips sending data the
+/// client's hash says it has.
+#[must_use]
+pub fn content_hash(files: &BTreeMap<String, String>) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0100_0000_01b3;
+    let mut hash = OFFSET;
+    for (path, text) in files {
+        // A separator that cannot occur in either keeps ("ab", "c") and
+        // ("a", "bc") apart.
+        for byte in path.bytes().chain([0]).chain(text.bytes()).chain([0]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    }
+    hash
+}
+
 /// Loads, parses and validates one data file.
 fn load_file<T: DeserializeOwned>(
-    dir: Option<&Path>,
+    files: Files<'_>,
     name: &str,
     validate: fn(&T, &mut validate::Validator),
 ) -> Result<T, DataError> {
+    let dir = match files {
+        Files::Overlay(dir) => dir,
+        Files::Memory(set) => {
+            let text = set.get(name).ok_or_else(|| DataError::Missing {
+                file: name.to_owned(),
+            })?;
+            return parse(&format!("server:{name}"), text, validate);
+        }
+    };
     let (file, text) = match dir.map(|dir| dir.join(name)) {
         Some(path) if path.exists() => {
             let text = std::fs::read_to_string(&path).map_err(|source| DataError::Io {
@@ -334,10 +461,44 @@ fn load_file<T: DeserializeOwned>(
 /// Loads every `.ron` file of directory `subdir`: the built-in ones plus
 /// any the data directory adds, keyed by file name without extension.
 fn load_dir<T: DeserializeOwned>(
-    dir: Option<&Path>,
+    files: Files<'_>,
     subdir: &str,
     validate: fn(&T, &mut validate::Validator),
 ) -> Result<BTreeMap<String, T>, DataError> {
+    let prefix = format!("{subdir}/");
+    let names = match files {
+        Files::Overlay(dir) => overlay_names(dir, subdir)?,
+        Files::Memory(set) => set
+            .keys()
+            .filter_map(|path| path.strip_prefix(&prefix))
+            .filter(|name| {
+                !name.contains('/') && Path::new(name).extension().is_some_and(|ext| ext == "ron")
+            })
+            .map(str::to_owned)
+            .collect(),
+    };
+    names
+        .into_iter()
+        .map(|name| {
+            let id = name.trim_end_matches(".ron").to_owned();
+            let file = format!("{prefix}{name}");
+            if !is_valid_id(&id) {
+                return Err(DataError::Invalid {
+                    file,
+                    problems: vec![Problem {
+                        field: "file name".to_owned(),
+                        message: "ids are lower-case letters, digits and underscores".to_owned(),
+                    }],
+                });
+            }
+            Ok((id, load_file(files, &file, validate)?))
+        })
+        .collect()
+}
+
+/// The `.ron` file names of directory `subdir`: the built-in ones plus any
+/// the overriding directory adds.
+fn overlay_names(dir: Option<&Path>, subdir: &str) -> Result<BTreeSet<String>, DataError> {
     let prefix = format!("{subdir}/");
     let mut names: BTreeSet<String> = BUILTIN
         .iter()
@@ -362,23 +523,7 @@ fn load_dir<T: DeserializeOwned>(
             }
         }
     }
-    names
-        .into_iter()
-        .map(|name| {
-            let id = name.trim_end_matches(".ron").to_owned();
-            let file = format!("{prefix}{name}");
-            if !is_valid_id(&id) {
-                return Err(DataError::Invalid {
-                    file,
-                    problems: vec![Problem {
-                        field: "file name".to_owned(),
-                        message: "ids are lower-case letters, digits and underscores".to_owned(),
-                    }],
-                });
-            }
-            Ok((id, load_file(dir, &file, validate)?))
-        })
-        .collect()
+    Ok(names)
 }
 
 /// Whether `id` is a valid weapon or item id: lower-case ASCII letters,
@@ -601,6 +746,59 @@ mod tests {
         let mut check = validate::Validator::default();
         SimulationConfig { tick_rate: 0 }.validate(&mut check);
         assert_eq!(check.finish().len(), 1);
+    }
+
+    #[test]
+    fn data_round_trips_through_files() {
+        let data = GameData::builtin().expect("builtin");
+        let files = data.to_files().expect("to files");
+        assert!(files.contains_key("weapons/smg.ron"), "{:?}", files.keys());
+        assert!(files.contains_key(NET_FILE));
+        assert_eq!(GameData::from_files(&files).expect("from files"), data);
+    }
+
+    #[test]
+    fn a_data_set_in_memory_must_be_complete() {
+        let mut files = GameData::builtin()
+            .expect("builtin")
+            .to_files()
+            .expect("files");
+        files.remove(PLAYER_FILE);
+        let error = GameData::from_files(&files).expect_err("incomplete");
+        assert!(matches!(error, DataError::Missing { ref file } if file == PLAYER_FILE));
+    }
+
+    #[test]
+    fn a_data_set_in_memory_is_validated() {
+        let mut files = GameData::builtin()
+            .expect("builtin")
+            .to_files()
+            .expect("files");
+        files.insert(
+            SIMULATION_FILE.to_owned(),
+            "Simulation(tick_rate: 0)".to_owned(),
+        );
+        let error = GameData::from_files(&files).expect_err("invalid");
+        assert!(
+            matches!(error, DataError::Invalid { ref file, .. } if file == "server:simulation.ron"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_content_hash_tells_data_sets_apart() {
+        let data = GameData::builtin().expect("builtin");
+        let files = data.to_files().expect("files");
+        assert_eq!(content_hash(&files), content_hash(&files.clone()));
+        let mut tweaked = data.clone();
+        tweaked.movement.gravity += 1.0;
+        let other = tweaked.to_files().expect("files");
+        assert_ne!(content_hash(&files), content_hash(&other));
+        // Moving a byte between path and text changes the hash.
+        let split = |path: &str, text: &str| {
+            content_hash(&BTreeMap::from([(path.to_owned(), text.to_owned())]))
+        };
+        assert_ne!(split("ab", "c"), split("a", "bc"));
     }
 
     #[test]

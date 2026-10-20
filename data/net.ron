@@ -1,0 +1,29 @@
+// Networking, read by `rl_net` and `rl_server`; the server's copy is sent
+// to every client with the rest of the data, so both sides agree.
+//
+// Times are seconds.
+Net(
+    // UDP port a server listens on unless told otherwise.
+    port: 27015,
+    // Most players a server admits.
+    max_players: 16,
+    // The server sends each client a snapshot of the world every this many
+    // ticks (1: every tick).
+    snapshot_interval: 1,
+    // Clients draw other players, props and projectiles this far in the
+    // past, so there is usually a newer snapshot to move towards. Two
+    // snapshot intervals plus jitter is a safe minimum.
+    interpolation_delay: 0.1,
+    // Each command packet repeats this many of the client's latest commands,
+    // so a lost packet costs nothing as long as one of the next arrives.
+    command_redundancy: 4,
+    // Most ticks' worth of commands the server runs for a player at once
+    // to catch up after a stall: more evens out jitter, less limits how
+    // far a client can run ahead of the server.
+    command_backlog: 8,
+    // Hit detection looks back at most this far, to where the shooter saw
+    // their target (lag compensation).
+    max_rewind: 1.0,
+    // A client that sends nothing for this long is dropped.
+    timeout: 10.0,
+)

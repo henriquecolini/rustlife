@@ -107,6 +107,10 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+# Dependencies' debug info is most of what each (Bevy-sized) test binary
+# weighs, and is rarely stepped into; leaving it out keeps `target/` to a
+# fraction of the size.
+debug = false
 
 [profile.release]
 lto = "thin"
