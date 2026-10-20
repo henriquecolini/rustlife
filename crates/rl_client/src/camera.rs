@@ -5,6 +5,7 @@
 //! map, released in the map browser, and toggled with `Escape`. Later milestones replace this with the predicted
 //! player view, but the fly camera stays useful for debugging.
 
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -61,6 +62,10 @@ const PITCH_LIMIT: f32 = 1.54;
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
+        // Source's LDR renderer writes `albedo × lightmap` straight to the
+        // screen. Bevy's default filmic tone-mapper compresses and desaturates
+        // that, so it is turned off to keep the original look.
+        Tonemapping::None,
         Transform::from_xyz(0.0, 2.0, 0.0),
         FlyCam::default(),
         // Ambient light is a per-view component in this Bevy version, so the

@@ -83,6 +83,13 @@ impl Plugin for WorldPlugin {
     }
 }
 
+/// Specular reflectance of world surfaces: none. Source's `LightmappedGeneric`
+/// is diffuse-only (shine comes from an explicit `$envmap`), while Bevy's
+/// default reflectance of 0.5 adds a grey specular sheen from the sun that
+/// washes out floors at grazing angles. With reflectance 0, Bevy's Fresnel
+/// term is zero too, so lightmapped surfaces show `albedo × lightmap` alone.
+const WORLD_REFLECTANCE: f32 = 0.0;
+
 /// Scale applied to lightmap texels so a decoded luxel of `1.0` — Source's
 /// nominal full brightness — renders as the unmodified texture colour.
 ///
@@ -97,6 +104,7 @@ fn setup_lighting(mut commands: Commands, mut materials: ResMut<Assets<StandardM
     commands.insert_resource(Placeholder(materials.add(StandardMaterial {
         base_color: Color::srgb(0.6, 0.6, 0.62),
         perceptual_roughness: 0.9,
+        reflectance: WORLD_REFLECTANCE,
         cull_mode: None,
         double_sided: true,
         lightmap_exposure: lightmap_exposure(),
@@ -357,6 +365,7 @@ fn blend_layer(texture: Handle<Image>) -> StandardMaterial {
     StandardMaterial {
         base_color_texture: Some(texture),
         perceptual_roughness: 0.9,
+        reflectance: WORLD_REFLECTANCE,
         cull_mode: None,
         double_sided: true,
         alpha_mode: AlphaMode::Blend,
@@ -381,6 +390,7 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         base_color_texture: source.base_color.clone(),
         normal_map_texture: source.normal.clone(),
         perceptual_roughness: 0.9,
+        reflectance: WORLD_REFLECTANCE,
         // Source polygons are not wound for Bevy's front-face convention, so
         // draw both sides regardless of `$nocull` until winding is corrected.
         cull_mode: None,

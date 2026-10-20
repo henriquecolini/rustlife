@@ -68,7 +68,9 @@ has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_client`, the
    shared atlas; the sun and ambient light are excluded from lightmapped
    surfaces so baked light is not counted twice. Lightmap and sky brightness
    divide out the camera exposure, so a luxel of 1.0 renders the texture's own
-   colour, as Source's `LightmappedGeneric` does.
+   colour, as Source's `LightmappedGeneric` does. To match that shader, world
+   materials have no specular (reflectance 0) and the camera does no
+   tone-mapping.
 
 The client is a two-state app (`AppState::Browser` / `InGame`); everything a
 map creates is torn down on leaving it, so maps can be switched freely.
