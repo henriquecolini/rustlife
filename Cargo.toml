@@ -27,12 +27,14 @@ source_fs = { path = "crates/source_fs" }
 # External crates.
 anyhow = "1"
 # The full Bevy engine, used only by the client (rendering, windowing, input).
-bevy = "0.20"
+bevy = { version = "0.20", features = ["wav", "mp3"] }
 # Bevy, split into the sub-crates each rustlife crate actually needs so the
 # headless server and the format layers don't pull in the full renderer. The
 # client crate depends on the umbrella `bevy` crate for rendering.
 bevy_app = "0.20"
 bevy_asset = "0.20"
+# Audio assets only; formats are chosen by the client's `bevy` features.
+bevy_audio = { version = "0.20", default-features = false }
 bevy_image = "0.20"
 bevy_math = "0.20"
 bevy_mesh = "0.20"

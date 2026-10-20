@@ -14,6 +14,7 @@ source_fs.workspace = true
 source_formats.workspace = true
 bevy_app.workspace = true
 bevy_asset.workspace = true
+bevy_audio.workspace = true
 bevy_image.workspace = true
 bevy_math.workspace = true
 bevy_mesh.workspace = true

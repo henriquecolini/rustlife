@@ -10,8 +10,8 @@
 //! lives (base game, Workshop item, map pakfile, ...).
 //!
 //! Loaders turn those bytes into Bevy assets: VTF → `Image`, VMT →
-//! [`SourceMaterial`], BSP → [`MapAsset`], MDL → [`ModelAsset`] and VHV →
-//! [`VertexLightingAsset`].
+//! [`SourceMaterial`], BSP → [`MapAsset`], MDL → [`ModelAsset`], VHV →
+//! [`VertexLightingAsset`] and WAV/MP3 → [`SoundAsset`].
 
 #![forbid(unsafe_code)]
 
@@ -23,6 +23,7 @@ pub mod irradiance;
 pub mod map;
 pub mod material;
 pub mod model;
+pub mod sound;
 pub mod source;
 pub mod texture;
 pub mod vertex_lighting;
@@ -33,13 +34,15 @@ pub use map::{
 };
 pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
 pub use model::{MdlLoader, ModelAsset, ModelLoadError, ModelPart};
+pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use source_formats::props::PropKind;
 pub use texture::{VtfLoadError, VtfLoader};
 pub use vertex_lighting::{VertexLightingAsset, VhvLoadError, VhvLoader};
 
-/// Registers rustlife's asset loaders (VTF textures, VMT materials, BSP maps
-/// and MDL models) and the asset types they produce.
+/// Registers rustlife's asset loaders (VTF textures, VMT materials, BSP
+/// maps, MDL models, vertex lighting and sounds) and the asset types they
+/// produce.
 ///
 /// Unlike [`SourceAssetPlugin`], which must be added *before* Bevy's
 /// `AssetPlugin`, this plugin registers loaders and must be added *after* it
@@ -53,10 +56,12 @@ impl Plugin for SourceLoadersPlugin {
         app.init_asset::<SourceMaterial>();
         app.init_asset::<ModelAsset>();
         app.init_asset::<VertexLightingAsset>();
+        app.init_asset::<SoundAsset>();
         app.register_asset_loader(VtfLoader);
         app.register_asset_loader(VmtLoader);
         app.register_asset_loader(BspLoader);
         app.register_asset_loader(MdlLoader);
         app.register_asset_loader(VhvLoader);
+        app.register_asset_loader(SoundLoader);
     }
 }
