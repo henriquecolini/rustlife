@@ -14,10 +14,19 @@
 //! therefore leaves a patch unresolved (reporting [`MaterialKind::Patch`]),
 //! while [`parse_resolved`] takes a loader callback — supplied by the
 //! VFS-aware caller — that fetches the included file's text.
+//!
+//! # Fallback blocks
+//!
+//! Parameters inside DirectX level blocks (`">=dx90" { ... }`) are applied
+//! before parsing, as the engine applies them on DX9-class hardware (see
+//! the `vmt_fallback` module): many model materials set their base texture
+//! only there.
 
 use thiserror::Error;
 use vmt_parser::VdfError;
 use vmt_parser::material::Material;
+
+use crate::vmt_fallback;
 
 /// The family of shader a material uses, reduced to the set rustlife's renderer
 /// knows how to build. Shaders outside this set render with the unlit fallback
@@ -99,7 +108,12 @@ impl From<VdfError> for VmtError {
 ///
 /// Returns [`VmtError::Parse`] on malformed input.
 pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
-    Ok(describe(&vmt_parser::from_str(text)?))
+    Ok(describe(&read(text)?))
+}
+
+/// Parses VMT text with its fallback blocks applied.
+fn read(text: &str) -> Result<Material, VmtError> {
+    Ok(vmt_parser::from_str(&vmt_fallback::apply(text))?)
 }
 
 /// Returns the `include` path of a `patch` material, or `None` for any other
@@ -110,7 +124,7 @@ pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
 ///
 /// Returns [`VmtError::Parse`] on malformed input.
 pub fn patch_include(text: &str) -> Result<Option<String>, VmtError> {
-    match vmt_parser::from_str(text)? {
+    match read(text)? {
         Material::Patch(patch) => Ok(Some(patch.include)),
         _ => Ok(None),
     }
@@ -130,8 +144,10 @@ pub fn parse_resolved<F>(text: &str, load_base: F) -> Result<MaterialDesc, VmtEr
 where
     F: FnOnce(&str) -> Result<String, VmtError>,
 {
-    let material = vmt_parser::from_str(text)?;
-    let resolved = material.resolve(|include| load_base(include))?;
+    let material = read(text)?;
+    let resolved = material.resolve(|include| {
+        load_base(include).map(|base| vmt_fallback::apply(&base).into_owned())
+    })?;
     Ok(describe(&resolved))
 }
 
@@ -339,6 +355,19 @@ mod tests {
         // The patch replaced the base texture but kept the base's surfaceprop.
         assert_eq!(desc.base_texture.as_deref(), Some("brick/override"));
         assert_eq!(desc.surface_prop.as_deref(), Some("brick"));
+    }
+
+    #[test]
+    fn base_textures_set_in_fallback_blocks_are_found() {
+        let text = r#""VertexLitGeneric"
+{
+	"$bumpmap" "models/x_normal"
+	">=dx90_20b" { "$baseTexture" "Models/X/x_noalpha" }
+	"<dx90_20b" { "$baseTexture" "Models/X/x_sheet" }
+}"#;
+        let material = parse(text).expect("parse");
+        assert_eq!(material.kind, MaterialKind::VertexLitGeneric);
+        assert_eq!(material.base_texture.as_deref(), Some("models/x/x_noalpha"));
     }
 
     #[test]

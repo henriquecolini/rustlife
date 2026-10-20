@@ -37,4 +37,5 @@ pub mod props;
 pub mod skybox;
 pub mod vhv;
 pub mod vmt;
+mod vmt_fallback;
 pub mod vtf;
