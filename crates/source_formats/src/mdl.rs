@@ -116,6 +116,20 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
     let checksum = u32::from_le_bytes(vtx.header.checksum);
     let strip_vertex_ids = strip_vertex_ids(&mdl, &vtx);
     let model = Model::from_parts(mdl, vtx, Vvd::read(vvd).map_err(parse)?);
+    // Vertices are stored in model space, in the bind pose. A single-bone
+    // model (a prop) is drawn as its idle sequence places that bone, which
+    // may turn it. A skeletal model's root bone is its pelvis, whose own
+    // rotation describes the skeleton's axes rather than a turn of the whole
+    // model: applying it would lay a character on its back, so skeletal
+    // models stay in their bind pose (until they are animated).
+    let skeletal = model.bones().nth(1).is_some();
+    let place = |vector| {
+        if skeletal {
+            vector
+        } else {
+            model.apply_root_transform(vector)
+        }
+    };
 
     let meshes: Vec<ModelMesh> = model
         .meshes()
@@ -135,8 +149,8 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
             for triangle in vertices.as_chunks::<3>().0 {
                 for (id, vertex) in [triangle[0], triangle[2], triangle[1]] {
                     vertex_ids.push(u32::try_from(id).unwrap_or(u32::MAX));
-                    let position = model.apply_root_transform(vertex.position);
-                    let normal = model.apply_root_transform(vertex.normal);
+                    let position = place(vertex.position);
+                    let normal = place(vertex.normal);
                     positions.push([position.x, position.y, position.z]);
                     normals.push([normal.x, normal.y, normal.z]);
                     uvs.push(vertex.texture_coordinates);
