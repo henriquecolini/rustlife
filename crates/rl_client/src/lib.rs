@@ -7,7 +7,7 @@
 //! ([`actors`]), with a HUD ([`hud`]) and combat effects ([`effects`]); or
 //! fly it in noclip. Every game runs on a server ([`net`]): one the client
 //! hosts in-process — open to others with `--listen` — or a remote one it
-//! joins with `--connect`. Audio comes with a later milestone.
+//! joins with `--connect`. It sounds as the game does ([`audio`]).
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +19,7 @@ use rl_data::GameData;
 use source_fs::Vfs;
 
 use crate::actors::ActorsPlugin;
+use crate::audio::SoundPlugin;
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
@@ -32,6 +33,7 @@ use crate::script::InputScript;
 use crate::world::WorldPlugin;
 
 pub mod actors;
+pub mod audio;
 pub mod browser;
 pub mod camera;
 pub mod capture;
@@ -130,6 +132,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         HudPlugin,
         EffectsPlugin,
         MoversPlugin,
+        SoundPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);

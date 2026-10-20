@@ -20,6 +20,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::ecs::schedule::SystemCondition;
@@ -34,6 +35,7 @@ use rl_net::protocol::Welcome;
 use rl_server::{Server, ServerOptions};
 use rl_sim::physics::BodyId;
 use rl_sim::simulation::{PlayerId, Simulation};
+use source_formats::entities::MapEntity;
 
 use crate::player::{Gameplay, Movement, Ticked};
 use crate::{AppState, CurrentMap, GameVfs};
@@ -75,6 +77,11 @@ pub struct Host(pub Server);
 /// The level a hosted game runs, kept for the welcome.
 #[derive(Resource, Debug)]
 struct HostedLevel(Level);
+
+/// The level's entities, for what the client looks up about them (a
+/// door's sounds, a breakable's material).
+#[derive(Resource, Debug, Clone, Default)]
+pub struct LevelEntities(pub Arc<Vec<MapEntity>>);
 
 /// Each of the level's prop placements' body, by placement index.
 #[derive(Resource, Debug, Clone, Default)]
@@ -146,6 +153,7 @@ impl Plugin for NetPlugin {
             .init_resource::<Roster>()
             .init_resource::<Drawn>()
             .init_resource::<LevelBodies>()
+            .init_resource::<LevelEntities>()
             .init_resource::<NetStatus>()
             .add_systems(OnEnter(AppState::Connecting), connect)
             .add_systems(OnEnter(AppState::InGame), host)
@@ -259,6 +267,7 @@ fn leave(
     commands.remove_resource::<Host>();
     commands.remove_resource::<HostedLevel>();
     commands.insert_resource(LevelBodies::default());
+    commands.insert_resource(LevelEntities::default());
     commands.insert_resource(Roster::default());
     commands.insert_resource(Drawn::default());
 }
@@ -309,6 +318,7 @@ struct WelcomeParams<'w> {
     gameplay: ResMut<'w, Gameplay>,
     movement: ResMut<'w, Movement>,
     bodies: ResMut<'w, LevelBodies>,
+    entities: ResMut<'w, LevelEntities>,
     map: ResMut<'w, CurrentMap>,
     status: ResMut<'w, NetStatus>,
     state: Res<'w, State<AppState>>,
@@ -356,6 +366,7 @@ impl WelcomeParams<'_> {
         };
         let built = level.simulation(&data);
         self.bodies.0 = built.bodies;
+        self.entities.0 = Arc::new(level.entities.clone());
         self.movement.0 = data.movement.clone();
         self.gameplay.0 = data.clone();
         client.enter(built.simulation, data);

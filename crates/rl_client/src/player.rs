@@ -29,6 +29,7 @@ use rl_assets::coords;
 use rl_data::{GameData, MovementConfig};
 use rl_sim::movement::PlayerState;
 use rl_sim::simulation::{MapEvent, PlayerId, Prediction, Simulation, Spawn, TickEvents};
+use rl_sim::weapons::WeaponId;
 
 use crate::AppState;
 use crate::camera::{FlyCam, MOUSE_SENSITIVITY};
@@ -359,7 +360,12 @@ fn tick(
     if let Some(host) = &mut host {
         host.0.exchange(&mut connection.0);
     }
-    ticked.write(Ticked(predicted_events(player.id, &prediction)));
+    let active = connection
+        .0
+        .session()
+        .and_then(|session| session.sim().player(player.id))
+        .and_then(|player| player.inventory.active());
+    ticked.write(Ticked(predicted_events(player.id, active, &prediction)));
     let state = connection
         .0
         .session()
@@ -372,7 +378,18 @@ fn tick(
 }
 
 /// What the local player's prediction fired, as tick events.
-fn predicted_events(player: PlayerId, prediction: &Prediction) -> TickEvents {
+fn predicted_events(
+    player: PlayerId,
+    active: Option<WeaponId>,
+    prediction: &Prediction,
+) -> TickEvents {
+    let with_active = |happened: bool| {
+        active
+            .filter(|_| happened)
+            .map(|weapon| (player, weapon))
+            .into_iter()
+            .collect()
+    };
     TickEvents {
         fired: prediction
             .weapon
@@ -380,7 +397,10 @@ fn predicted_events(player: PlayerId, prediction: &Prediction) -> TickEvents {
             .map(|(weapon, mode)| (player, weapon, mode))
             .into_iter()
             .collect(),
+        reloads: with_active(prediction.weapon.reloading),
+        deploys: with_active(prediction.weapon.switched),
         shots: prediction.shots.clone(),
+        moves: vec![(player, prediction.moved)],
         ..TickEvents::default()
     }
 }
@@ -457,7 +477,7 @@ mod tests {
     #[test]
     fn predicted_shots_become_tick_events() {
         let player = PlayerId::from_index(2);
-        let weapon = rl_sim::weapons::WeaponId::from_index(1);
+        let weapon = WeaponId::from_index(1);
         let prediction = Prediction {
             weapon: rl_sim::weapons::WeaponTick {
                 fired: Some((weapon, rl_sim::weapons::Mode::Primary)),
@@ -465,7 +485,7 @@ mod tests {
             },
             ..Prediction::default()
         };
-        let events = predicted_events(player, &prediction);
+        let events = predicted_events(player, Some(weapon), &prediction);
         assert_eq!(
             events.fired,
             [(player, weapon, rl_sim::weapons::Mode::Primary)]
