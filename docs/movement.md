@@ -189,8 +189,11 @@ Source engine does:
 - **Spawns** that mappers left touching a wall are nudged to the nearest
   free spot (`find_free_position`).
 
-Static and physics props do not collide yet. They become collision shapes
-in M4, with the physics world.
+- **Props** (static and physics) collide too. Movement runs against a
+  `Scene`, which merges the map's trace with one against the props' convex
+  pieces, clipped exactly like brushes. The props a move runs into are
+  reported (`MoveEvents::touches`) so they can be pushed. See
+  [physics.md](physics.md).
 
 ## Testing
 

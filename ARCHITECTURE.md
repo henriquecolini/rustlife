@@ -20,11 +20,11 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `source_formats` | Pure parsers for Source file formats. No Bevy. |
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
-| `rl_sim` | Deterministic shared simulation: collision, movement, physics, weapons, rules. Runs headless; no Bevy. |
+| `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (rapier3d), tools, later weapons and rules. Runs headless; no Bevy. |
 | `rl_net` | Protocol, transport, prediction, interpolation, lag compensation. |
 | `rl_client` / `rl_server` | App composition for each side. |
 
-Crates are introduced by the milestone that needs them. As of M3 the workspace
+Crates are introduced by the milestone that needs them. As of M4 the workspace
 has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
 `rl_sim`, `rl_client`, the `rustlife` and `rustlife-inspect` binaries, and
 `xtask`. `rl_sim` depends only on the format layer and the data schema, so the
@@ -126,6 +126,31 @@ map creates is torn down on leaving it, so maps can be switched freely.
    `FixedUpdate` at the data's tick rate, and puts the camera at the eyes,
    interpolated between the last two ticks. `V` switches to the fly camera
    (noclip) and back.
+
+## Physics and the Manipulator (M4)
+
+1. **Collision models.** `source_formats::phy` decodes a model's `.phy`
+   (IVP compact surfaces) into convex pieces in Source space, plus each
+   solid's mass and surface property. The model loader reads it beside the
+   `.mdl`, and placements carry how each prop collides (none, box, hull),
+   its spawnflags and its mass scale.
+2. **Physics world.** `rl_sim::physics::PhysicsWorld` wraps rapier3d in
+   Source units. The map's solid brushes are convex hulls and displacements
+   triangle meshes, both fixed. Props are bodies built by `prop_desc` from
+   placement plus model, and players are kinematic boxes.
+3. **Players vs props.** `rl_sim::scene::Scene` merges the map's trace with
+   one against the props' pieces, clipped exactly as brushes are with face
+   and bevel planes rebuilt as props move. Movement collides with props
+   unchanged. It reports the props it ran into, and they are pushed. Props
+   that start touching a player hard report impact damage (`physics.ron`).
+4. **The Manipulator** (`rl_sim::tools::manipulator`) grabs, pulls, carries,
+   launches and punts props as `tools/manipulator.ron` says.
+5. **The tick.** `rl_sim::simulation::Simulation` runs movement, pushing and
+   tools for every player, then steps physics. The client runs it each fixed
+   tick. Props with bodies follow their poses, interpolated between ticks
+   and relit as they move.
+
+See [docs/physics.md](docs/physics.md).
 
 Format notes live in [`docs/formats/`](docs/formats/).
 

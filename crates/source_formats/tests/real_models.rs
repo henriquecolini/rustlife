@@ -1,17 +1,25 @@
 //! Decodes every physics model of a real install. `#[ignore]`d; run with
-//! `HL2DM_DIR=<install> cargo test -p source_formats --test real_models --
-//! --ignored`.
+//! `RUSTLIFE_TEST_GAME_DIR=<install> cargo test -p source_formats --test
+//! real_models -- --ignored` (`HL2DM_DIR` works too, and without either an
+//! install in a Steam library is found automatically).
 
 use std::path::PathBuf;
 
 use source_formats::phy;
 use source_fs::content::{ContentOptions, mount_game};
 
+/// The install to test against, if one is named.
+fn game_dir() -> Option<PathBuf> {
+    std::env::var_os("RUSTLIFE_TEST_GAME_DIR")
+        .or_else(|| std::env::var_os("HL2DM_DIR"))
+        .map(PathBuf::from)
+}
+
 #[test]
 #[ignore = "requires a Half-Life 2: Deathmatch install"]
 fn decodes_every_physics_model() {
     let options = ContentOptions {
-        game_dir: std::env::var_os("HL2DM_DIR").map(PathBuf::from),
+        game_dir: game_dir(),
         ..ContentOptions::default()
     };
     let game = match mount_game(&options) {
@@ -57,7 +65,7 @@ fn decodes_every_physics_model() {
 #[ignore = "requires a Half-Life 2: Deathmatch install"]
 fn physics_hulls_line_up_with_meshes() {
     let options = ContentOptions {
-        game_dir: std::env::var_os("HL2DM_DIR").map(PathBuf::from),
+        game_dir: game_dir(),
         ..ContentOptions::default()
     };
     let Ok(game) = mount_game(&options) else {

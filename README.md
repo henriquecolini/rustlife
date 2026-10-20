@@ -62,7 +62,9 @@ cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map
 ```
 
 In the map browser, click a map to load it. In a map you play at a spawn
-point, with Source-style movement ([docs/movement.md](docs/movement.md)):
+point, with Source-style movement ([docs/movement.md](docs/movement.md)) and
+the Manipulator, a tool that grabs and throws the map's physics props
+([docs/physics.md](docs/physics.md)):
 
 | Input | Action |
 |-------|--------|
@@ -72,6 +74,8 @@ point, with Source-style movement ([docs/movement.md](docs/movement.md)):
 | Left Ctrl / C | Crouch |
 | Left Shift | Walk |
 | E | Grab or let go of a ladder |
+| Right mouse | Manipulator: grab a prop (hold to pull a distant one in); press again to drop it |
+| Left mouse | Manipulator: throw the held prop, or punt the one under the crosshair |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Free or recapture the mouse |
 | M | Back to the map browser |
@@ -83,7 +87,8 @@ Other options:
   with a tweaked `movement.ron`.
 - `--screenshot <file.png>` renders one frame non-interactively, saves it and
   exits, which is useful for visual checks. Add `--walk-forward <secs>` to
-  capture the player mid-walk.
+  capture the player mid-walk, `--grab-prop` to pick up the prop nearest the
+  spawn, or `--grab-prop --throw-after <secs>` to throw it.
 
 ## Workshop content
 
@@ -110,8 +115,8 @@ cargo bench -p rl_sim       # trace and movement benchmarks
 
 The content tests read their inputs from environment variables and skip
 silently when unset: `RUSTLIFE_TEST_GAME_DIR` (an HL2DM install),
-`RUSTLIFE_TEST_BSP` (a map: collision and movement checks among others),
-`RUSTLIFE_TEST_VTF` (single files) and
+`RUSTLIFE_TEST_BSP` (a map: collision, movement and physics checks among
+others), `RUSTLIFE_TEST_VTF` and `RUSTLIFE_TEST_PHY` (single files) and
 `RUSTLIFE_TEST_SKY` (a directory holding a sky's six `<suffix>.vtf` faces).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -124,7 +129,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | M1 | World viewer: BSP, textures, lightmaps, displacements, sky, map browser | done |
 | M2 | Props and models: static props, prop entities, brush entities, baked model lighting | done |
 | M3 | Collision and Source-style movement: walking, air-strafing, bunny-hopping, surfing, crouching, swimming, ladders | done |
-| M4 | Physics props and the Manipulator | |
+| M4 | Physics props and the Manipulator: `.phy` collision, pushing, impact damage, grab/pull/launch/punt | done |
 | M5 | Data-driven weapons, items and rules | |
 | M6 | Networking: dedicated/listen servers, prediction, lag compensation | |
 | M7 | Animation, audio, doors, 3D skybox, water | |
