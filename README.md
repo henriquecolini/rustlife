@@ -61,10 +61,11 @@ cargo run --release -p rustlife                          # opens the map browser
 cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map
 ```
 
-In the map browser, click a map to load it. In a map you play at a spawn
-point, with Source-style movement ([docs/movement.md](docs/movement.md)) and
-the Manipulator, a tool that grabs and throws the map's physics props
-([docs/physics.md](docs/physics.md)):
+In the map browser, click a map to load it. In a map you play a
+free-for-all deathmatch from a spawn point, with Source-style movement
+([docs/movement.md](docs/movement.md)), rustlife's own arsenal and pickups
+([docs/combat.md](docs/combat.md)) and the Manipulator, a tool that grabs
+and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 
 | Input | Action |
 |-------|--------|
@@ -74,8 +75,13 @@ the Manipulator, a tool that grabs and throws the map's physics props
 | Left Ctrl / C | Crouch |
 | Left Shift | Walk |
 | E | Grab or let go of a ladder |
-| Right mouse | Manipulator: grab a prop (hold to pull a distant one in); press again to drop it |
-| Left mouse | Manipulator: throw the held prop, or punt the one under the crosshair |
+| Left / right mouse | Primary / secondary fire |
+| R | Reload |
+| 1 – 9, mouse wheel | Choose a weapon by slot, or the next / previous one |
+| Q | Last weapon |
+| Tab | Scoreboard |
+| Right mouse (Manipulator) | Grab a prop (hold to pull a distant one in); press again to drop it |
+| Left mouse (Manipulator) | Throw the held prop, or punt the one under the crosshair |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Free or recapture the mouse |
 | M | Back to the map browser |
@@ -83,12 +89,19 @@ the Manipulator, a tool that grabs and throws the map's physics props
 Other options:
 
 - `--spawn <n>` starts at a different spawn point.
+- `--dummies <n>` adds training dummies: players who stand at their spawn
+  points and respawn when killed.
 - `--data-dir <dir>` overrides the built-in gameplay data file by file, e.g.
   with a tweaked `movement.ron`.
 - `--screenshot <file.png>` renders one frame non-interactively, saves it and
   exits, which is useful for visual checks. Add `--walk-forward <secs>` to
   capture the player mid-walk, `--grab-prop` to pick up the prop nearest the
-  spawn, or `--grab-prop --throw-after <secs>` to throw it.
+  spawn, `--grab-prop --throw-after <secs>` to throw it, `--weapon <id>`
+  with `--shoot-for <secs>` to fire at the nearest dummy, or
+  `--visit-pickup` to look at the nearest pickup.
+
+Weapons, items, the rules and the HUD are all data: see
+[docs/data-driven.md](docs/data-driven.md) to change them or add your own.
 
 ## Workshop content
 
@@ -130,7 +143,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | M2 | Props and models: static props, prop entities, brush entities, baked model lighting | done |
 | M3 | Collision and Source-style movement: walking, air-strafing, bunny-hopping, surfing, crouching, swimming, ladders | done |
 | M4 | Physics props and the Manipulator: `.phy` collision, pushing, impact damage, grab/pull/launch/punt | done |
-| M5 | Data-driven weapons, items and rules | |
+| M5 | Data-driven combat: weapons, items, pickups, damage, health and armor, deathmatch rules, HUD | done |
 | M6 | Networking: dedicated/listen servers, prediction, lag compensation | |
 | M7 | Animation, audio, doors, 3D skybox, water | |
 

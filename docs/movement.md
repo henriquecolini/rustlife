@@ -48,7 +48,7 @@ steps:
       gravity this way integrates a jump's arc symmetrically.
 
 The tick also reports events: a jump, and a landing with the fall speed
-(for sounds now, fall damage in M5).
+(for sounds, and for fall damage: see [combat.md](combat.md)).
 
 ## Friction and acceleration
 

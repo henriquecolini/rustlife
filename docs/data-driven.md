@@ -1,0 +1,169 @@
+# Gameplay data
+
+Everything about how rustlife plays is data: RON files under
+[`data/`](../data/), read by the `rl_data` crate. Code implements *kinds*
+of things — a hitscan shot, a projectile, a health pickup — and the data
+says which exist and how they behave. This page lists the files and walks
+through adding a weapon and an item. How the game then uses them is in
+[combat.md](combat.md), [movement.md](movement.md) and
+[physics.md](physics.md).
+
+## Files
+
+| File | Contents |
+|------|----------|
+| `simulation.ron` | Tick rate |
+| `movement.ron` | Player movement physics |
+| `physics.ron` | Prop physics, surface materials, pushing, impact damage |
+| `tools/manipulator.ron` | The Manipulator's grip and throws |
+| `ammo.ron` | Ammo types and how much of each a player carries |
+| `weapons/<id>.ron` | One weapon per file; the file name is its id |
+| `items/<id>.ron` | One health, armor or ammo pickup per file |
+| `entity_map.ron` | What a map's entity classes become |
+| `player.ron` | Health, armor, player models |
+| `rules/deathmatch.ron` | Frag and time limits, respawning, the loadout, fall damage |
+| `hud.ron` | HUD layout and colours |
+
+Every file documents its fields in comments, and every type in `rl_data`
+documents them in Rust.
+
+## Loading and overriding
+
+The repository's `data/` is compiled into the game, so it always has a
+complete set. `--data-dir <dir>` overrides it file by file: a file in that
+directory replaces the built-in one of the same path, missing files fall
+back to the built-in copies, and new files in `weapons/` and `items/` add
+weapons and items. A modded data set is therefore just the files that
+differ:
+
+```text
+my-data/
+  rules/deathmatch.ron      # a different loadout
+  weapons/nailgun.ron       # a new weapon
+```
+
+## Validation
+
+Data is checked when loaded, and a bad file stops the game with every
+problem it has, each by field:
+
+- **Schema.** Every file is parsed with `deny_unknown_fields`: a misspelt
+  field is an error, not a silently ignored key.
+- **Values.** Speeds and times must be positive, fractions within 0..1,
+  curves sorted, clips big enough for the rounds a shot takes, and so on.
+- **References.** A weapon or item cannot name an ammo type `ammo.ron`
+  lacks; the entity map and the loadout cannot name missing weapons or
+  items; a weapon with a pickup that gives ammo must use some.
+- **Ids.** Weapon and item ids (file names) are lower-case letters, digits
+  and underscores.
+
+```text
+Error: references: weapons/nailgun.ron: no ammo type "nails" in ammo.ron
+```
+
+## Adding a weapon
+
+A weapon is composed, not coded. Create `weapons/nailgun.ron`:
+
+```ron
+Weapon(
+    name: "Nailgun",
+    // Number key 3, after the SMG and the rifle.
+    slot: 3,
+    position: 2,
+    // Drawn with models from the mounted game.
+    view_model: Some("models/weapons/v_smg1.mdl"),
+    world_model: "models/weapons/w_smg1.mdl",
+    // A 50-round magazine of a new ammo type, reloaded in 2 s.
+    clip: Some((ammo: "nails", size: 50, reload: Whole(time: 2.0))),
+    primary: Some((
+        interval: 0.06,
+        automatic: true,
+        ammo: Clip(1),
+        // Slow, slightly dropping nails that stick where they land.
+        shot: Projectile((
+            model: "models/crossbow_bolt.mdl",
+            speed: 2000.0,
+            lift: 0.0,
+            gravity: 0.15,
+            size: 1.0,
+            bounce: None,
+            fuse: None,
+            hit_damage: 12.0,
+            explosion: None,
+            lifetime: 3.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.5,
+    pickup: Some((ammo: 50, respawn: 20.0, radius: 24.0)),
+    sounds: {"fire": "Weapon_SMG1.Single"},
+)
+```
+
+Add the ammo type to `ammo.ron`:
+
+```ron
+"nails": (name: "Nails", max: 200),
+```
+
+Then make it appear: put it in the loadout (`rules/deathmatch.ron`), or map
+an entity class to it so maps place it (`entity_map.ron`):
+
+```ron
+"weapon_ar2": Weapon("nailgun"),
+```
+
+### The building blocks
+
+| Field | Choices |
+|-------|---------|
+| `clip` | `None` (fire modes take from carried ammo or need none), or `(ammo, size, reload)` with `reload` `Whole(time)` or `PerRound(start, each)` |
+| fire mode `ammo` | `Unlimited`, `Clip(n)` (rounds from the clip), `Reserve(ammo, count)` (rounds from carried ammo) |
+| fire mode `shot` | `Hitscan((pellets, damage, spread, range, falloff, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
+| `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
+| projectile `explosion` | `None`, or `(radius, damage, knockback, force)` |
+
+The ten built-in weapons cover every block: the Manipulator (a tool), the
+Pry Bar (melee), Sidearm and Hand Cannon (single bullets), SMG (automatic,
+with a reserve-fed grenade launcher), Arc Rifle (with a bouncing, fused
+orb), Scattergun (pellets, round-by-round reload, a two-shell secondary),
+Boltcaster (a fast projectile), Launcher (rockets) and Frag (a thrown,
+bouncing, fused grenade).
+
+## Adding an item
+
+Create `items/megahealth.ron`:
+
+```ron
+Item(
+    name: "Mega health",
+    model: "models/items/healthkit.mdl",
+    gives: Health(100.0),       // or Armor(50.0), or Ammo({"smg": 45, "buckshot": 6})
+    respawn: 60.0,
+    radius: 24.0,
+)
+```
+
+and place it through the entity map, e.g. `"item_healthcharger":
+Item("megahealth")`. Health and armor top up to `player.ron`'s maximums.
+
+## Mapping a map's entities
+
+Maps made for Half-Life 2: Deathmatch place that game's entities
+(`weapon_shotgun`, `item_healthkit`, ...). `entity_map.ron` turns each class
+into a rustlife weapon or item, or ignores it:
+
+```ron
+EntityMap(
+    classes: {
+        "weapon_shotgun": Weapon("scattergun"),
+        "item_healthkit": Item("medkit"),
+        "item_ammo_crate": Ignore,
+    },
+)
+```
+
+So a different arsenal plays on the same maps: change what the classes
+map to. Weapon and item classes a map uses that are not listed are logged
+when it loads.

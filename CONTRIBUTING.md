@@ -21,7 +21,8 @@
   engine behaviour being matched, netcode reasoning — not *what*.
 * Keep pure logic separate from Bevy systems so it can be unit-tested without
   an `App`.
-* Gameplay numbers belong in `data/*.ron`, not in code.
+* Gameplay numbers belong in `data/*.ron`, not in code (see
+  [docs/data-driven.md](docs/data-driven.md)).
 
 ## Tests
 

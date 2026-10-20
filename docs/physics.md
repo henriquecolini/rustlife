@@ -2,9 +2,10 @@
 
 Implemented in `crates/rl_sim/src/physics/` (the physics world),
 `crates/rl_sim/src/tools/manipulator.rs` (the tool) and
-`crates/rl_sim/src/simulation.rs` (the tick that ties them to players). All
-tuning lives in [`data/physics.ron`](../data/physics.ron) and
-[`data/tools/manipulator.ron`](../data/tools/manipulator.ron).
+`crates/rl_sim/src/simulation/` (the tick that ties them to players). All
+tuning lives in [`data/physics.ron`](../data/physics.ron),
+[`data/tools/manipulator.ron`](../data/tools/manipulator.ron) and, for how
+often the Manipulator acts, [`data/weapons/manipulator.ron`](../data/weapons/manipulator.ron).
 
 ## The physics world
 
@@ -98,13 +99,19 @@ damage = clamp((E − min_energy) · damage_per_joule, 0, max_damage)   if v ≥
 With the shipped values, a 30 kg barrel thrown at 1000 units/s deals about
 110 damage. A barrel rolling into someone at walking pace deals none. Props
 held by someone deal no damage. The player who just let go of a prop is
-never hit by it (see below). Damage is reported as `Impact` events. Health
-arrives with M5.
+never hit by it (see below). Damage is reported as `Impact` events and
+taken from the player's health; a prop someone threw, punted or dropped in
+the last `prop_credit` seconds (`rules/deathmatch.ron`) is theirs, so a kill
+with it is their frag (see [combat.md](combat.md)).
 
 ## The Manipulator
 
-Each player carries a `Manipulator`. It aims along the view from the eyes,
-and its aiming ray stops at the map or at the first prop.
+Each player carries a `Manipulator`, a weapon in slot 1 (see
+[combat.md](combat.md)). While it is in hand and deployed it aims along the
+view from the eyes, and its aiming ray stops at the map or at the first
+prop. Putting it away lets go of the held prop. After each action it rests
+for its fire mode's `interval` from `weapons/manipulator.ron`: primary
+after a launch, punt or dry fire, secondary after a grab or drop.
 
 | Input | Action |
 |-------|--------|

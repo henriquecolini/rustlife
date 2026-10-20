@@ -20,11 +20,11 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `source_formats` | Pure parsers for Source file formats. No Bevy. |
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
-| `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (rapier3d), tools, later weapons and rules. Runs headless; no Bevy. |
+| `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (rapier3d), weapons and the Manipulator, damage, pickups, deathmatch rules. Runs headless; no Bevy. |
 | `rl_net` | Protocol, transport, prediction, interpolation, lag compensation. |
 | `rl_client` / `rl_server` | App composition for each side. |
 
-Crates are introduced by the milestone that needs them. As of M4 the workspace
+Crates are introduced by the milestone that needs them. As of M5 the workspace
 has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
 `rl_sim`, `rl_client`, the `rustlife` and `rustlife-inspect` binaries, and
 `xtask`. `rl_sim` depends only on the format layer and the data schema, so the
@@ -151,6 +151,31 @@ map creates is torn down on leaving it, so maps can be switched freely.
    and relit as they move.
 
 See [docs/physics.md](docs/physics.md).
+
+## Combat (M5)
+
+1. **Data.** `rl_data` loads the arsenal and the rules: `ammo.ron`, one
+   file per weapon (`weapons/`) and per item (`items/`),
+   `entity_map.ron`, `player.ron`, `rules/deathmatch.ron` and `hud.ron`,
+   checking references between them. Weapons are composed of a clip and
+   fire modes whose shots are hitscan, melee, projectile or the
+   Manipulator. See [docs/data-driven.md](docs/data-driven.md).
+2. **Map entities.** `source_formats::entities` hands every entity of the
+   BSP to the simulation, which turns weapon and item classes into pickups
+   through the entity map, and `trigger_hurt` into hazards.
+3. **The simulation** gives each player health and armor (`combat`) and an
+   inventory (`weapons`): the weapon in hand deploys, reloads and fires;
+   bullets and swings trace through the map, props and players' boxes,
+   projectiles fly and burst, blasts reach whoever the walls do not shelter.
+   Deaths score frags in the match (`rules`); the dead respawn away from
+   everyone with the loadout. Randomness is seeded by the tick, so it is
+   deterministic.
+4. **The client** sends weapon choices and reload with each command, draws
+   pickups, projectiles and other players from the simulation (`actors`),
+   effects from the tick's events (`effects`) and the HUD laid out by
+   `hud.ron` (`hud`).
+
+See [docs/combat.md](docs/combat.md).
 
 Format notes live in [`docs/formats/`](docs/formats/).
 
