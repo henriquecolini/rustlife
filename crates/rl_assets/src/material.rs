@@ -22,6 +22,9 @@ use crate::source::SOURCE;
 pub struct SourceMaterial {
     /// `$basetexture` as a loaded image, if any.
     pub base_color: Option<Handle<Image>>,
+    /// `$basetexture2`, which a `WorldVertexTransition` blends towards by
+    /// vertex alpha; `None` for every other shader.
+    pub base_color2: Option<Handle<Image>>,
     /// `$bumpmap` (normal map) as a loaded image, if any.
     pub normal: Option<Handle<Image>>,
     /// Whether the surface is translucent (`$translucent` or water).
@@ -70,6 +73,10 @@ impl AssetLoader for VmtLoader {
         Ok(SourceMaterial {
             base_color: desc
                 .base_texture
+                .as_deref()
+                .map(|t| load_context.load(texture_path(t))),
+            base_color2: desc
+                .base_texture2
                 .as_deref()
                 .map(|t| load_context.load(texture_path(t))),
             normal: desc

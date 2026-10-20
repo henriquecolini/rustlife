@@ -26,12 +26,25 @@ struct MapHandle(Handle<MapAsset>);
 struct MapSpawned(bool);
 
 /// Per-material handles: the `SourceMaterial` being loaded for each material
-/// name, and the `StandardMaterial` built from it once ready.
+/// name, and the materials built from it once ready.
 #[derive(Resource, Default)]
 struct MaterialMaps {
     source: HashMap<String, Handle<SourceMaterial>>,
-    standard: HashMap<String, Handle<StandardMaterial>>,
+    resolved: HashMap<String, Resolved>,
 }
+
+/// The Bevy materials built for one Source material.
+#[derive(Clone)]
+struct Resolved {
+    /// The surface's own (base) material.
+    base: Handle<StandardMaterial>,
+    /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
+    blend: Option<Handle<StandardMaterial>>,
+}
+
+/// Marks a surface whose blend layer has already been spawned.
+#[derive(Component)]
+struct BlendLayered;
 
 /// The neutral material a surface shows until its real material is ready.
 #[derive(Resource)]
@@ -270,35 +283,88 @@ fn spawn_when_loaded(
     spawned.0 = true;
 }
 
+/// What [`resolve_materials`] needs from each map surface: its mesh and
+/// lightmap (shared with a blend layer), its current material, and whether its
+/// blend layer already exists.
+type SurfaceItems = (
+    Entity,
+    &'static Surface,
+    &'static Mesh3d,
+    Option<&'static Lightmap>,
+    &'static mut MeshMaterial3d<StandardMaterial>,
+    Has<BlendLayered>,
+);
+
 /// Swaps each surface's placeholder material for the real one as soon as its
-/// `SourceMaterial` finishes loading, building the `StandardMaterial` once per
-/// material name and caching it.
+/// `SourceMaterial` finishes loading, building the Bevy materials once per
+/// material name and caching them. Blend materials also get their second
+/// layer: a child entity redrawing the same mesh with `$basetexture2`, faded in
+/// by the mesh's vertex alpha.
 fn resolve_materials(
-    mut surfaces: Query<(&Surface, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut commands: Commands,
+    mut surfaces: Query<SurfaceItems>,
     mut material_maps: ResMut<MaterialMaps>,
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (surface, mut material) in &mut surfaces {
+    for (entity, surface, mesh, lightmap, mut material, layered) in &mut surfaces {
         let name = &surface.0;
 
-        if let Some(ready) = material_maps.standard.get(name) {
-            if material.0 != *ready {
-                material.0 = ready.clone();
-            }
-            continue;
+        let resolved = if let Some(resolved) = material_maps.resolved.get(name) {
+            resolved.clone()
+        } else {
+            let Some(source_handle) = material_maps.source.get(name).cloned() else {
+                continue;
+            };
+            let Some(source) = source_materials.get(&source_handle) else {
+                continue;
+            };
+            let resolved = Resolved {
+                base: standard_materials.add(standard_from(source)),
+                blend: source
+                    .base_color2
+                    .clone()
+                    .map(|texture| standard_materials.add(blend_layer(texture))),
+            };
+            material_maps
+                .resolved
+                .insert(name.clone(), resolved.clone());
+            resolved
+        };
+
+        if material.0 != resolved.base {
+            material.0 = resolved.base.clone();
         }
+        if let (Some(blend), false) = (resolved.blend, layered) {
+            let mut layer = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(blend)));
+            if let Some(lightmap) = lightmap {
+                layer.insert(lightmap.clone());
+            }
+            let layer = layer.id();
+            // As a child, the layer is despawned with its surface on unload.
+            commands
+                .entity(entity)
+                .insert(BlendLayered)
+                .add_child(layer);
+        }
+    }
+}
 
-        let Some(source_handle) = material_maps.source.get(name).cloned() else {
-            continue;
-        };
-        let Some(source) = source_materials.get(&source_handle) else {
-            continue;
-        };
-
-        let standard = standard_materials.add(standard_from(source));
-        material.0 = standard.clone();
-        material_maps.standard.insert(name.clone(), standard);
+/// The second layer of a `WorldVertexTransition` surface: `$basetexture2`,
+/// alpha-blended so the mesh's vertex alpha (the mapper's painted blend)
+/// decides how much of it shows over the base layer underneath.
+fn blend_layer(texture: Handle<Image>) -> StandardMaterial {
+    StandardMaterial {
+        base_color_texture: Some(texture),
+        perceptual_roughness: 0.9,
+        cull_mode: None,
+        double_sided: true,
+        alpha_mode: AlphaMode::Blend,
+        // Coplanar with the base layer: nudge it towards the camera so the
+        // depth test never rejects it.
+        depth_bias: 1.0,
+        lightmap_exposure: lightmap_exposure(),
+        ..default()
     }
 }
 

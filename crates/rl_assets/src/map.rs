@@ -260,6 +260,18 @@ fn mesh_of(surface: &MapSurface) -> Mesh {
     if !surface.lightmap_uvs.is_empty() {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, surface.lightmap_uvs.clone());
     }
+    // Painted displacement blend travels as vertex-colour alpha (white RGB so
+    // it never tints). The client draws `$basetexture2` as a second,
+    // alpha-blended layer over the same mesh, which then fades in exactly
+    // where the mapper painted it.
+    if surface.blend.iter().any(|&alpha| alpha > 0.0) {
+        let colors: Vec<[f32; 4]> = surface
+            .blend
+            .iter()
+            .map(|&alpha| [1.0, 1.0, 1.0, alpha])
+            .collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    }
     mesh
 }
 
@@ -306,6 +318,7 @@ mod tests {
             normals: vec![[0.0, 1.0, 0.0]; 3],
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
             lightmap_uvs: Vec::new(),
+            blend: vec![0.0; 3],
         };
         let mesh = mesh_of(&surface);
         assert_eq!(mesh.count_vertices(), 3);
@@ -317,11 +330,19 @@ mod tests {
             "no lightmap, no second UV set"
         );
 
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_none(),
+            "no painted blend, no vertex colours"
+        );
+
         let lit = MapSurface {
             lightmap_uvs: vec![[0.5, 0.5]; 3],
+            blend: vec![0.0, 0.5, 1.0],
             ..surface
         };
-        assert!(mesh_of(&lit).attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+        let lit = mesh_of(&lit);
+        assert!(lit.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+        assert!(lit.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
     }
 
     #[test]

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use vbsp::Bsp;
 
-use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, decode_luxel};
+use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, Placement, decode_luxel};
 
 /// BSP lump index of the low-dynamic-range lighting data the face lump's
 /// `light_offset`s point into.
@@ -55,6 +55,10 @@ pub struct MapSurface {
     /// Per-vertex coordinates into [`MapGeometry::lightmap`]; empty when the
     /// map has no lightmap.
     pub lightmap_uvs: Vec<[f32; 2]>,
+    /// Per-vertex blend between a `WorldVertexTransition` material's two
+    /// textures (0 = `$basetexture`, 1 = `$basetexture2`), painted by the mapper
+    /// on displacements; 0 for every other face.
+    pub blend: Vec<f32>,
 }
 
 /// A player spawn point, in Source space.
@@ -123,25 +127,8 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         .filter(|&index| bsp.face(index).is_some_and(|face| face.is_visible()))
         .collect();
 
-    // Pass 1: decode each lit face's luxels and pack them into one atlas. A
-    // 1×1 full-bright block serves faces without baked light (e.g. unlit
-    // materials), which Source draws at full brightness.
-    let lighting = lump(bytes, LUMP_LIGHTING).filter(|data| !data.is_empty());
-    let mut builder = AtlasBuilder::new();
-    let full_bright = builder.add(1, 1, vec![[1.0; 3]]);
-    let mut face_blocks: HashMap<usize, usize> = HashMap::new();
-    if let Some(lighting) = lighting {
-        for &index in &visible {
-            let Some(face) = bsp.face(index) else {
-                continue;
-            };
-            if let Some((width, height, luxels)) = face_luxels(&face, lighting) {
-                face_blocks.insert(index, builder.add(width, height, luxels));
-            }
-        }
-    }
-    let (atlas, placements) = builder.pack();
-    let has_lightmap = !face_blocks.is_empty();
+    // Pass 1: pack every lit face's lightmap into one atlas.
+    let lightmaps = pack_lightmaps(&bsp, bytes, &visible);
 
     // Pass 2: emit triangles grouped by material.
     let mut by_material: HashMap<String, usize> = HashMap::new();
@@ -163,50 +150,126 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
                 normals: Vec::new(),
                 uvs: Vec::new(),
                 lightmap_uvs: Vec::new(),
+                blend: Vec::new(),
             });
             surfaces.len() - 1
         });
         let surface = &mut surfaces[surface_index];
 
+        let blend = face.displacement().map(|displacement| {
+            let alphas: Vec<f32> = displacement
+                .displacement_vertices()
+                .map(|vertex| vertex.alpha / 255.0)
+                .collect();
+            triangulated_grid(1usize << displacement.power.clamp(0, 8))
+                .map(|grid_index| alphas.get(grid_index).copied().unwrap_or(0.0))
+                .collect::<Vec<f32>>()
+        });
+
         // `vertex_positions` yields an already-triangulated vertex stream
-        // (triangle list), tessellating displacement faces along the way.
-        for position in face.vertex_positions() {
-            surface.positions.push([position.x, position.y, position.z]);
+        // (triangle list), tessellating displacement faces along the way; the
+        // blend alphas above follow the same order.
+        for (vertex, position) in face.vertex_positions().enumerate() {
+            let position = [position.x, position.y, position.z];
+            let alpha = blend.as_ref().and_then(|alphas| alphas.get(vertex));
+            surface.blend.push(alpha.copied().unwrap_or(0.0));
+            surface.positions.push(position);
             surface.normals.push(normal);
-            surface.uvs.push(texture.uv(position));
-            if has_lightmap {
-                let uv = match face_blocks.get(&index) {
-                    Some(&block) => {
-                        // Project onto the face's lightmap axes. Displaced
-                        // vertices project too: their offsets lie mostly along
-                        // the normal, which the projection discards.
-                        let [s, t] =
-                            [texture.light_map_scale, texture.light_map_transform].map(|axis| {
-                                axis[0] * position.x
-                                    + axis[1] * position.y
-                                    + axis[2] * position.z
-                                    + axis[3]
-                            });
-                        let mins = face.light_map_texture_min;
-                        placements[block].uv(&atlas, s - mins[0] as f32, t - mins[1] as f32)
-                    }
-                    None => placements[full_bright].uv(&atlas, 0.0, 0.0),
-                };
-                surface.lightmap_uvs.push(uv);
+            surface.uvs.push(texture.uv(vbsp::Vector {
+                x: position[0],
+                y: position[1],
+                z: position[2],
+            }));
+            if let Some(lightmaps) = &lightmaps {
+                surface
+                    .lightmap_uvs
+                    .push(lightmaps.uv(index, &face, &texture, position));
             }
         }
     }
 
-    let sky_name = bsp
-        .entities
+    Ok(MapGeometry {
+        surfaces,
+        spawns: spawn_points(&bsp),
+        lightmap: lightmaps.map(|packed| packed.atlas),
+        sky_name: sky_name(&bsp),
+    })
+}
+
+/// Every lit face's lightmap, packed into one atlas.
+struct PackedLightmaps {
+    atlas: LightmapAtlas,
+    placements: Vec<Placement>,
+    /// Atlas block of each lit face, by face index.
+    face_blocks: HashMap<usize, usize>,
+    /// A 1×1 full-bright block for faces without baked light (e.g. unlit
+    /// materials), which Source draws at full brightness.
+    full_bright: usize,
+}
+
+impl PackedLightmaps {
+    /// Atlas UV of a vertex of face `index`: the vertex projected onto the
+    /// face's lightmap axes, relative to the face's luxel origin. Displaced
+    /// vertices project too; their offsets lie mostly along the normal, which
+    /// the projection discards.
+    fn uv(
+        &self,
+        index: usize,
+        face: &vbsp::Face,
+        texture: &vbsp::TextureInfo,
+        position: [f32; 3],
+    ) -> [f32; 2] {
+        let Some(&block) = self.face_blocks.get(&index) else {
+            return self.placements[self.full_bright].uv(&self.atlas, 0.0, 0.0);
+        };
+        let [s, t] = [texture.light_map_scale, texture.light_map_transform].map(|axis| {
+            axis[0] * position[0] + axis[1] * position[1] + axis[2] * position[2] + axis[3]
+        });
+        let mins = face.light_map_texture_min;
+        self.placements[block].uv(&self.atlas, s - mins[0] as f32, t - mins[1] as f32)
+    }
+}
+
+/// Decodes and packs the lightmaps of the `visible` faces, or `None` if the
+/// map has no lighting lump or no lit faces.
+fn pack_lightmaps(bsp: &Bsp, bytes: &[u8], visible: &[usize]) -> Option<PackedLightmaps> {
+    let lighting = lump(bytes, LUMP_LIGHTING).filter(|data| !data.is_empty())?;
+    let mut builder = AtlasBuilder::new();
+    let full_bright = builder.add(1, 1, vec![[1.0; 3]]);
+    let mut face_blocks = HashMap::new();
+    for &index in visible {
+        if let Some((width, height, luxels)) = bsp
+            .face(index)
+            .and_then(|face| face_luxels(&face, lighting))
+        {
+            face_blocks.insert(index, builder.add(width, height, luxels));
+        }
+    }
+    if face_blocks.is_empty() {
+        return None;
+    }
+    let (atlas, placements) = builder.pack();
+    Some(PackedLightmaps {
+        atlas,
+        placements,
+        face_blocks,
+        full_bright,
+    })
+}
+
+/// The worldspawn `skyname`, if set.
+fn sky_name(bsp: &Bsp) -> Option<String> {
+    bsp.entities
         .iter()
         .find(|entity| entity.prop("classname") == Some("worldspawn"))
         .and_then(|world| world.prop("skyname"))
         .filter(|name| !name.is_empty())
-        .map(str::to_owned);
+        .map(str::to_owned)
+}
 
-    let spawns = bsp
-        .entities
+/// Every player spawn entity with a parsable origin.
+fn spawn_points(bsp: &Bsp) -> Vec<SpawnPoint> {
+    bsp.entities
         .iter()
         .filter(|entity| {
             entity
@@ -222,14 +285,26 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
                 .unwrap_or(0.0);
             Some(SpawnPoint { origin, yaw })
         })
-        .collect();
+        .collect()
+}
 
-    Ok(MapGeometry {
-        surfaces,
-        spawns,
-        lightmap: has_lightmap.then_some(atlas),
-        sky_name,
-    })
+/// Indices into a displacement's `(steps + 1)²` vertex grid, two triangles per
+/// cell, in exactly the order `vbsp`'s `triangulated_displaced_vertices` emits
+/// positions, so per-vertex data (blend alpha) lines up with them.
+fn triangulated_grid(steps: usize) -> impl Iterator<Item = usize> {
+    let index = move |x: usize, y: usize| y * (steps + 1) + x;
+    (0..steps)
+        .flat_map(move |x| (0..steps).map(move |y| (x, y)))
+        .flat_map(move |(x, y)| {
+            [
+                index(x, y),
+                index(x + 1, y),
+                index(x, y + 1),
+                index(x + 1, y),
+                index(x + 1, y + 1),
+                index(x, y + 1),
+            ]
+        })
 }
 
 /// Decodes a face's style-0 lightmap: its `width × height` luxels, or `None`
@@ -312,6 +387,16 @@ mod tests {
     }
 
     #[test]
+    fn displacement_grid_triangulation_covers_each_cell_twice() {
+        // A power-1 displacement: 2x2 cells over a 3x3 vertex grid.
+        let indices: Vec<usize> = triangulated_grid(2).collect();
+        assert_eq!(indices.len(), 2 * 2 * 6);
+        assert!(indices.iter().all(|&i| i < 9));
+        // First cell's two triangles share the cell's diagonal.
+        assert_eq!(&indices[..6], &[0, 1, 3, 1, 4, 3]);
+    }
+
+    #[test]
     fn parses_keyvalues_vectors() {
         assert_eq!(parse_vector("-1024 512 64.5"), Some([-1024.0, 512.0, 64.5]));
         assert_eq!(parse_vector("1 2"), None);
@@ -364,7 +449,14 @@ mod tests {
             "lightmap: {}x{} luxels, {lit} non-black",
             lightmap.width, lightmap.height
         );
+        let blended = geometry
+            .surfaces
+            .iter()
+            .filter(|s| s.blend.iter().any(|&b| b > 0.0))
+            .count();
+        eprintln!("surfaces with painted blend: {blended}");
         for surface in &geometry.surfaces {
+            assert_eq!(surface.blend.len(), surface.positions.len());
             assert_eq!(surface.lightmap_uvs.len(), surface.positions.len());
             assert!(
                 surface

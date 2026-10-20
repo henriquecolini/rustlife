@@ -58,6 +58,9 @@ pub struct MaterialDesc {
     pub kind: MaterialKind,
     /// `$basetexture`, if any.
     pub base_texture: Option<String>,
+    /// `$basetexture2`: the second texture a `WorldVertexTransition` material
+    /// blends towards by vertex alpha.
+    pub base_texture2: Option<String>,
     /// `$bumpmap` (normal map), if any.
     pub bump_map: Option<String>,
     /// `$surfaceprop`, used by the physics/material layer for friction and
@@ -137,6 +140,10 @@ fn describe(material: &Material) -> MaterialDesc {
     MaterialDesc {
         kind: kind_of(material),
         base_texture: material.base_texture().map(str::to_owned),
+        base_texture2: match material {
+            Material::WorldVertexTransition(blend) => Some(blend.base_texture2.clone()),
+            _ => None,
+        },
         bump_map: material.bump_map().map(str::to_owned),
         surface_prop: material.surface_prop().map(str::to_owned),
         translucent: material.translucent(),
@@ -206,6 +213,23 @@ mod tests {
         assert_eq!(desc.kind, MaterialKind::VertexLitGeneric);
         assert_eq!(desc.bump_map.as_deref(), Some("models/props/crate_normal"));
         assert_eq!(desc.alpha_test, Some(0.5));
+    }
+
+    #[test]
+    fn reads_both_textures_of_a_blend_material() {
+        let desc = parse(
+            r#"
+            "WorldVertexTransition"
+            {
+                "$basetexture" "nature/grass01"
+                "$basetexture2" "nature/dirt01"
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(desc.kind, MaterialKind::WorldVertexTransition);
+        assert_eq!(desc.base_texture.as_deref(), Some("nature/grass01"));
+        assert_eq!(desc.base_texture2.as_deref(), Some("nature/dirt01"));
     }
 
     #[test]
