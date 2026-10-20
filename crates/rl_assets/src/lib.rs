@@ -18,22 +18,28 @@
 use bevy_app::{App, Plugin};
 use bevy_asset::AssetApp;
 
+pub mod coords;
+pub mod map;
 pub mod source;
 pub mod texture;
 
+pub use map::{BspLoader, MapAsset, MapLoadError, MapMesh};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use texture::{VtfLoadError, VtfLoader};
 
-/// Registers rustlife's asset loaders (VTF, and more in later milestones).
+/// Registers rustlife's asset loaders (VTF textures, BSP maps, and more in
+/// later milestones) and the asset types they produce.
 ///
 /// Unlike [`SourceAssetPlugin`], which must be added *before* Bevy's
 /// `AssetPlugin`, this plugin registers loaders and must be added *after* it
-/// (i.e. after `DefaultPlugins`), once the `AssetServer` and the `Image` asset
-/// type exist.
+/// (i.e. after `DefaultPlugins`), once the `AssetServer` and the `Image` and
+/// `Mesh` asset types exist.
 pub struct SourceLoadersPlugin;
 
 impl Plugin for SourceLoadersPlugin {
     fn build(&self, app: &mut App) {
+        app.init_asset::<MapAsset>();
         app.register_asset_loader(VtfLoader);
+        app.register_asset_loader(BspLoader);
     }
 }
