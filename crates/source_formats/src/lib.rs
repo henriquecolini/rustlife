@@ -22,5 +22,6 @@
 
 pub mod bsp;
 pub mod lightmap;
+pub mod skybox;
 pub mod vmt;
 pub mod vtf;

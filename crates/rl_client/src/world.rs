@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 use bevy::camera::Exposure;
+use bevy::light::Skybox;
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use rl_assets::{MapAsset, SOURCE, SourceMaterial};
@@ -44,15 +45,23 @@ struct Placeholder(Handle<StandardMaterial>);
 #[derive(Component)]
 struct Surface(String);
 
+/// Which spawn point the camera starts at (wrapped to the map's spawn count).
+#[derive(Resource)]
+struct StartSpawn(usize);
+
 /// Loads a map and renders its geometry.
 pub struct WorldPlugin {
     /// Map name without path or extension.
     pub map_name: String,
+    /// Index of the spawn point to start the camera at; wraps around, so any
+    /// value is valid.
+    pub spawn: usize,
 }
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(MapName(self.map_name.clone()))
+            .insert_resource(StartSpawn(self.spawn))
             .insert_resource(MapSpawned(false))
             .init_resource::<MaterialMaps>()
             .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.12)))
@@ -151,7 +160,8 @@ fn spawn_when_loaded(
     asset_server: Res<AssetServer>,
     placeholder: Res<Placeholder>,
     mut material_maps: ResMut<MaterialMaps>,
-    mut camera: Query<(&mut Transform, &mut FlyCam)>,
+    start: Res<StartSpawn>,
+    mut camera: Query<(Entity, &mut Transform, &mut FlyCam)>,
 ) {
     if spawned.0 {
         return;
@@ -187,12 +197,22 @@ fn spawn_when_loaded(
 
     // Drop the camera into the middle of the level and scale its speed to the
     // map so flying across it takes a sensible number of seconds.
-    if let Ok((mut transform, mut cam)) = camera.single_mut() {
+    if let Ok((entity, mut transform, mut cam)) = camera.single_mut() {
         cam.speed = (map.radius * 0.15).max(4.0);
+        if let Some(sky) = &map.skybox {
+            commands.entity(entity).insert(Skybox {
+                image: Some(sky.clone()),
+                // Like the lightmap, undo the camera exposure so sky texels
+                // render at their authored brightness.
+                brightness: lightmap_exposure(),
+                rotation: Quat::IDENTITY,
+            });
+        }
         // Prefer a player spawn at eye height (64 units) facing the spawn's
         // direction, so the view starts inside the playable space; fall back
         // to the geometry centre for maps without spawns.
-        if let Some(spawn) = map.spawns.first() {
+        let spawn = (!map.spawns.is_empty()).then(|| map.spawns[start.0 % map.spawns.len()]);
+        if let Some(spawn) = spawn {
             transform.translation =
                 spawn.position + Vec3::Y * (64.0 * rl_assets::coords::METERS_PER_UNIT);
             cam.yaw = spawn.yaw;

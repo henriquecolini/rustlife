@@ -24,6 +24,10 @@ struct Cli {
     #[arg(long, default_value = "dm_lockdown")]
     map: String,
 
+    /// Spawn point to start the camera at (wraps around the map's spawn count).
+    #[arg(long, default_value_t = 0)]
+    spawn: usize,
+
     /// Render non-interactively, save one screenshot to this PNG path, and exit.
     #[arg(long, value_name = "PNG")]
     screenshot: Option<PathBuf>,
@@ -38,6 +42,6 @@ fn main() -> Result<()> {
         path,
         warmup_secs: 3.0,
     });
-    rl_client::run(Arc::new(game.vfs), cli.map, capture);
+    rl_client::run(Arc::new(game.vfs), cli.map, cli.spawn, capture);
     Ok(())
 }

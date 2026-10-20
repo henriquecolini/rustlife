@@ -19,10 +19,16 @@ use futures_lite::AsyncReadExt;
 use half::f16;
 use source_formats::bsp::{self, BspError, MapGeometry, MapSurface};
 use source_formats::lightmap::LightmapAtlas;
+use source_formats::skybox::{self, Cubemap};
+use source_formats::vmt;
+use source_formats::vtf::{self, DecodedTexture};
 use thiserror::Error;
-use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
+use wgpu_types::{
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
+};
 
 use crate::coords;
+use crate::source::SOURCE;
 
 /// One renderable chunk of a map: a mesh and the material it should be drawn
 /// with (a path such as `concrete/concretefloor001a`).
@@ -55,6 +61,9 @@ pub struct MapAsset {
     /// The baked-lighting atlas, sampled with each mesh's `UV_1`; `None` for
     /// maps without lightmaps.
     pub lightmap: Option<Handle<Image>>,
+    /// The 2D skybox as a cube-view image; `None` if the map names no sky or
+    /// its textures could not be loaded.
+    pub skybox: Option<Handle<Image>>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -67,6 +76,7 @@ impl Default for MapAsset {
             meshes: Vec::new(),
             spawns: Vec::new(),
             lightmap: None,
+            skybox: None,
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -102,7 +112,15 @@ impl AssetLoader for BspLoader {
         let mut bytes = Vec::new();
         AsyncReadExt::read_to_end(reader, &mut bytes).await?;
         let geometry = bsp::load_geometry(&bytes)?;
-        Ok(build_map(&geometry, load_context))
+        let mut map = build_map(&geometry, load_context);
+        if let Some(sky) = &geometry.sky_name {
+            if let Some(cube) = load_sky(load_context, sky).await {
+                map.skybox = Some(load_context.add_labeled_asset("skybox", cubemap_image(&cube)));
+            } else {
+                tracing::warn!(sky, "skybox textures not found; drawing no sky");
+            }
+        }
+        Ok(map)
     }
 
     fn extensions(&self) -> &[&str] {
@@ -160,9 +178,63 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         meshes,
         spawns,
         lightmap,
+        skybox: None,
         center,
         radius: radius.max(1.0),
     }
+}
+
+/// Loads and assembles the six faces of the 2D skybox named `sky`, or `None` if
+/// any face is missing or undecodable.
+async fn load_sky(load_context: &mut LoadContext<'_>, sky: &str) -> Option<Cubemap> {
+    let mut faces = Vec::with_capacity(6);
+    for suffix in skybox::SUFFIXES {
+        faces.push(load_sky_face(load_context, &format!("skybox/{sky}{suffix}")).await?);
+    }
+    skybox::assemble([
+        &faces[0], &faces[1], &faces[2], &faces[3], &faces[4], &faces[5],
+    ])
+}
+
+/// Loads one sky face. The face's VMT is consulted first because its
+/// `$basetexture` may name a different texture than the material itself; if
+/// the VMT is missing, the texture is assumed to share the material's name.
+async fn load_sky_face(
+    load_context: &mut LoadContext<'_>,
+    material: &str,
+) -> Option<DecodedTexture> {
+    let vmt_path = format!("{SOURCE}://materials/{material}.vmt");
+    let texture = match load_context.read_asset_bytes(vmt_path).await {
+        Ok(bytes) => vmt::parse(&String::from_utf8_lossy(&bytes))
+            .ok()
+            .and_then(|desc| desc.base_texture)
+            .unwrap_or_else(|| material.to_owned()),
+        Err(_) => material.to_owned(),
+    };
+    let vtf_path = format!("{SOURCE}://materials/{}.vtf", texture.replace('\\', "/"));
+    let bytes = load_context.read_asset_bytes(vtf_path).await.ok()?;
+    vtf::decode(&bytes).ok()
+}
+
+/// Uploads an assembled sky as a six-layer image viewed as a cubemap.
+fn cubemap_image(cube: &Cubemap) -> Image {
+    let size = cube.size as u32;
+    let mut image = Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 6,
+        },
+        TextureDimension::D2,
+        cube.rgba8.clone(),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::Cube),
+        ..Default::default()
+    });
+    image
 }
 
 /// Converts one [`MapSurface`] (Source space) into a Bevy [`Mesh`].
@@ -250,6 +322,23 @@ mod tests {
             ..surface
         };
         assert!(mesh_of(&lit).attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+    }
+
+    #[test]
+    fn sky_becomes_a_six_layer_cube_image() {
+        let cube = Cubemap {
+            size: 2,
+            rgba8: vec![7; 6 * 2 * 2 * 4],
+        };
+        let image = cubemap_image(&cube);
+        assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 6);
+        assert_eq!(
+            image
+                .texture_view_descriptor
+                .as_ref()
+                .and_then(|view| view.dimension),
+            Some(TextureViewDimension::Cube)
+        );
     }
 
     #[test]

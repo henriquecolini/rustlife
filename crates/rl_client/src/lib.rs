@@ -27,7 +27,7 @@ pub mod world;
 pub struct GameVfs(pub Arc<Vfs>);
 
 /// Builds and runs the client, rendering `map_name` from the content mounted in
-/// `vfs`.
+/// `vfs`, with the camera starting at spawn point `spawn`.
 ///
 /// When `capture` is `Some`, the client runs non-interactively: it does not
 /// grab the cursor, saves one screenshot after a warmup, and exits (see
@@ -35,7 +35,7 @@ pub struct GameVfs(pub Arc<Vfs>);
 ///
 /// The `source://` asset source is registered before `DefaultPlugins` (as Bevy
 /// requires for custom sources) and the loaders after it.
-pub fn run(vfs: Arc<Vfs>, map_name: String, capture: Option<Capture>) -> AppExit {
+pub fn run(vfs: Arc<Vfs>, map_name: String, spawn: usize, capture: Option<Capture>) -> AppExit {
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
     app.add_plugins(SourceAssetPlugin::new(vfs));
@@ -49,7 +49,7 @@ pub fn run(vfs: Arc<Vfs>, map_name: String, capture: Option<Capture>) -> AppExit
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CursorGrab(capture.is_none()));
     app.add_plugins(FlyCamPlugin);
-    app.add_plugins(WorldPlugin { map_name });
+    app.add_plugins(WorldPlugin { map_name, spawn });
     if let Some(capture) = capture {
         app.add_plugins(CapturePlugin(capture));
     }

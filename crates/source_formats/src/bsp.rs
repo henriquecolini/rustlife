@@ -77,6 +77,9 @@ pub struct MapGeometry {
     /// The map's baked lighting, or `None` if it has none (unlit or
     /// HDR-only maps).
     pub lightmap: Option<LightmapAtlas>,
+    /// The worldspawn `skyname` (e.g. `sky_day02_09`), naming the 2D skybox
+    /// textures under `materials/skybox/`.
+    pub sky_name: Option<String>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -194,6 +197,14 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         }
     }
 
+    let sky_name = bsp
+        .entities
+        .iter()
+        .find(|entity| entity.prop("classname") == Some("worldspawn"))
+        .and_then(|world| world.prop("skyname"))
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+
     let spawns = bsp
         .entities
         .iter()
@@ -217,6 +228,7 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         surfaces,
         spawns,
         lightmap: has_lightmap.then_some(atlas),
+        sky_name,
     })
 }
 
@@ -338,6 +350,8 @@ mod tests {
         assert!(!geometry.surfaces.is_empty(), "a real map has surfaces");
         assert!(triangles > 0, "a real map has triangles");
         eprintln!("spawns: {}", geometry.spawns.len());
+        eprintln!("sky: {:?}", geometry.sky_name);
+        assert!(geometry.sky_name.is_some(), "worldspawn names a sky");
         assert!(!geometry.spawns.is_empty(), "a DM map has spawn points");
 
         let lightmap = geometry.lightmap.as_ref().expect("map has baked lighting");
