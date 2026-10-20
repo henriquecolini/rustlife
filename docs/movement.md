@@ -219,4 +219,4 @@ in M4, with the physics world.
   jumping and crouching out of every spawn never get stuck or fall out of
   the world. These pass on every stock HL2DM map.
 - **Benchmarks** (`cargo bench -p rl_sim`): about 140 ns per movement-sized
-  hull trace.
+  hull trace, and about 0.9 µs per movement tick.
