@@ -29,6 +29,20 @@ use crate::tools::manipulator::{Aim, Intervals, Manipulator, ToolEvent};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PlayerId(u32);
 
+impl PlayerId {
+    /// The player's index, in the order players joined.
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// The id of the player at `index`.
+    #[must_use]
+    pub fn from_index(index: usize) -> Self {
+        Self(u32::try_from(index).unwrap_or(u32::MAX))
+    }
+}
+
 /// One player's simulated state.
 #[derive(Debug, Clone)]
 pub struct Player {

@@ -31,3 +31,9 @@ pub const LADDER: u32 = 0x2000_0000;
 pub const MASK_PLAYER_SOLID: u32 = SOLID | WINDOW | GRATE | MOVEABLE | PLAYER_CLIP | MONSTER;
 /// Every liquid a player can swim in.
 pub const MASK_WATER: u32 = WATER | SLIME;
+/// What bullets and swings stop at: solids and windows, not grates or
+/// clips (Source's `MASK_SHOT`).
+pub const MASK_SHOT: u32 = SOLID | WINDOW | MOVEABLE | MONSTER;
+/// What projectiles stop at: everything solid to a thrown object,
+/// including grates (Source's `MASK_SOLID`).
+pub const MASK_PROJECTILE: u32 = SOLID | WINDOW | GRATE | MOVEABLE | MONSTER;

@@ -10,7 +10,10 @@
 //! - [`movement`]: Source-like player movement, one tick at a time.
 //! - [`physics`]: props as rigid bodies, pushed by and hitting players.
 //! - [`scene`]: the map and its props together, as movement sees them.
-//! - [`tools`]: what players carry; for now the Manipulator.
+//! - [`tools`]: the Manipulator, the tool behind the weapon of that name.
+//! - [`weapons`]: what players carry, firing, reloading, projectiles.
+//! - [`combat`]: health and armor, damage, what shots and blasts hit.
+//! - [`rng`]: deterministic randomness (bullet spread, spawn choice).
 //! - [`simulation`]: all of the above for a map's players, a tick at a
 //!   time.
 //!
@@ -25,8 +28,11 @@
 #![forbid(unsafe_code)]
 
 pub mod collision;
+pub mod combat;
 pub mod movement;
 pub mod physics;
+pub mod rng;
 pub mod scene;
 pub mod simulation;
 pub mod tools;
+pub mod weapons;

@@ -328,6 +328,7 @@ fn user_cmd(
         pitch: angles.pitch,
         yaw: angles.yaw,
         buttons,
+        select: None,
     }
 }
 

@@ -30,6 +30,7 @@ use rl_data::MovementConfig;
 
 use crate::collision::{CollisionQuery, CollisionWorld, Hull, Ladder};
 use crate::physics::BodyId;
+use crate::weapons::WeaponId;
 
 mod accelerate;
 mod duck;
@@ -57,6 +58,8 @@ impl Buttons {
     pub const ATTACK: Self = Self(1 << 4);
     /// Secondary fire.
     pub const ATTACK2: Self = Self(1 << 5);
+    /// Reload the weapon in hand.
+    pub const RELOAD: Self = Self(1 << 6);
 
     /// Whether every button of `other` is held.
     #[must_use]
@@ -114,6 +117,8 @@ pub struct UserCmd {
     pub yaw: f32,
     /// Buttons held.
     pub buttons: Buttons,
+    /// A weapon to take in hand this tick, if the player chose one.
+    pub select: Option<WeaponId>,
 }
 
 /// How deep in water a player is.
