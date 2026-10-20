@@ -27,12 +27,24 @@ pub struct MapMesh {
     pub mesh: Handle<Mesh>,
 }
 
-/// A loaded BSP map: its world geometry as one mesh per material, plus a
-/// bounding sphere (Bevy space) the client uses to place the initial camera.
+/// A player spawn point in Bevy space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Spawn {
+    /// Position at the player's feet, in metres.
+    pub position: Vec3,
+    /// Facing as a Bevy yaw in radians (see [`coords::yaw`]).
+    pub yaw: f32,
+}
+
+/// A loaded BSP map: its world geometry as one mesh per material, its spawn
+/// points, and a bounding sphere (Bevy space) used to frame the camera when a
+/// map has no spawns.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct MapAsset {
     /// One entry per distinct material in the map.
     pub meshes: Vec<MapMesh>,
+    /// Player spawn points, in entity-lump order.
+    pub spawns: Vec<Spawn>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -43,6 +55,7 @@ impl Default for MapAsset {
     fn default() -> Self {
         Self {
             meshes: Vec::new(),
+            spawns: Vec::new(),
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -118,8 +131,18 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         (Vec3::ZERO, 1.0)
     };
 
+    let spawns = geometry
+        .spawns
+        .iter()
+        .map(|spawn| Spawn {
+            position: coords::position(spawn.origin),
+            yaw: coords::yaw(spawn.yaw),
+        })
+        .collect();
+
     MapAsset {
         meshes,
+        spawns,
         center,
         radius: radius.max(1.0),
     }

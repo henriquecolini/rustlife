@@ -163,8 +163,19 @@ fn spawn_when_loaded(
     // Drop the camera into the middle of the level and scale its speed to the
     // map so flying across it takes a sensible number of seconds.
     if let Ok((mut transform, mut cam)) = camera.single_mut() {
-        transform.translation = map.center;
         cam.speed = (map.radius * 0.15).max(4.0);
+        // Prefer a player spawn at eye height (64 units) facing the spawn's
+        // direction, so the view starts inside the playable space; fall back
+        // to the geometry centre for maps without spawns.
+        if let Some(spawn) = map.spawns.first() {
+            transform.translation =
+                spawn.position + Vec3::Y * (64.0 * rl_assets::coords::METERS_PER_UNIT);
+            cam.yaw = spawn.yaw;
+            cam.pitch = 0.0;
+            transform.rotation = Quat::from_rotation_y(spawn.yaw);
+        } else {
+            transform.translation = map.center;
+        }
     }
 
     info!(

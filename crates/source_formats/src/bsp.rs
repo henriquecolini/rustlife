@@ -40,12 +40,32 @@ pub struct MapSurface {
     pub uvs: Vec<[f32; 2]>,
 }
 
-/// All visible world geometry of a map, grouped by material.
+/// A player spawn point, in Source space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpawnPoint {
+    /// Spawn origin (Source units, Z-up), at the player's feet.
+    pub origin: [f32; 3],
+    /// Facing yaw in degrees (Source convention: around +Z, 0 = +X).
+    pub yaw: f32,
+}
+
+/// All visible world geometry of a map, grouped by material, plus its spawn
+/// points.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MapGeometry {
     /// One entry per distinct material referenced by a visible face.
     pub surfaces: Vec<MapSurface>,
+    /// Player spawn points parsed from the map's entities.
+    pub spawns: Vec<SpawnPoint>,
 }
+
+/// Entity classnames that mark a place a player can spawn.
+const SPAWN_CLASSNAMES: [&str; 4] = [
+    "info_player_deathmatch",
+    "info_player_combine",
+    "info_player_rebel",
+    "info_player_start",
+];
 
 /// Errors from [`load_geometry`].
 #[derive(Debug, Error)]
@@ -113,7 +133,37 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         }
     }
 
-    Ok(MapGeometry { surfaces })
+    let spawns = bsp
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity
+                .prop("classname")
+                .is_some_and(|class| SPAWN_CLASSNAMES.contains(&class))
+        })
+        .filter_map(|entity| {
+            let origin = parse_vector(entity.prop("origin")?)?;
+            // `angles` is "pitch yaw roll"; only yaw matters for a spawn.
+            let yaw = entity
+                .prop("angles")
+                .and_then(|angles| angles.split_whitespace().nth(1)?.parse().ok())
+                .unwrap_or(0.0);
+            Some(SpawnPoint { origin, yaw })
+        })
+        .collect();
+
+    Ok(MapGeometry { surfaces, spawns })
+}
+
+/// Parses a KeyValues vector such as `"-1024 512 64"`.
+fn parse_vector(text: &str) -> Option<[f32; 3]> {
+    let mut parts = text.split_whitespace().map(str::parse::<f32>);
+    let vector = [
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+    ];
+    Some(vector)
 }
 
 /// Returns the raw bytes of a BSP's embedded pakfile (lump 40) — a zip archive
@@ -155,6 +205,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_keyvalues_vectors() {
+        assert_eq!(parse_vector("-1024 512 64.5"), Some([-1024.0, 512.0, 64.5]));
+        assert_eq!(parse_vector("1 2"), None);
+        assert_eq!(parse_vector("1 x 3"), None);
+    }
+
+    #[test]
     fn pakfile_bytes_rejects_non_bsp_and_short_input() {
         assert_eq!(pakfile_bytes(b""), None);
         assert_eq!(pakfile_bytes(b"not a bsp"), None);
@@ -185,6 +242,8 @@ mod tests {
         );
         assert!(!geometry.surfaces.is_empty(), "a real map has surfaces");
         assert!(triangles > 0, "a real map has triangles");
+        eprintln!("spawns: {}", geometry.spawns.len());
+        assert!(!geometry.spawns.is_empty(), "a DM map has spawn points");
 
         // The embedded pakfile should be a mountable zip (starts with "PK").
         let pak = pakfile_bytes(&bytes).expect("map has a pakfile");

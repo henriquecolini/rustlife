@@ -31,9 +31,34 @@ pub fn direction(source: [f32; 3]) -> Vec3 {
     Vec3::new(source[0], source[2], -source[1])
 }
 
+/// Converts a Source yaw (degrees around +Z, 0 facing +X) into a Bevy yaw
+/// (radians around +Y, for a camera whose unrotated view looks along -Z).
+///
+/// A Source facing `θ` points along `(cos θ, sin θ, 0)`, which [`direction`]
+/// maps to `(cos θ, 0, -sin θ)`. A Bevy yaw `φ` turns `-Z` into
+/// `(-sin φ, 0, -cos φ)`; equating the two gives `φ = θ - 90°`.
+#[must_use]
+pub fn yaw(source_degrees: f32) -> f32 {
+    source_degrees.to_radians() - std::f32::consts::FRAC_PI_2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_math::Quat;
+
+    #[test]
+    fn yaw_points_the_camera_along_the_source_facing() {
+        for source_degrees in [0.0_f32, 90.0, 180.0, 270.0, 33.0] {
+            let theta = source_degrees.to_radians();
+            let expected = direction([theta.cos(), theta.sin(), 0.0]);
+            let forward = Quat::from_rotation_y(yaw(source_degrees)) * -Vec3::Z;
+            assert!(
+                (forward - expected).length() < 1e-5,
+                "{source_degrees}°: {forward} != {expected}"
+            );
+        }
+    }
 
     #[test]
     fn up_forward_and_left_map_to_bevy_axes() {

@@ -24,7 +24,7 @@ pub mod material;
 pub mod source;
 pub mod texture;
 
-pub use map::{BspLoader, MapAsset, MapLoadError, MapMesh};
+pub use map::{BspLoader, MapAsset, MapLoadError, MapMesh, Spawn};
 pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use texture::{VtfLoadError, VtfLoader};
