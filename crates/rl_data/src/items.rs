@@ -34,7 +34,14 @@ pub struct ItemConfig {
     /// held at, and `respawn` is how long it takes to recharge once spent.
     #[serde(default)]
     pub station: Option<StationConfig>,
+    /// Soundscript names (or files under `sound/`) by purpose: `pickup`
+    /// when taken, `use` while a station dispenses.
+    #[serde(default)]
+    pub sounds: BTreeMap<String, String>,
 }
+
+/// What an item's sounds are for.
+pub const ITEM_SOUNDS: [&str; 2] = ["pickup", "use"];
 
 /// How a station dispenses.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -76,6 +83,14 @@ impl ItemConfig {
         }
         check.non_negative("respawn", self.respawn);
         check.non_negative("radius", self.radius);
+        for purpose in self.sounds.keys() {
+            if !ITEM_SOUNDS.contains(&purpose.as_str()) {
+                check.fail(
+                    &format!("sounds.{purpose}"),
+                    &format!("unknown purpose; known: {}", ITEM_SOUNDS.join(", ")),
+                );
+            }
+        }
         if let Some(station) = &self.station {
             check.positive("station.rate", station.rate);
             if matches!(self.gives, ItemEffect::Ammo(_)) {
@@ -97,6 +112,10 @@ mod tests {
             respawn: 60.0,
             radius: 40.0,
             station: Some(StationConfig { rate }),
+            sounds: BTreeMap::from([(
+                "use".to_owned(),
+                "WallHealth.LoopingContinueCharge".to_owned(),
+            )]),
         }
     }
 

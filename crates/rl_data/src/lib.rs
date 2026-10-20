@@ -34,6 +34,7 @@
 //! | `hud.ron` | [`HudConfig`] | HUD layout and colours. |
 //! | `net.ron` | [`NetConfig`] | Ports, snapshot rate, interpolation, lag compensation. |
 //! | `map_logic.ron` | [`MapLogicConfig`] | Using doors and buttons, map explosions, the event budget. |
+//! | `sounds.ron` | [`SoundsConfig`] | Footsteps, deaths, explosions, impacts, breakage, buttons. |
 
 #![forbid(unsafe_code)]
 
@@ -55,13 +56,14 @@ pub mod physics;
 pub mod player;
 pub mod rules;
 pub mod simulation;
+pub mod sounds;
 mod validate;
 pub mod weapons;
 
 pub use ammo::{AmmoConfig, AmmoType};
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
-pub use items::{ItemConfig, ItemEffect, StationConfig};
+pub use items::{ITEM_SOUNDS, ItemConfig, ItemEffect, StationConfig};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use map_logic::{MapExplosionConfig, MapLogicConfig};
 pub use movement::{
@@ -73,10 +75,11 @@ pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsCo
 pub use player::{ArmorConfig, HealthConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;
+pub use sounds::{FootstepsConfig, SoundsConfig};
 pub use validate::Problem;
 pub use weapons::{
     ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig, MeleeConfig,
-    ProjectileConfig, Reload, Shot, WeaponConfig, WeaponPickupConfig,
+    ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig,
 };
 
 /// File name of the movement data.
@@ -103,6 +106,8 @@ pub const HUD_FILE: &str = "hud.ron";
 pub const NET_FILE: &str = "net.ron";
 /// File name of the map logic data.
 pub const MAP_LOGIC_FILE: &str = "map_logic.ron";
+/// File name of the sound data.
+pub const SOUNDS_FILE: &str = "sounds.ron";
 pub use rules::DEATHMATCH_FILE;
 
 /// Pairs each data file's path (relative to `data/`) with its built-in text.
@@ -125,6 +130,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "hud.ron",
     "net.ron",
     "map_logic.ron",
+    "sounds.ron",
     "weapons/bar.ron",
     "weapons/boltcaster.ron",
     "weapons/frag.ron",
@@ -227,6 +233,8 @@ pub struct GameData {
     pub net: NetConfig,
     /// The map's doors, buttons, triggers and traps.
     pub map_logic: MapLogicConfig,
+    /// Sounds beyond weapons and items.
+    pub sounds: SoundsConfig,
 }
 
 /// Where data files come from.
@@ -310,6 +318,7 @@ impl GameData {
         put(HUD_FILE.to_owned(), ron::to_string(&self.hud))?;
         put(NET_FILE.to_owned(), ron::to_string(&self.net))?;
         put(MAP_LOGIC_FILE.to_owned(), ron::to_string(&self.map_logic))?;
+        put(SOUNDS_FILE.to_owned(), ron::to_string(&self.sounds))?;
         Ok(files)
     }
 
@@ -329,6 +338,7 @@ impl GameData {
             hud: load_file(files, HUD_FILE, HudConfig::validate)?,
             net: load_file(files, NET_FILE, NetConfig::validate)?,
             map_logic: load_file(files, MAP_LOGIC_FILE, MapLogicConfig::validate)?,
+            sounds: load_file(files, SOUNDS_FILE, SoundsConfig::validate)?,
         };
         let problems = data.reference_problems();
         if problems.is_empty() {

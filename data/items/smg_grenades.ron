@@ -7,4 +7,5 @@ Item(
     respawn: 30.0,
     // Taken by a player whose box comes within this many units of it.
     radius: 24.0,
+    sounds: {"pickup": "BaseCombatCharacter.AmmoPickup"},
 )

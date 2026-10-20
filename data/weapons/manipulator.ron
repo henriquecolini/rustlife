@@ -13,5 +13,11 @@ Weapon(
     secondary: Some((interval: 0.4, automatic: true, ammo: Unlimited, shot: Manipulator)),
     deploy_time: 0.4,
     pickup: None,
-    sounds: {"launch": "Weapon_PhysCannon.Launch", "pickup": "Weapon_PhysCannon.Pickup"},
+    sounds: {
+        "launch": "Weapon_PhysCannon.Launch",
+        "punt": "Weapon_PhysCannon.Launch",
+        "pickup": "Weapon_PhysCannon.Pickup",
+        "drop": "Weapon_PhysCannon.Drop",
+        "dryfire": "Weapon_PhysCannon.DryFire",
+    },
 )

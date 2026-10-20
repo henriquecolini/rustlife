@@ -1,0 +1,37 @@
+// What the game sounds like beyond weapons and items (which name their own
+// sounds), read by the client. Each sound is a soundscript entry from the
+// mounted game, or a file under sound/.
+Sounds(
+    footsteps: (
+        left: "Default.StepLeft",
+        right: "Default.StepRight",
+        // A step every this many seconds when running, and when walking or
+        // crouched.
+        run_interval: 0.3,
+        walk_interval: 0.4,
+        // Below this speed a player walks (quieter steps); below a quarter
+        // of it they are silent.
+        run_speed: 150.0,
+        run_volume: 0.5,
+        walk_volume: 0.2,
+    ),
+    // A landing that hurt.
+    fall_damage: "Player.FallDamage",
+    // A weapon picked up (items name their own pickup sounds).
+    weapon_pickup: "Player.PickupWeapon",
+    death: "Player.Death",
+    explosion: "BaseExplosionEffect.Sound",
+    // Bullets and swings striking the map or a prop, and a player.
+    impact: "Concrete.BulletImpact",
+    flesh_impact: "Flesh.BulletImpact",
+    // Breakables breaking, by the material the map gives them.
+    breaking: {
+        "default": "Breakable.Crate",
+        "glass": "Breakable.MatGlass",
+        "wood": "Breakable.MatWood",
+        "metal": "Breakable.MatMetal",
+        "computer": "Breakable.Computer",
+    },
+    // A button's press, by the sound number the map gives it.
+    button: "Buttons.snd{}",
+)

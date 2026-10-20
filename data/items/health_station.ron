@@ -10,4 +10,5 @@ Item(
     radius: 40.0,
     // Hold use at it to draw its charge at this many points a second.
     station: Some((rate: 25.0)),
+    sounds: {"use": "WallHealth.LoopingContinueCharge"},
 )

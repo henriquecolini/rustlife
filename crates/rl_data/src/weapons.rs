@@ -19,6 +19,20 @@ use crate::validate::Validator;
 /// Highest weapon slot (the number key that selects it).
 pub const MAX_SLOT: u8 = 9;
 
+/// What a weapon's sounds are for:
+///
+/// - `fire`, `fire2`: the primary and secondary fire modes going off (a
+///   swing, a throw, a shot);
+/// - `hit`: a swing striking something;
+/// - `reload`: a reload beginning;
+/// - `deploy`: the weapon coming up;
+/// - `pickup`, `drop`, `launch`, `punt`, `dryfire`: the Manipulator
+///   picking a prop up, letting it go, throwing it, knocking one away, or
+///   finding nothing to throw.
+pub const WEAPON_SOUNDS: [&str; 10] = [
+    "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
+];
+
 /// One weapon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Weapon", deny_unknown_fields)]
@@ -44,8 +58,8 @@ pub struct WeaponConfig {
     pub deploy_time: f32,
     /// How the weapon is picked up from the map, if it can be.
     pub pickup: Option<WeaponPickupConfig>,
-    /// Sound event names by purpose (`"fire"`, `"reload"`, ...), played by
-    /// the client once audio arrives.
+    /// Soundscript names (or files under `sound/`) by purpose, played by
+    /// the client; see [`WEAPON_SOUNDS`] for the purposes.
     pub sounds: BTreeMap<String, String>,
 }
 
@@ -328,6 +342,14 @@ impl WeaponConfig {
         if let Some(pickup) = &self.pickup {
             check.non_negative("pickup.respawn", pickup.respawn);
             check.non_negative("pickup.radius", pickup.radius);
+        }
+        for purpose in self.sounds.keys() {
+            if !WEAPON_SOUNDS.contains(&purpose.as_str()) {
+                check.fail(
+                    &format!("sounds.{purpose}"),
+                    &format!("unknown purpose; known: {}", WEAPON_SOUNDS.join(", ")),
+                );
+            }
         }
     }
 

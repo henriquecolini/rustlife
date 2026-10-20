@@ -16,5 +16,5 @@ Weapon(
     secondary: None,
     deploy_time: 0.3,
     pickup: Some((ammo: 0, respawn: 20.0, radius: 24.0)),
-    sounds: {"swing": "Weapon_Crowbar.Single", "hit": "Weapon_Crowbar.Melee_Hit"},
+    sounds: {"fire": "Weapon_Crowbar.Single", "hit": "Weapon_Crowbar.Melee_Hit"},
 )
