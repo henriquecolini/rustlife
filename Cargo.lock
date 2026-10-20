@@ -5088,6 +5088,7 @@ dependencies = [
  "rl_assets",
  "source_formats",
  "source_fs",
+ "tempfile",
  "tracing",
 ]
 

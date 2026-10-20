@@ -14,12 +14,8 @@ use bevy::prelude::*;
 use rl_assets::{MapAsset, SOURCE, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
 
-use crate::GameVfs;
 use crate::camera::FlyCam;
-
-/// Name of the map to load, without path or extension (e.g. `dm_lockdown`).
-#[derive(Resource)]
-struct MapName(String);
+use crate::{AppState, CurrentMap, GameVfs};
 
 /// Handle to the map currently being loaded.
 #[derive(Resource)]
@@ -49,10 +45,9 @@ struct Surface(String);
 #[derive(Resource)]
 struct StartSpawn(usize);
 
-/// Loads a map and renders its geometry.
+/// Loads the [`CurrentMap`] on entering [`AppState::InGame`], renders it, and
+/// unloads it again on leaving (`M` returns to the map browser).
 pub struct WorldPlugin {
-    /// Map name without path or extension.
-    pub map_name: String,
     /// Index of the spawn point to start the camera at; wraps around, so any
     /// value is valid.
     pub spawn: usize,
@@ -60,13 +55,18 @@ pub struct WorldPlugin {
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(MapName(self.map_name.clone()))
-            .insert_resource(StartSpawn(self.spawn))
+        app.insert_resource(StartSpawn(self.spawn))
             .insert_resource(MapSpawned(false))
             .init_resource::<MaterialMaps>()
             .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.12)))
-            .add_systems(Startup, (setup_lighting, start_load))
-            .add_systems(Update, (spawn_when_loaded, resolve_materials).chain());
+            .add_systems(Startup, setup_lighting)
+            .add_systems(OnEnter(AppState::InGame), start_load)
+            .add_systems(OnExit(AppState::InGame), unload_map)
+            .add_systems(
+                Update,
+                ((spawn_when_loaded, resolve_materials).chain(), open_browser)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -106,9 +106,11 @@ fn setup_lighting(mut commands: Commands, mut materials: ResMut<Assets<StandardM
 fn start_load(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    map_name: Res<MapName>,
+    map_name: Res<CurrentMap>,
     vfs: Res<GameVfs>,
+    mut spawned: ResMut<MapSpawned>,
 ) {
+    spawned.0 = false;
     // Mount the map's embedded pakfile first so its own materials and textures
     // (patched cubemap materials, custom content) are found before the map's
     // assets load.
@@ -152,10 +154,47 @@ fn mount_pakfile(vfs: &Vfs, map: &str) {
     }
 }
 
+/// Tears down everything [`start_load`] and [`spawn_when_loaded`] created: the
+/// surface entities, the camera's skybox, the material cache, the map handle
+/// (letting its assets unload) and the map's pakfile mount.
+fn unload_map(
+    mut commands: Commands,
+    surfaces: Query<Entity, With<Surface>>,
+    cameras: Query<Entity, With<FlyCam>>,
+    mut material_maps: ResMut<MaterialMaps>,
+    mut spawned: ResMut<MapSpawned>,
+    map_name: Res<CurrentMap>,
+    vfs: Res<GameVfs>,
+) {
+    for surface in &surfaces {
+        commands.entity(surface).despawn();
+    }
+    for camera in &cameras {
+        commands.entity(camera).remove::<Skybox>();
+    }
+    *material_maps = MaterialMaps::default();
+    spawned.0 = false;
+    commands.remove_resource::<MapHandle>();
+    let unmounted = vfs.0.unmount_origin(&MountOrigin::MapPakfile {
+        map: map_name.0.clone(),
+    });
+    info!(
+        "unloaded {} ({unmounted} pakfile mount removed)",
+        map_name.0
+    );
+}
+
+/// `M` leaves the map for the map browser.
+fn open_browser(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>) {
+    if keys.just_pressed(KeyCode::KeyM) {
+        next.set(AppState::Browser);
+    }
+}
+
 fn spawn_when_loaded(
     mut commands: Commands,
     mut spawned: ResMut<MapSpawned>,
-    handle: Res<MapHandle>,
+    handle: Option<Res<MapHandle>>,
     maps: Res<Assets<MapAsset>>,
     asset_server: Res<AssetServer>,
     placeholder: Res<Placeholder>,
@@ -166,7 +205,7 @@ fn spawn_when_loaded(
     if spawned.0 {
         return;
     }
-    let Some(map) = maps.get(&handle.0) else {
+    let Some(map) = handle.and_then(|handle| maps.get(&handle.0)) else {
         return;
     };
 

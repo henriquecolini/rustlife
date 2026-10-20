@@ -20,9 +20,10 @@ struct Cli {
     #[command(flatten)]
     content: ContentArgs,
 
-    /// Map to load, without path or extension (e.g. `dm_lockdown`).
-    #[arg(long, default_value = "dm_lockdown")]
-    map: String,
+    /// Map to load directly, without path or extension (e.g. `dm_lockdown`).
+    /// Omit it to start in the map browser.
+    #[arg(long)]
+    map: Option<String>,
 
     /// Spawn point to start the camera at (wraps around the map's spawn count).
     #[arg(long, default_value_t = 0)]

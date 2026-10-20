@@ -1,13 +1,15 @@
 //! A free-flying "noclip" camera for inspecting maps.
 //!
 //! This is the M1 viewer camera: mouse to look, WASD to move, space/control to
-//! rise and fall, shift to move faster. The cursor is grabbed on start and
-//! toggled with `Escape`. Later milestones replace this with the predicted
+//! rise and fall, shift to move faster. The cursor is grabbed on entering a
+//! map, released in the map browser, and toggled with `Escape`. Later milestones replace this with the predicted
 //! player view, but the fly camera stays useful for debugging.
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+
+use crate::AppState;
 
 /// Whether the fly camera grabs the cursor on startup. Inserted by
 /// [`crate::run`]; disabled for non-interactive screenshot captures so a
@@ -41,8 +43,13 @@ pub struct FlyCamPlugin;
 
 impl Plugin for FlyCamPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_camera, grab_cursor))
-            .add_systems(Update, (toggle_grab, look, movement));
+        app.add_systems(Startup, spawn_camera)
+            .add_systems(OnEnter(AppState::InGame), grab_cursor)
+            .add_systems(OnEnter(AppState::Browser), release_cursor)
+            .add_systems(
+                Update,
+                (toggle_grab, look, movement).run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -79,6 +86,13 @@ fn grab_cursor(
     }
     if let Ok(mut options) = cursor.single_mut() {
         set_grab(&mut options, true);
+    }
+}
+
+/// Frees the cursor so the map browser can be used with the mouse.
+fn release_cursor(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+    if let Ok(mut options) = cursor.single_mut() {
+        set_grab(&mut options, false);
     }
 }
 
