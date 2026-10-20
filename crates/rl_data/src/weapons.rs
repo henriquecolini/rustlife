@@ -252,6 +252,9 @@ pub struct WeaponPickupConfig {
     pub ammo: u32,
     /// Seconds before the pickup comes back.
     pub respawn: f32,
+    /// A player touches it when it is within this distance of their box,
+    /// units.
+    pub radius: f32,
 }
 
 impl WeaponConfig {
@@ -324,6 +327,7 @@ impl WeaponConfig {
         }
         if let Some(pickup) = &self.pickup {
             check.non_negative("pickup.respawn", pickup.respawn);
+            check.non_negative("pickup.radius", pickup.radius);
         }
     }
 

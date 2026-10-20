@@ -31,6 +31,9 @@ pub struct RulesConfig {
     pub self_damage: f32,
     /// Frags lost for killing yourself (falls and props included).
     pub suicide_penalty: u32,
+    /// Seconds after a player throws, punts or drops a prop during which
+    /// the harm it does is theirs.
+    pub prop_credit: f32,
     /// Damage from landing hard.
     pub fall_damage: FallDamageConfig,
 }
@@ -102,6 +105,7 @@ impl RulesConfig {
             check.fail("loadout.active", "must be one of loadout.weapons");
         }
         check.non_negative("self_damage", self.self_damage);
+        check.non_negative("prop_credit", self.prop_credit);
         let fall = &self.fall_damage;
         check.non_negative("fall_damage.safe_speed", fall.safe_speed);
         if fall.fatal_speed <= fall.safe_speed {

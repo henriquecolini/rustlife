@@ -113,6 +113,14 @@ impl Manipulator {
         self.held.map(|held| held.body)
     }
 
+    /// Lets go of the held prop, if any, as when its holder dies or puts
+    /// the tool away; returns it.
+    pub fn drop_held(&mut self, physics: &mut PhysicsWorld) -> Option<BodyId> {
+        let held = self.held.take()?;
+        physics.set_held(held.body, None);
+        Some(held.body)
+    }
+
     /// Runs the tool for one tick of `dt` seconds for `player` (whose box
     /// is `player_body`), aiming along `aim` with `buttons` held, resting
     /// for `intervals` after acting.

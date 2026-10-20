@@ -181,3 +181,46 @@ fn crates_dropped_at_spawns_land_on_the_floor() {
         );
     }
 }
+
+/// The map's weapon and item entities become pickups, its kill volumes
+/// hazards, and players can join at its spawn points.
+#[test]
+#[ignore = "requires a BSP file; set RUSTLIFE_TEST_BSP"]
+fn the_map_is_stocked_with_pickups() {
+    use std::sync::Arc;
+
+    use rl_sim::simulation::{Simulation, Spawn};
+
+    let Some(path) = std::env::var("RUSTLIFE_TEST_BSP").ok() else {
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read bsp");
+    let collision = source_formats::collision::load(&bytes).expect("collision");
+    let geometry = source_formats::bsp::load_geometry(&bytes).expect("geometry");
+    let data = rl_data::GameData::builtin().expect("builtin");
+    let mut sim = Simulation::new(Arc::new(CollisionWorld::new(collision)), &data);
+    sim.set_spawns(
+        geometry
+            .spawns
+            .iter()
+            .map(|spawn| Spawn {
+                origin: Vec3::from(spawn.origin),
+                yaw: spawn.yaw,
+            })
+            .collect(),
+    );
+    sim.add_entities(&geometry.entities);
+    eprintln!(
+        "{} pickups, {} hazards",
+        sim.pickups().len(),
+        sim.hazards().len()
+    );
+    assert!(!sim.pickups().is_empty(), "a DM map has pickups");
+    let players: Vec<_> = (0..4).map(|_| sim.join()).collect();
+    for _ in 0..66 {
+        sim.tick(&[]);
+    }
+    for id in players {
+        assert!(sim.player(id).expect("player").alive());
+    }
+}

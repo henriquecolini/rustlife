@@ -21,6 +21,6 @@ Weapon(
     )),
     secondary: None,
     deploy_time: 0.4,
-    pickup: Some((ammo: 30, respawn: 20.0)),
+    pickup: Some((ammo: 30, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Pistol.Single", "reload": "Weapon_Pistol.Reload"},
 )

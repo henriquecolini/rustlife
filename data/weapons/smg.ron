@@ -38,7 +38,7 @@ Weapon(
         )),
     )),
     deploy_time: 0.5,
-    pickup: Some((ammo: 45, respawn: 20.0)),
+    pickup: Some((ammo: 45, respawn: 20.0, radius: 24.0)),
     sounds: {
         "fire": "Weapon_SMG1.Single",
         "fire2": "Weapon_SMG1.Double",

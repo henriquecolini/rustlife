@@ -28,6 +28,9 @@ Rules(
     self_damage: 0.5,
     // Frags lost for dying by your own hand, a fall or the map.
     suicide_penalty: 1,
+    // A prop thrown, punted or dropped by a player is theirs for this long:
+    // a kill with it is their frag.
+    prop_credit: 5.0,
     // Landing faster than safe_speed hurts, rising linearly to
     // fatal_damage at fatal_speed. A plain jump lands at about 270 units/s;
     // a fall of 210 units reaches safe_speed.

@@ -156,6 +156,32 @@ impl CollisionWorld {
         found
     }
 
+    /// The world-space bounds of BSP model `model` (a brush entity's,
+    /// never 0) placed at `origin` with `angles` (`[pitch, yaw, roll]`,
+    /// degrees); `None` for a missing model.
+    #[must_use]
+    pub fn model_bounds(
+        &self,
+        model: usize,
+        origin: Vec3,
+        angles: [f32; 3],
+    ) -> Option<(Vec3, Vec3)> {
+        if model == 0 {
+            return None;
+        }
+        let model = self.map.models.get(model)?;
+        let rotation = angles
+            .iter()
+            .any(|&angle| angle != 0.0)
+            .then(|| rotation_from_angles(angles));
+        Some(placed_bounds(
+            Vec3::from(model.mins),
+            Vec3::from(model.maxs),
+            origin,
+            rotation,
+        ))
+    }
+
     /// The map's enabled ladders.
     #[must_use]
     pub fn ladders(&self) -> &[Ladder] {
@@ -523,8 +549,30 @@ fn place(map: &MapCollision, entity: &BrushEntityCollision) -> Option<PlacedMode
         .iter()
         .any(|&angle| angle != 0.0)
         .then(|| rotation_from_angles(entity.angles));
-    let (local_mins, local_maxs) = (Vec3::from(model.mins), Vec3::from(model.maxs));
-    let (mins, maxs) = match rotation {
+    let (mins, maxs) = placed_bounds(
+        Vec3::from(model.mins),
+        Vec3::from(model.maxs),
+        origin,
+        rotation,
+    );
+    Some(PlacedModel {
+        root: model.root,
+        origin,
+        rotation,
+        mins,
+        maxs,
+    })
+}
+
+/// World-space bounds of a box `local_mins..local_maxs` moved to `origin`
+/// and turned by `rotation`.
+fn placed_bounds(
+    local_mins: Vec3,
+    local_maxs: Vec3,
+    origin: Vec3,
+    rotation: Option<Mat3>,
+) -> (Vec3, Vec3) {
+    match rotation {
         None => (origin + local_mins, origin + local_maxs),
         Some(rotation) => {
             let center = (local_mins + local_maxs) * 0.5;
@@ -533,14 +581,7 @@ fn place(map: &MapCollision, entity: &BrushEntityCollision) -> Option<PlacedMode
             let world_half = abs_matrix(rotation) * half;
             (world_center - world_half, world_center + world_half)
         }
-    };
-    Some(PlacedModel {
-        root: model.root,
-        origin,
-        rotation,
-        mins,
-        maxs,
-    })
+    }
 }
 
 /// Source Euler angles `[pitch, yaw, roll]` (degrees) as a rotation matrix:

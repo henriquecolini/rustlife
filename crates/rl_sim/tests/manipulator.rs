@@ -1,7 +1,8 @@
 //! Manipulator scenarios through the whole simulation: grabbing within
 //! range and mass, pulling from afar, carrying, turning with the view,
 //! launching, punting, breaking the grip, cooldowns, and a thrown prop
-//! hurting another player.
+//! hurting another player. The Manipulator is taken in hand first, as a
+//! weapon.
 
 #![allow(
     clippy::expect_used,
@@ -76,6 +77,18 @@ impl Room {
         let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
         let prop = sim.add_prop(&crate_desc(Vec3::new(distance, 0.0, height), mass));
         let mut room = Self { sim, player, prop };
+        // Take the Manipulator in hand (players spawn holding the
+        // loadout's gun) while the crate settles.
+        let manipulator = room.sim.arsenal().find_weapon("manipulator");
+        assert!(
+            manipulator.is_some(),
+            "the built-in data has the Manipulator"
+        );
+        let select = UserCmd {
+            select: manipulator,
+            ..UserCmd::default()
+        };
+        room.run(1, &select);
         room.run(30, &UserCmd::default());
         room
     }

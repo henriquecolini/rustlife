@@ -13,6 +13,8 @@
 //! - [`tools`]: the Manipulator, the tool behind the weapon of that name.
 //! - [`weapons`]: what players carry, firing, reloading, projectiles.
 //! - [`combat`]: health and armor, damage, what shots and blasts hit.
+//! - [`pickups`], [`hazards`]: what the map's entities become.
+//! - [`rules`]: scoring, the match clock, spawn choice.
 //! - [`rng`]: deterministic randomness (bullet spread, spawn choice).
 //! - [`simulation`]: all of the above for a map's players, a tick at a
 //!   time.
@@ -29,9 +31,12 @@
 
 pub mod collision;
 pub mod combat;
+pub mod hazards;
 pub mod movement;
 pub mod physics;
+pub mod pickups;
 pub mod rng;
+pub mod rules;
 pub mod scene;
 pub mod simulation;
 pub mod tools;

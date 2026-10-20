@@ -300,6 +300,20 @@ impl PhysicsWorld {
         }
     }
 
+    /// Takes a player's box out of the world (while they are dead) or puts
+    /// it back.
+    pub fn set_player_enabled(&mut self, player: BodyId, enabled: bool) {
+        let Some(body) = self.bodies.get(player.index()) else {
+            return;
+        };
+        if !matches!(body.kind, BodyKind::Player { .. }) {
+            return;
+        }
+        if let Some(collider) = self.rapier.colliders.get_mut(body.collider) {
+            collider.set_enabled(enabled);
+        }
+    }
+
     /// Advances the world by one tick and returns the impacts of props on
     /// players that began during it.
     pub fn step(&mut self) -> Vec<Impact> {
