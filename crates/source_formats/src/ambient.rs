@@ -26,11 +26,12 @@
 //!
 //! `vbsp` sorts its leaves by cluster, so its leaf indices no longer match the
 //! node tree or the ambient index lump; this module therefore reads the leaf
-//! lump itself.
+//! lump itself (through [`crate::leaves`]).
 
 use vbsp::Bsp;
 
 use crate::bsp::{lump, lump_version};
+use crate::leaves::{LEAF_SIZE_V0, LEAF_SIZE_V1, LUMP_LEAVES, LeafRecord};
 use crate::lightmap::{Luxel, decode_luxel};
 use crate::lights::{self, LightKind, WorldLight};
 
@@ -38,16 +39,10 @@ use crate::lights::{self, LightKind, WorldLight};
 /// +Z, -Z`. Linear RGB, `1.0` being nominal full brightness (as for luxels).
 pub type AmbientCube = [Luxel; 6];
 
-/// BSP lump index of the leaves.
-const LUMP_LEAVES: usize = 10;
 /// Leaf ambient index lumps (one entry per leaf), LDR then HDR.
 const LUMP_AMBIENT_INDEX: [usize; 2] = [52, 51];
 /// Leaf ambient sample lumps, LDR then HDR (matching [`LUMP_AMBIENT_INDEX`]).
 const LUMP_AMBIENT_LIGHTING: [usize; 2] = [56, 55];
-/// Size of a version-1 leaf (no inline ambient cube).
-const LEAF_SIZE_V1: usize = 32;
-/// Size of a version-0 leaf, which embeds a 24-byte ambient cube at offset 30.
-const LEAF_SIZE_V0: usize = 56;
 /// Offset of the inline ambient cube in a version-0 leaf.
 const LEAF_V0_CUBE_OFFSET: usize = 30;
 /// Size of one ambient sample: a cube of six `ColorRGBExp32`, then the
@@ -63,11 +58,6 @@ const CUBE_SIZE: usize = 24;
 /// light and lightmaps share one scale, so props sit in the world at the same
 /// brightness as the surfaces around them.
 const AMBIENT_SCALE: f32 = 255.0;
-/// `CONTENTS_SOLID`: a leaf inside a brush, which no light reaches.
-const CONTENTS_SOLID: i32 = 1;
-/// Offset of a leaf's `first_leaf_brush` and `leaf_brush_count` (`u16` each),
-/// the same in leaf versions 0 and 1.
-const LEAF_BRUSHES_OFFSET: usize = 24;
 /// How far a sunlight trace runs towards the sun: beyond the largest
 /// possible map (±16384 units on each axis).
 const SUN_TRACE_LENGTH: f32 = 65_536.0;
@@ -473,34 +463,6 @@ fn has_sky_brush(bsp: &Bsp, leaf: &LeafRecord) -> bool {
                     .is_some_and(|info| info.flags.intersects(sky))
             })
     })
-}
-
-/// The fields of a leaf this module needs.
-struct LeafRecord {
-    contents: i32,
-    mins: [f32; 3],
-    maxs: [f32; 3],
-    first_brush: u16,
-    brush_count: u16,
-}
-
-impl LeafRecord {
-    /// Reads the common prefix of a version 0 or 1 leaf.
-    fn read(leaf: &[u8]) -> Self {
-        let u16_at = |at: usize| u16::from_le_bytes([leaf[at], leaf[at + 1]]);
-        let i16_at = |at: usize| f32::from(i16::from_le_bytes([leaf[at], leaf[at + 1]]));
-        Self {
-            contents: i32::from_le_bytes([leaf[0], leaf[1], leaf[2], leaf[3]]),
-            mins: [i16_at(8), i16_at(10), i16_at(12)],
-            maxs: [i16_at(14), i16_at(16), i16_at(18)],
-            first_brush: u16_at(LEAF_BRUSHES_OFFSET),
-            brush_count: u16_at(LEAF_BRUSHES_OFFSET + 2),
-        }
-    }
-
-    fn is_solid(&self) -> bool {
-        self.contents & CONTENTS_SOLID != 0
-    }
 }
 
 /// Version-0 leaves: one inline cube per leaf, sampled at the leaf's centre.
