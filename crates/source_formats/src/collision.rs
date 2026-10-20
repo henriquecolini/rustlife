@@ -14,6 +14,13 @@
 //!
 //! Displacements (terrain) are not brushes. They collide as their tessellated
 //! triangles, which are extracted here per displacement with their bounds.
+//! The brush a displacement was built on survives compilation as a solid
+//! brush (its brush-side `dispinfo` field is not filled in by the compiler),
+//! but Source collides displacements only through their surface: otherwise
+//! the flat base face would sit as a lid over terrain that dips below it. Those
+//! source brushes are found geometrically — a brush with a side on the
+//! displacement's base face plane whose corners are the face's corners — and
+//! made non-solid here.
 //!
 //! Brush entities (`func_door`, `func_brush`, ...) own a sub-model with its
 //! own tree root inside the shared node and leaf arrays; its planes are in the
@@ -188,7 +195,10 @@ fn load_inner(bytes: &[u8]) -> Result<MapCollision, BspError> {
     let records = leaves::read_all(bytes)
         .ok_or_else(|| BspError::Parse("unreadable leaf lump".to_owned()))?;
 
-    let (brushes, sides) = brushes(&bsp);
+    let (mut brushes, sides) = brushes(&bsp);
+    for brush in displacement_source_brushes(&bsp, &brushes, &sides) {
+        brushes[brush].contents = 0;
+    }
     let leaf_brushes: Vec<u32> = bsp
         .leaf_brushes
         .iter()
@@ -290,6 +300,77 @@ fn brushes(bsp: &Bsp) -> (Vec<CollisionBrush>, Vec<CollisionSide>) {
         })
         .collect();
     (brushes, sides)
+}
+
+/// Distance within which a face corner counts as lying on a brush side's plane
+/// or inside the brush.
+const ON_PLANE_EPSILON: f32 = 0.1;
+/// Minimum dot product of two unit normals that count as the same direction.
+const SAME_NORMAL_DOT: f32 = 0.999;
+
+/// Indices of the brushes displacements were built on: each has a side lying
+/// in a displacement's base face plane, and every corner of that face is one
+/// of the brush's corners.
+fn displacement_source_brushes(
+    bsp: &Bsp,
+    brushes: &[CollisionBrush],
+    sides: &[CollisionSide],
+) -> Vec<usize> {
+    let brush_sides = |brush: &CollisionBrush| {
+        let first = brush.first_side as usize;
+        sides
+            .get(first..first + brush.side_count as usize)
+            .unwrap_or_default()
+    };
+    let mut found = Vec::new();
+    for displacement in &bsp.displacements {
+        let Some(face) = bsp.face(usize::from(displacement.map_face)) else {
+            continue;
+        };
+        let normal = face.normal();
+        let normal = [normal.x, normal.y, normal.z];
+        let corners: Vec<[f32; 3]> = face
+            .vertices()
+            .map(|vertex| [vertex.position.x, vertex.position.y, vertex.position.z])
+            .collect();
+        let Some(&first_corner) = corners.first() else {
+            continue;
+        };
+        let dist = dot(normal, first_corner);
+        let source = brushes.iter().position(|brush| {
+            let sides = brush_sides(brush);
+            let has_face_side = sides.iter().any(|side| {
+                dot(side.plane.normal, normal) > SAME_NORMAL_DOT
+                    && (side.plane.dist - dist).abs() < ON_PLANE_EPSILON
+            });
+            // A displacement covers its brush's whole face, so every corner
+            // of the face is a corner of the brush (on three of its planes).
+            // A larger brush whose face merely contains the displacement's
+            // is a different brush.
+            has_face_side
+                && corners.iter().all(|&corner| {
+                    let mut on_planes = 0;
+                    for side in sides {
+                        let distance = dot(side.plane.normal, corner) - side.plane.dist;
+                        if distance > ON_PLANE_EPSILON {
+                            return false;
+                        }
+                        if distance.abs() <= ON_PLANE_EPSILON {
+                            on_planes += 1;
+                        }
+                    }
+                    on_planes >= 3
+                })
+        });
+        if let Some(brush) = source {
+            found.push(brush);
+        }
+    }
+    found
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// The tree's interior nodes. Children that point past the node or leaf

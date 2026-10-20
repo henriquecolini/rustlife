@@ -26,7 +26,7 @@
 //!
 //! `vbsp` sorts its leaves by cluster, so its leaf indices no longer match the
 //! node tree or the ambient index lump; this module therefore reads the leaf
-//! lump itself (through [`crate::leaves`]).
+//! lump itself.
 
 use vbsp::Bsp;
 
