@@ -722,4 +722,77 @@ mod tests {
         assert_eq!(clock(61.2), "1:02");
         assert_eq!(clock(-3.0), "0:00");
     }
+
+    /// A floor with two players, the second with `health` left, after one
+    /// shot from the first's Hand Cannon.
+    fn duel(health: f32, data: &GameData) -> Simulation {
+        use rl_sim::collision::WorldBuilder;
+        use rl_sim::movement::{Buttons, UserCmd};
+
+        let world = WorldBuilder::new()
+            .solid_box(
+                Vec3::splat(-2000.0).with_z(-64.0),
+                Vec3::splat(2000.0).with_z(0.0),
+            )
+            .build();
+        let mut sim = Simulation::new(std::sync::Arc::new(world), data);
+        let (you, them) = (
+            sim.spawn_player(Vec3::new(0.0, 0.0, 1.0)),
+            sim.spawn_player(Vec3::new(200.0, 0.0, 1.0)),
+        );
+        let arsenal = sim.arsenal().clone();
+        let magnum = arsenal.find_weapon("magnum").expect("magnum");
+        sim.player_mut(you)
+            .expect("you")
+            .inventory
+            .give_weapon(&arsenal, magnum);
+        sim.player_mut(them).expect("them").vitals.health = health;
+        let select = UserCmd {
+            select: Some(magnum),
+            ..UserCmd::default()
+        };
+        sim.tick(&[(you, select)]);
+        for _ in 0..40 {
+            sim.tick(&[(you, UserCmd::default())]);
+        }
+        let fire = UserCmd {
+            buttons: Buttons::ATTACK,
+            ..UserCmd::default()
+        };
+        sim.tick(&[(you, fire)]);
+        sim
+    }
+
+    #[test]
+    fn the_dead_are_told_who_killed_them_and_when_they_respawn() {
+        let data = GameData::builtin().expect("builtin");
+        let sim = duel(10.0, &data);
+        let (you, them) = (PlayerId::from_index(0), PlayerId::from_index(1));
+        let log = HudLog::default();
+        // Seen by the victim (as if they were the local player).
+        let message = message_line(&sim, them, &log, 0.0);
+        assert!(
+            message.starts_with("Killed by Player 1\nRespawn in"),
+            "{message}"
+        );
+        assert_eq!(message_line(&sim, you, &log, 0.0), "");
+        let board = scoreboard(&sim, you);
+        let rows: Vec<&str> = board.lines().collect();
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows[1].starts_with("You") && rows[1].contains(" 1 "),
+            "{board}"
+        );
+        assert!(rows[2].starts_with("Player 2"), "{board}");
+        assert_eq!(score_line(&sim, you), "Frags 1 / 25    10:00");
+    }
+
+    #[test]
+    fn the_end_of_a_match_names_the_winner() {
+        let mut data = GameData::builtin().expect("builtin");
+        data.rules.frag_limit = 1;
+        let sim = duel(10.0, &data);
+        let message = message_line(&sim, PlayerId::from_index(1), &HudLog::default(), 0.0);
+        assert!(message.starts_with("Match over: Player 1 won"), "{message}");
+    }
 }
