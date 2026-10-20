@@ -124,6 +124,13 @@ impl Simulation {
         self.players.get(id.0 as usize)
     }
 
+    /// Where a player's eyes are.
+    #[must_use]
+    pub fn eye_position(&self, id: PlayerId) -> Option<Vec3> {
+        let state = self.player(id)?.state;
+        Some(state.origin + Vec3::Z * state.eye_height(&self.movement))
+    }
+
     /// Moves a player to the free spot nearest `origin` and stops them;
     /// `false` (and nothing changes) if there is no room there.
     pub fn teleport_player(&mut self, id: PlayerId, origin: Vec3) -> bool {

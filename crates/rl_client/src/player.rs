@@ -1,12 +1,18 @@
-//! Local play: the player walks the map with rustlife's movement.
+//! Local play: the player walks the map and handles its props.
 //!
-//! Once a map with a collision model is loaded, a player is placed at the
-//! start spawn and simulated by [`rl_sim::movement::simulate`] at the fixed
-//! tick rate from `simulation.ron`, in Bevy's `FixedUpdate`. Input is sampled
-//! every frame: the mouse turns the view immediately, and button presses are
-//! latched until the next tick so a tap shorter than a tick is never lost.
-//! The camera sits at the player's eyes, interpolated between the last two
-//! ticks so motion is smooth at any frame rate.
+//! Once a map with a collision model is loaded, its [`Simulation`] is built
+//! and a player is placed at the start spawn. The simulation ticks at the
+//! fixed rate from `simulation.ron`, in Bevy's `FixedUpdate`: the player's
+//! movement, the Manipulator and prop physics all advance together (see
+//! [`rl_sim::simulation`]). Input is sampled every frame: the mouse turns
+//! the view immediately, and button presses are latched until the next tick
+//! so a tap shorter than a tick is never lost. The camera sits at the
+//! player's eyes, interpolated between the last two ticks so motion is
+//! smooth at any frame rate.
+//!
+//! The left mouse button is primary fire, the right one secondary fire: with
+//! the Manipulator, right grabs (and drops) a prop and left throws it or
+//! punts one.
 //!
 //! `V` toggles noclip: the free [`crate::camera::FlyCam`] takes over, and
 //! switching back drops the player where the camera is. Maps without a
@@ -15,6 +21,7 @@
 //! The simulation works in Source space; [`rl_assets::coords`] converts at
 //! the camera, the one place rendering meets it.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -22,15 +29,20 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rl_assets::{MapAsset, coords};
 use rl_data::{GameData, MovementConfig};
-use rl_sim::collision::{CollisionWorld, Hull, find_free_position};
-use rl_sim::movement::{Buttons, PlayerState, UserCmd, simulate};
+use rl_sim::collision::CollisionWorld;
+use rl_sim::movement::{Buttons, PlayerState, UserCmd};
+use rl_sim::simulation::{PlayerId, Simulation};
+use rl_sim::tools::manipulator::ToolEvent;
 
 use crate::AppState;
 use crate::camera::{FlyCam, MOUSE_SENSITIVITY};
+use crate::script::{self, InputScript};
 use crate::world::{MapHandle, StartSpawn};
 
 /// Look-up/down limit, degrees (Source's default `cl_pitchup`/`down`).
 const PITCH_LIMIT: f32 = 89.0;
+/// Seconds a "hit by a prop" note stays on screen.
+const DAMAGE_NOTE_SECS: f32 = 2.0;
 
 /// How the camera moves.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -46,14 +58,20 @@ pub enum ViewMode {
 #[derive(Resource, Debug, Clone)]
 pub struct Movement(pub MovementConfig);
 
-/// The loaded map's collision world, shared with the simulation.
-#[derive(Resource, Clone)]
-pub struct SimWorld(pub Arc<CollisionWorld>);
+/// The gameplay data the simulation is built from.
+#[derive(Resource, Debug, Clone)]
+pub struct Gameplay(pub GameData);
 
-/// The locally simulated player: its state after the last two ticks, for
-/// interpolating the view between them.
+/// The loaded map's simulation.
+#[derive(Resource, Debug)]
+pub struct Sim(pub Simulation);
+
+/// The locally controlled player: its id and its state after the last two
+/// ticks, for interpolating the view between them.
 #[derive(Resource, Debug, Clone, Copy)]
 pub struct LocalPlayer {
+    /// The player in the [`Sim`].
+    pub id: PlayerId,
     /// State after the previous tick.
     pub previous: PlayerState,
     /// State after the latest tick.
@@ -70,40 +88,44 @@ pub struct ViewAngles {
     pub yaw: f32,
 }
 
+/// The fixed-tick systems that advance the simulation; anything reading
+/// its results in `FixedUpdate` runs after this set.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SimulationTick;
+
 /// Buttons pressed since the last tick, held for it even if already
 /// released.
 #[derive(Resource, Debug, Default)]
 struct LatchedButtons(Buttons);
 
-/// Scripted input for non-interactive runs: hold forward between two
-/// moments of app time, so a capture can be timed to land mid-move.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
-pub struct ScriptedForward {
-    /// App time to start walking, seconds.
-    pub start_secs: f32,
-    /// How long to walk, seconds.
-    pub duration_secs: f32,
+/// The last time a prop hurt the player, for the overlay.
+#[derive(Resource, Debug, Default)]
+struct DamageNote {
+    damage: f32,
+    at_secs: f32,
 }
 
-/// Marks the speed read-out of the debug overlay.
+/// Marks the read-out of the debug overlay.
 #[derive(Component)]
-struct SpeedText;
+struct StatusText;
 
 /// Simulates and views the local player.
 pub struct PlayerPlugin {
-    /// The gameplay data: movement tuning and tick rate.
+    /// The gameplay data: movement, physics, tools and tick rate.
     pub data: GameData,
 }
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Movement(self.data.movement.clone()))
+            .insert_resource(Gameplay(self.data.clone()))
             .insert_resource(Time::<Fixed>::from_hz(f64::from(
                 self.data.simulation.tick_rate,
             )))
             .init_resource::<ViewMode>()
             .init_resource::<ViewAngles>()
             .init_resource::<LatchedButtons>()
+            .init_resource::<DamageNote>()
             .add_systems(OnEnter(AppState::InGame), (enter_map, spawn_overlay))
             .add_systems(OnExit(AppState::InGame), leave_map)
             .add_systems(
@@ -121,7 +143,7 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                tick_player
+                tick.in_set(SimulationTick)
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_equals(ViewMode::Walk)),
             );
@@ -130,24 +152,24 @@ impl Plugin for PlayerPlugin {
 
 fn enter_map(mut commands: Commands, mut mode: ResMut<ViewMode>) {
     *mode = ViewMode::Walk;
-    commands.remove_resource::<SimWorld>();
+    commands.remove_resource::<Sim>();
     commands.remove_resource::<LocalPlayer>();
 }
 
 fn leave_map(mut commands: Commands) {
-    commands.remove_resource::<SimWorld>();
+    commands.remove_resource::<Sim>();
     commands.remove_resource::<LocalPlayer>();
 }
 
-/// Builds the collision world and places the player at the start spawn as
-/// soon as the map has loaded. A map without collision switches to noclip
-/// for good.
+/// Builds the simulation and places the player at the start spawn as soon
+/// as the map has loaded. A map without collision switches to noclip for
+/// good.
 fn spawn_player(
     mut commands: Commands,
     handle: Option<Res<MapHandle>>,
     maps: Res<Assets<MapAsset>>,
-    existing: Option<Res<SimWorld>>,
-    movement: Res<Movement>,
+    existing: Option<Res<Sim>>,
+    gameplay: Res<Gameplay>,
     start: Res<StartSpawn>,
     mut angles: ResMut<ViewAngles>,
     mut mode: ResMut<ViewMode>,
@@ -163,23 +185,24 @@ fn spawn_player(
         *mode = ViewMode::Noclip;
         return;
     };
-    let world = CollisionWorld::new(collision.as_ref().clone());
-    let hull = Hull::from(&movement.0.hulls.standing);
+    let world = Arc::new(CollisionWorld::new(collision.as_ref().clone()));
+    let mut simulation = Simulation::new(world, &gameplay.0);
     let spawn = (!map.spawns.is_empty()).then(|| map.spawns[start.0 % map.spawns.len()]);
     let (origin, yaw) = spawn.map_or((Vec3::ZERO, 0.0), |spawn| {
         (Vec3::from(spawn.source.origin), spawn.source.yaw)
     });
-    // Mappers sometimes leave spawns touching a wall; nudge the player
-    // free, as the engine does.
-    let origin = find_free_position(&world, origin + Vec3::Z, &hull).unwrap_or(origin);
-    let state = PlayerState::at(origin);
+    let id = simulation.spawn_player(origin + Vec3::Z);
+    let Some(state) = simulation.player(id).map(|player| player.state) else {
+        return;
+    };
     commands.insert_resource(LocalPlayer {
+        id,
         previous: state,
         current: state,
     });
-    commands.insert_resource(SimWorld(Arc::new(world)));
+    commands.insert_resource(Sim(simulation));
     *angles = ViewAngles { pitch: 0.0, yaw };
-    info!("player spawned at {origin} facing {yaw}°");
+    info!("player spawned at {} facing {yaw}°", state.origin);
 }
 
 /// `V` switches between walking and noclip, keeping the view where it is.
@@ -188,15 +211,15 @@ fn toggle_noclip(
     mut mode: ResMut<ViewMode>,
     mut angles: ResMut<ViewAngles>,
     player: Option<ResMut<LocalPlayer>>,
-    world: Option<Res<SimWorld>>,
+    sim: Option<ResMut<Sim>>,
     movement: Res<Movement>,
     mut camera: Query<(&Transform, &mut FlyCam)>,
 ) {
     if !keys.just_pressed(KeyCode::KeyV) {
         return;
     }
-    let (Some(mut player), Some(world), Ok((transform, mut fly))) =
-        (player, world, camera.single_mut())
+    let (Some(mut player), Some(mut sim), Ok((transform, mut fly))) =
+        (player, sim, camera.single_mut())
     else {
         return;
     };
@@ -207,19 +230,16 @@ fn toggle_noclip(
             *mode = ViewMode::Noclip;
         }
         ViewMode::Noclip => {
-            let config = &movement.0;
             let eye = coords::to_source_position(transform.translation);
-            let feet = Vec3::from(eye) - Vec3::Z * config.hulls.standing.eye_height;
-            let hull = Hull::from(&config.hulls.standing);
-            let Some(origin) = find_free_position(world.0.as_ref(), feet, &hull) else {
+            let feet = Vec3::from(eye) - Vec3::Z * movement.0.hulls.standing.eye_height;
+            if !sim.0.teleport_player(player.id, feet) {
                 info!("no room to walk here; staying in noclip");
                 return;
-            };
-            let state = PlayerState::at(origin);
-            *player = LocalPlayer {
-                previous: state,
-                current: state,
-            };
+            }
+            if let Some(state) = sim.0.player(player.id).map(|player| player.state) {
+                player.previous = state;
+                player.current = state;
+            }
             *angles = ViewAngles {
                 pitch: -fly.pitch.to_degrees(),
                 yaw: (fly.yaw + std::f32::consts::FRAC_PI_2).to_degrees(),
@@ -247,15 +267,6 @@ fn look(
         (angles.pitch + mouse.delta.y * degrees_per_pixel).clamp(-PITCH_LIMIT, PITCH_LIMIT);
 }
 
-/// Latches button presses until the next tick consumes them.
-fn latch_buttons(keys: Res<ButtonInput<KeyCode>>, mut latched: ResMut<LatchedButtons>) {
-    for (key, button) in BUTTON_KEYS {
-        if keys.just_pressed(key) {
-            latched.0 = latched.0 | button;
-        }
-    }
-}
-
 /// Keys and the buttons they press.
 const BUTTON_KEYS: [(KeyCode, Buttons); 5] = [
     (KeyCode::Space, Buttons::JUMP),
@@ -265,12 +276,37 @@ const BUTTON_KEYS: [(KeyCode, Buttons); 5] = [
     (KeyCode::KeyE, Buttons::USE),
 ];
 
-/// The command for this tick from the keys held now plus latched presses.
+/// Mouse buttons and the buttons they press.
+const BUTTON_MOUSE: [(MouseButton, Buttons); 2] = [
+    (MouseButton::Left, Buttons::ATTACK),
+    (MouseButton::Right, Buttons::ATTACK2),
+];
+
+/// Latches button presses until the next tick consumes them.
+fn latch_buttons(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    mut latched: ResMut<LatchedButtons>,
+) {
+    for (key, button) in BUTTON_KEYS {
+        if keys.just_pressed(key) {
+            latched.0 = latched.0 | button;
+        }
+    }
+    for (key, button) in BUTTON_MOUSE {
+        if mouse.as_ref().is_some_and(|mouse| mouse.just_pressed(key)) {
+            latched.0 = latched.0 | button;
+        }
+    }
+}
+
+/// The command for this tick from the keys and mouse buttons held now plus
+/// latched presses.
 fn user_cmd(
     keys: &ButtonInput<KeyCode>,
+    mouse: Option<&ButtonInput<MouseButton>>,
     latched: Buttons,
     angles: ViewAngles,
-    scripted_forward: bool,
 ) -> UserCmd {
     let axis = |positive: KeyCode, negative: KeyCode| {
         f32::from(u8::from(keys.pressed(positive))) - f32::from(u8::from(keys.pressed(negative)))
@@ -281,13 +317,13 @@ fn user_cmd(
             buttons = buttons | button;
         }
     }
-    let forward = if scripted_forward {
-        1.0
-    } else {
-        axis(KeyCode::KeyW, KeyCode::KeyS)
-    };
+    for (key, button) in BUTTON_MOUSE {
+        if mouse.is_some_and(|mouse| mouse.pressed(key)) {
+            buttons = buttons | button;
+        }
+    }
     UserCmd {
-        forward,
+        forward: axis(KeyCode::KeyW, KeyCode::KeyS),
         side: axis(KeyCode::KeyD, KeyCode::KeyA),
         pitch: angles.pitch,
         yaw: angles.yaw,
@@ -295,31 +331,59 @@ fn user_cmd(
     }
 }
 
-/// Advances the player by one fixed tick.
-fn tick_player(
-    time: Res<Time>,
+/// Advances the simulation by one fixed tick with the local player's
+/// command (adjusted by the input script, if any).
+fn tick(
     clock: Res<Time<Virtual>>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
     mut latched: ResMut<LatchedButtons>,
-    angles: Res<ViewAngles>,
-    movement: Res<Movement>,
-    world: Option<Res<SimWorld>>,
+    mut angles: ResMut<ViewAngles>,
+    sim: Option<ResMut<Sim>>,
     player: Option<ResMut<LocalPlayer>>,
-    scripted: Option<Res<ScriptedForward>>,
+    script: Option<ResMut<InputScript>>,
+    mut note: ResMut<DamageNote>,
 ) {
-    let (Some(world), Some(mut player)) = (world, player) else {
+    let (Some(mut sim), Some(mut player)) = (sim, player) else {
         return;
     };
-    let dt = time.delta_secs();
-    let now = clock.elapsed_secs();
-    let scripted_forward = scripted.is_some_and(|script| {
-        (script.start_secs..script.start_secs + script.duration_secs).contains(&now)
-    });
-    let cmd = user_cmd(&keys, latched.0, *angles, scripted_forward);
+    let mut cmd = user_cmd(&keys, mouse.as_deref(), latched.0, *angles);
     latched.0 = Buttons::NONE;
-    let (next, _events) = simulate(&player.current, &cmd, &movement.0, dt, world.0.as_ref());
-    player.previous = player.current;
-    player.current = next;
+    if let Some(mut script) = script {
+        script::apply(
+            &mut script,
+            clock.elapsed_secs(),
+            player.id,
+            &mut sim.0,
+            &mut cmd,
+        );
+        *angles = ViewAngles {
+            pitch: cmd.pitch,
+            yaw: cmd.yaw,
+        };
+    }
+    let events = sim.0.tick(&[(player.id, cmd)]);
+    for (id, impact) in &events.impacts {
+        if *id == player.id {
+            info!(
+                "hit by a prop at {:.0} units/s: {:.0} damage",
+                impact.speed, impact.damage
+            );
+            *note = DamageNote {
+                damage: impact.damage,
+                at_secs: clock.elapsed_secs(),
+            };
+        }
+    }
+    for (_, event) in &events.tools {
+        if !matches!(event, ToolEvent::DryFire) {
+            debug!("manipulator: {event:?}");
+        }
+    }
+    if let Some(state) = sim.0.player(player.id).map(|player| player.state) {
+        player.previous = player.current;
+        player.current = state;
+    }
 }
 
 /// Puts the camera at the player's eyes, interpolated between the last two
@@ -352,7 +416,7 @@ fn view_rotation(angles: ViewAngles) -> Quat {
     )
 }
 
-/// A crosshair and a speed read-out, until the real HUD arrives (M5).
+/// A crosshair and a status read-out, until the real HUD arrives (M5).
 fn spawn_overlay(mut commands: Commands) {
     commands.spawn((
         DespawnOnExit(AppState::InGame),
@@ -373,7 +437,7 @@ fn spawn_overlay(mut commands: Commands) {
     ));
     commands.spawn((
         DespawnOnExit(AppState::InGame),
-        SpeedText,
+        StatusText,
         Text::new(""),
         TextFont {
             font_size: FontSize::Px(16.0),
@@ -390,9 +454,12 @@ fn spawn_overlay(mut commands: Commands) {
 }
 
 fn update_overlay(
+    clock: Res<Time<Virtual>>,
     mode: Res<ViewMode>,
     player: Option<Res<LocalPlayer>>,
-    mut text: Query<&mut Text, With<SpeedText>>,
+    sim: Option<Res<Sim>>,
+    note: Res<DamageNote>,
+    mut text: Query<&mut Text, With<StatusText>>,
 ) {
     let Ok(mut text) = text.single_mut() else {
         return;
@@ -406,6 +473,16 @@ fn update_overlay(
             }
             if state.ladder.is_some() {
                 line.push_str("  ladder");
+            }
+            let held = sim.as_ref().and_then(|sim| {
+                let body = sim.0.player(player.id)?.manipulator.held()?;
+                sim.0.physics().mass(body)
+            });
+            if let Some(mass) = held {
+                let _ = write!(line, "  holding {mass:.0} kg");
+            }
+            if note.damage > 0.0 && clock.elapsed_secs() - note.at_secs < DAMAGE_NOTE_SECS {
+                let _ = write!(line, "  hit: {:.0} damage", note.damage);
             }
             line
         }
@@ -440,14 +517,20 @@ mod tests {
     }
 
     #[test]
-    fn commands_combine_held_keys_and_latched_presses() {
+    fn commands_combine_held_keys_mouse_and_latched_presses() {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyW);
         keys.press(KeyCode::KeyA);
         keys.press(KeyCode::ShiftLeft);
-        let cmd = user_cmd(&keys, Buttons::JUMP, ViewAngles::default(), false);
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Right);
+        let cmd = user_cmd(&keys, Some(&mouse), Buttons::JUMP, ViewAngles::default());
         assert_eq!((cmd.forward, cmd.side), (1.0, -1.0));
-        assert!(cmd.buttons.contains(Buttons::JUMP | Buttons::WALK));
+        assert!(
+            cmd.buttons
+                .contains(Buttons::JUMP | Buttons::WALK | Buttons::ATTACK2)
+        );
         assert!(!cmd.buttons.contains(Buttons::DUCK));
+        assert!(!cmd.buttons.contains(Buttons::ATTACK));
     }
 }

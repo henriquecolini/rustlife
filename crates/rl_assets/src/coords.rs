@@ -73,6 +73,18 @@ pub fn rotation(angles_degrees: [f32; 3]) -> Quat {
         * Quat::from_axis_angle(Vec3::X, roll)
 }
 
+/// Converts a Source-space rotation (such as a physics body's orientation)
+/// into a Bevy rotation.
+///
+/// The frame change is itself a rotation `M`, so the Bevy rotation is
+/// `M · R · Mᵀ`: the same angle about the remapped axis. For a quaternion
+/// that is just the vector part mapped by [`direction`].
+#[must_use]
+pub fn rotation_from_source(source: Quat) -> Quat {
+    let axis = direction([source.x, source.y, source.z]);
+    Quat::from_xyzw(axis.x, axis.y, axis.z, source.w)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +101,24 @@ mod tests {
             [sp * sr * cy - cr * sy, sp * sr * sy + cr * cy, sr * cp],
             [sp * cr * cy + sr * sy, sp * cr * sy - sr * cy, cr * cp],
         ]
+    }
+
+    proptest! {
+        #[test]
+        fn source_quaternions_convert_like_euler_angles(
+            pitch in -180.0f32..180.0,
+            yaw in -360.0f32..360.0,
+            roll in -180.0f32..180.0,
+        ) {
+            let source = Quat::from_rotation_z(yaw.to_radians())
+                * Quat::from_rotation_y(pitch.to_radians())
+                * Quat::from_rotation_x(roll.to_radians());
+            let converted = rotation_from_source(source);
+            let expected = rotation([pitch, yaw, roll]);
+            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+                prop_assert!((converted * axis).abs_diff_eq(expected * axis, 1e-4));
+            }
+        }
     }
 
     proptest! {

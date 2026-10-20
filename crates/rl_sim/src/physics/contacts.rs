@@ -2,13 +2,15 @@
 //! that hurt.
 //!
 //! A prop held by a player does not collide with that player (or it would
-//! push them around while they carry it): [`HeldFilter`] drops those contact
-//! pairs before the solver sees them.
+//! push them around while they carry it), nor, once let go, until the two
+//! have come apart: [`HeldFilter`] drops those contact pairs before the
+//! solver sees them.
 //!
 //! A prop that *starts* touching a player during a step has hit them. The
 //! impact's speed is the prop's speed before the step relative to the
 //! player's, along the contact normal; `physics.ron`'s impact damage turns
-//! it and the prop's mass into damage. Props held by someone deal none.
+//! it and the prop's mass into damage. Props held by someone deal none, and
+//! a prop never hits the player who just let go of it.
 
 use glam::Vec3;
 use rapier3d::prelude::{PairFilterContext, PhysicsHooks, RigidBodyHandle, SolverFlags};
@@ -85,7 +87,7 @@ impl PhysicsWorld {
                 };
                 touching.push((player, prop));
                 let was_touching = self.touching.contains(&(player, prop));
-                if was_touching || self.holder(prop).is_some() {
+                if was_touching || self.holder(prop).is_some() || self.ignores(player, prop) {
                     continue;
                 }
                 let Some(normal) = pair

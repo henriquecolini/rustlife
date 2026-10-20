@@ -286,6 +286,33 @@ fn held_props_ignore_their_holder_and_gravity() {
 }
 
 #[test]
+fn a_prop_let_go_inside_its_holder_flies_off_without_hitting_them() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let hull = Hull::from(&movement_config().hulls.standing);
+    let player = physics.add_player(Vec3::ZERO, &hull);
+    let prop = physics.add_prop(&crate_at(
+        Vec3::new(8.0, 0.0, 30.0),
+        8.0,
+        30.0,
+        Motion::Dynamic,
+    ));
+    physics.set_held(prop, Some(player));
+    physics.step();
+    physics.set_held(prop, None);
+    physics.set_velocity(prop, Vec3::X * 1000.0, Vec3::ZERO);
+    let impacts: Vec<_> = (0..30)
+        .flat_map(|_| {
+            physics.set_player(player, Vec3::ZERO, Vec3::ZERO, &hull);
+            physics.step()
+        })
+        .collect();
+    assert!(impacts.is_empty(), "{impacts:?}");
+    assert!(!physics.ignores(player, prop), "forgotten once apart");
+    assert!(position(&physics, prop).x > 100.0);
+}
+
+#[test]
 fn debris_does_not_block_players() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);

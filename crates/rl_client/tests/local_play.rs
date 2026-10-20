@@ -1,5 +1,6 @@
 //! Local play in a headless app over a real install: the player spawns on
-//! the map, lands on its floor and walks when forward is held. Gated on
+//! the map, lands on its floor and walks when forward is held, and the
+//! map's props become physics bodies. Gated on
 //! `RUSTLIFE_TEST_GAME_DIR` and `#[ignore]`d so content-free CI still passes.
 
 use std::path::PathBuf;
@@ -14,7 +15,8 @@ use bevy::mesh::Mesh;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
-use rl_client::player::{LocalPlayer, PlayerPlugin, ViewMode};
+use rl_client::player::{LocalPlayer, PlayerPlugin, Sim, ViewMode};
+use rl_client::props::{PhysicsBody, PropsPlugin};
 use rl_client::world::WorldPlugin;
 use rl_client::{AppState, CurrentMap, GameVfs};
 use rl_data::GameData;
@@ -66,6 +68,7 @@ fn the_player_spawns_lands_and_walks() {
         PlayerPlugin {
             data: GameData::builtin().expect("data"),
         },
+        PropsPlugin,
     ));
 
     for _ in 0..2000 {
@@ -90,4 +93,73 @@ fn the_player_spawns_lands_and_walks() {
     let moved = (walking.origin - standing.origin).truncate().length();
     assert!(moved > 50.0, "walked {moved} units: {walking:?}");
     assert!(walking.speed_2d() > 200.0);
+}
+
+#[test]
+#[ignore = "requires an HL2DM install; set RUSTLIFE_TEST_GAME_DIR"]
+fn the_maps_props_become_physics_bodies() {
+    let Ok(dir) = std::env::var("RUSTLIFE_TEST_GAME_DIR") else {
+        return;
+    };
+    let game = mount_game(&ContentOptions {
+        game_dir: Some(PathBuf::from(dir)),
+        ..Default::default()
+    })
+    .expect("mount game");
+    let vfs = Arc::new(game.vfs);
+    let mut app = App::new();
+    app.insert_resource(GameVfs(vfs.clone()));
+    app.add_plugins(SourceAssetPlugin::new(vfs));
+    app.add_plugins((
+        MinimalPlugins,
+        AssetPlugin::default(),
+        StatesPlugin,
+        InputPlugin,
+    ));
+    app.init_asset::<Mesh>();
+    app.init_asset::<Image>();
+    app.init_asset::<StandardMaterial>();
+    app.add_plugins(SourceLoadersPlugin);
+    app.insert_resource(CurrentMap("dm_lockdown".into()));
+    app.insert_state(AppState::InGame);
+    app.add_plugins((
+        WorldPlugin { spawn: 0 },
+        PlayerPlugin {
+            data: GameData::builtin().expect("data"),
+        },
+        PropsPlugin,
+    ));
+
+    // Wait for the models to stream in and their bodies to be made.
+    let bodies = |app: &App| {
+        app.world()
+            .get_resource::<Sim>()
+            .map_or(0, |sim| sim.0.physics().props().count())
+    };
+    for _ in 0..3000 {
+        app.update();
+        if bodies(&app) > 300 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let count = bodies(&app);
+    assert!(count > 300, "dm_lockdown's props have bodies: {count}");
+    let moving = app
+        .world_mut()
+        .query::<&PhysicsBody>()
+        .iter(app.world())
+        .count();
+    assert!(moving > 10, "its physics props can move: {moving}");
+
+    // Nothing falls out of the world while the props settle.
+    run_for(&mut app, 2.0);
+    let sim = app.world().resource::<Sim>();
+    let physics = sim.0.physics();
+    let fallen = physics
+        .props()
+        .filter_map(|body| physics.pose(body))
+        .filter(|pose| pose.position.z < -16_384.0)
+        .count();
+    assert_eq!(fallen, 0, "props fell out of the world");
 }

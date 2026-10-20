@@ -2,9 +2,9 @@
 //! renders a map.
 //!
 //! It loads a BSP and its props through the `source://` asset source and lets
-//! the player walk it with rustlife's movement ([`player`]), or fly it in
-//! noclip. Later milestones add physics, combat, networking and audio on top
-//! of the same app.
+//! the player walk it with rustlife's movement and handle its props with the
+//! Manipulator ([`player`], [`props`]), or fly it in noclip. Later milestones
+//! add combat, networking and audio on top of the same app.
 
 #![forbid(unsafe_code)]
 
@@ -18,8 +18,9 @@ use source_fs::Vfs;
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
-use crate::player::{PlayerPlugin, ScriptedForward};
+use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
+use crate::script::InputScript;
 use crate::world::WorldPlugin;
 
 pub mod browser;
@@ -27,6 +28,7 @@ pub mod camera;
 pub mod capture;
 pub mod player;
 pub mod props;
+pub mod script;
 pub mod world;
 
 /// Top-level client state.
@@ -58,8 +60,9 @@ pub struct ClientOptions {
     pub spawn: usize,
     /// Run non-interactively and save one screenshot (see [`capture`]).
     pub capture: Option<Capture>,
-    /// Scripted forward movement, for captures of the player moving.
-    pub scripted_forward: Option<ScriptedForward>,
+    /// Scripted input, for captures of the player moving and using the
+    /// Manipulator.
+    pub script: Option<InputScript>,
     /// The gameplay data to play with.
     pub data: GameData,
 }
@@ -101,7 +104,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         BrowserPlugin,
         PlayerPlugin { data: options.data },
     ));
-    if let Some(script) = options.scripted_forward {
+    if let Some(script) = options.script {
         app.insert_resource(script);
     }
     if let Some(capture) = options.capture {

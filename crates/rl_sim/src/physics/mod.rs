@@ -6,9 +6,9 @@
 //! - **The map**, as fixed colliders: one convex hull per solid brush (the
 //!   same brushes players collide with) and one triangle mesh per
 //!   displacement (`statics`).
-//! - **Props**, one body each with a collider per convex piece of the
-//!   model's collision model ([`props`]): dynamic for physics props, fixed
-//!   for static props and other prop entities.
+//! - **Props**, one body each whose collider is the convex pieces of the
+//!   model's collision model ([`prop_desc`]): dynamic for physics props,
+//!   fixed for static props and other prop entities.
 //! - **Players**, as kinematic boxes the simulation moves to wherever
 //!   movement put them, so props land on and bump into players rather than
 //!   passing through them.
@@ -28,6 +28,7 @@
 //! insertion order.
 
 use glam::{Quat, Vec3};
+use rapier3d::parry::bounding_volume::BoundingVolume;
 use rapier3d::prelude::{
     ActiveHooks, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode,
     PhysicsWorld as RapierWorld, Pose, RigidBodyBuilder, RigidBodyHandle, RigidBodyType,
@@ -130,6 +131,11 @@ pub struct PhysicsWorld {
     /// `(player, prop)` pairs where the player holds the prop: they do not
     /// collide.
     held: Vec<(BodyId, BodyId)>,
+    /// `(player, prop)` pairs where the player let go of the prop while
+    /// they still overlapped: they keep ignoring each other until they come
+    /// apart, so a prop thrown from inside its holder's box neither shoves
+    /// nor hits them.
+    released: Vec<(BodyId, BodyId)>,
     /// `(player, prop)` pairs in contact after the last step, so an impact
     /// is counted once when contact begins.
     touching: Vec<(BodyId, BodyId)>,
@@ -162,6 +168,7 @@ impl PhysicsWorld {
             rapier,
             bodies: Vec::new(),
             held: Vec::new(),
+            released: Vec::new(),
             touching: Vec::new(),
             config: config.clone(),
         }
@@ -301,12 +308,14 @@ impl PhysicsWorld {
             pairs: self
                 .held
                 .iter()
+                .chain(&self.released)
                 .filter_map(|&(player, prop)| Some((self.handle(player)?, self.handle(prop)?)))
                 .collect(),
         };
         self.rapier.step_with_events(&hooks, &());
         self.clamp_velocities();
         self.refresh_planes();
+        self.forget_separated();
         self.detect_impacts(&before)
     }
 
@@ -400,7 +409,18 @@ impl PhysicsWorld {
     /// prop ignores gravity and does not collide with its holder. A fixed
     /// prop that may be freed by grabbing becomes dynamic.
     pub fn set_held(&mut self, prop: BodyId, player: Option<BodyId>) {
-        self.held.retain(|&(_, held)| held != prop);
+        let mut released = Vec::new();
+        self.held.retain(|&pair| {
+            let keep = pair.1 != prop;
+            if !keep {
+                released.push(pair);
+            }
+            keep
+        });
+        self.released.retain(|&(_, other)| other != prop);
+        if player.is_none() {
+            self.released.extend(released);
+        }
         let free = self.prop(prop).is_some_and(|body| body.free_on_grab);
         if let Some(player) = player {
             self.held.push((player, prop));
@@ -412,6 +432,31 @@ impl PhysicsWorld {
             }
             rigid.set_gravity_scale(if player.is_some() { 0.0 } else { 1.0 }, true);
         }
+    }
+
+    /// Whether `player` and `prop` ignore each other: the player holds the
+    /// prop, or let go of it and has not come apart from it yet.
+    #[must_use]
+    pub fn ignores(&self, player: BodyId, prop: BodyId) -> bool {
+        self.held.contains(&(player, prop)) || self.released.contains(&(player, prop))
+    }
+
+    /// Stops ignoring released pairs whose bounds no longer overlap.
+    fn forget_separated(&mut self) {
+        let bounds = |body: BodyId| {
+            let collider = self.bodies.get(body.index())?.collider;
+            Some(self.rapier.colliders.get(collider)?.compute_aabb())
+        };
+        let apart: Vec<_> = self
+            .released
+            .iter()
+            .copied()
+            .filter(|&(player, prop)| match (bounds(player), bounds(prop)) {
+                (Some(a), Some(b)) => !a.intersects(&b),
+                _ => true,
+            })
+            .collect();
+        self.released.retain(|pair| !apart.contains(pair));
     }
 
     /// The player holding `prop`, if any.

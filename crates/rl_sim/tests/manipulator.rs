@@ -172,7 +172,10 @@ fn heavy_props_cannot_be_grabbed() {
 #[test]
 fn distant_props_are_pulled_in_then_grabbed() {
     let data = data();
-    let distance = f32::midpoint(data.manipulator.grab.range, data.manipulator.grab.pull_range);
+    let distance = f32::midpoint(
+        data.manipulator.grab.range,
+        data.manipulator.grab.pull_range,
+    );
     let mut room = Room::new(&data, distance, 10.0);
     let mut events = Vec::new();
     for _ in 0..132 {
