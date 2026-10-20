@@ -7,18 +7,21 @@
 //! resolves those names to materials and spawns the meshes.
 //!
 //! The baked lighting becomes one `Rgba16Float` atlas image (a labeled
-//! sub-asset too), addressed by each mesh's second UV set.
+//! sub-asset too), addressed by each mesh's second UV set. The ambient cubes
+//! models are lit by become an irradiance-volume image ([`crate::irradiance`]),
+//! and every prop placement a [`PlacedProp`] naming the model to load.
 
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, RenderAssetUsages};
 use bevy_image::{Image, ImageSampler};
-use bevy_math::Vec3;
+use bevy_math::{Quat, Vec3};
 use bevy_mesh::{Mesh, PrimitiveTopology};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
 use half::f16;
 use source_formats::bsp::{self, BspError, MapGeometry, MapSurface};
 use source_formats::lightmap::LightmapAtlas;
+use source_formats::props::{PropKind, PropPlacement};
 use source_formats::skybox::{self, Cubemap};
 use source_formats::vmt;
 use source_formats::vtf::{self, DecodedTexture};
@@ -28,6 +31,7 @@ use wgpu_types::{
 };
 
 use crate::coords;
+use crate::irradiance::{self, VolumePlacement};
 use crate::source::SOURCE;
 
 /// One renderable chunk of a map: a mesh and the material it should be drawn
@@ -49,6 +53,32 @@ pub struct Spawn {
     pub yaw: f32,
 }
 
+/// A model placed in the map, in Bevy space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedProp {
+    /// Asset path of the model, e.g. `source://models/props_c17/oildrum001.mdl`.
+    pub model: String,
+    /// Position of the model's origin, in metres.
+    pub translation: Vec3,
+    /// Orientation (see [`coords::rotation`]).
+    pub rotation: Quat,
+    /// Uniform scale.
+    pub scale: f32,
+    /// Skin (material set) index.
+    pub skin: usize,
+    /// Static prop or entity kind.
+    pub kind: PropKind,
+}
+
+/// The map's ambient light as an irradiance volume, placed over the world.
+#[derive(Debug, Clone)]
+pub struct IrradianceVolumeData {
+    /// The voxel texture in Bevy's irradiance-volume layout.
+    pub voxels: Handle<Image>,
+    /// Where the volume's unit cube is stretched to.
+    pub placement: VolumePlacement,
+}
+
 /// A loaded BSP map: its world geometry as one mesh per material, its spawn
 /// points, and a bounding sphere (Bevy space) used to frame the camera when a
 /// map has no spawns.
@@ -64,6 +94,10 @@ pub struct MapAsset {
     /// The 2D skybox as a cube-view image; `None` if the map names no sky or
     /// its textures could not be loaded.
     pub skybox: Option<Handle<Image>>,
+    /// Every model placed in the map (static props and prop entities).
+    pub props: Vec<PlacedProp>,
+    /// Ambient light for models; `None` for maps without ambient samples.
+    pub irradiance: Option<IrradianceVolumeData>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -77,6 +111,8 @@ impl Default for MapAsset {
             spawns: Vec::new(),
             lightmap: None,
             skybox: None,
+            props: Vec::new(),
+            irradiance: None,
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -174,13 +210,37 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         .as_ref()
         .map(|atlas| load_context.add_labeled_asset("lightmap", lightmap_image(atlas)));
 
+    let irradiance =
+        geometry
+            .ambient
+            .as_ref()
+            .and_then(irradiance::bake)
+            .map(|(image, placement)| IrradianceVolumeData {
+                voxels: load_context.add_labeled_asset("irradiance", image),
+                placement,
+            });
+
     MapAsset {
         meshes,
         spawns,
         lightmap,
         skybox: None,
+        props: geometry.props.iter().map(placed_prop).collect(),
+        irradiance,
         center,
         radius: radius.max(1.0),
+    }
+}
+
+/// Converts a Source-space placement into a [`PlacedProp`].
+fn placed_prop(prop: &PropPlacement) -> PlacedProp {
+    PlacedProp {
+        model: format!("{SOURCE}://{}", prop.model),
+        translation: coords::position(prop.origin),
+        rotation: coords::rotation(prop.angles),
+        scale: prop.scale,
+        skin: prop.skin,
+        kind: prop.kind,
     }
 }
 
@@ -343,6 +403,28 @@ mod tests {
         let lit = mesh_of(&lit);
         assert!(lit.attribute(Mesh::ATTRIBUTE_UV_1).is_some());
         assert!(lit.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+    }
+
+    #[test]
+    fn placements_become_bevy_space_props() {
+        let prop = placed_prop(&PropPlacement {
+            model: "models/props_c17/oildrum001.mdl".to_owned(),
+            origin: [64.0, 0.0, 0.0],
+            angles: [0.0, 90.0, 0.0],
+            skin: 1,
+            scale: 2.0,
+            kind: PropKind::Physics,
+            static_index: None,
+            lighting_origin: None,
+        });
+        assert_eq!(prop.model, "source://models/props_c17/oildrum001.mdl");
+        assert_eq!(prop.translation, coords::position([64.0, 0.0, 0.0]));
+        // Yaw 90° turns the model's forward (+X) to Source +Y, Bevy -Z.
+        assert!((prop.rotation * Vec3::X - Vec3::NEG_Z).length() < 1e-6);
+        assert_eq!(
+            (prop.skin, prop.scale, prop.kind),
+            (1, 2.0, PropKind::Physics)
+        );
     }
 
     #[test]

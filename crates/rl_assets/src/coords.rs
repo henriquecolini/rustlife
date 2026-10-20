@@ -6,7 +6,7 @@
 //! metres. Every position crossing from the game world into rendering passes
 //! through here, so the convention lives in exactly one tested place.
 
-use bevy_math::Vec3;
+use bevy_math::{Quat, Vec3};
 
 /// Metres per Source unit. Source treats one unit as one inch, so a 72-unit
 /// player is about 1.83 m tall in Bevy — a sensible human scale.
@@ -42,10 +42,65 @@ pub fn yaw(source_degrees: f32) -> f32 {
     source_degrees.to_radians() - std::f32::consts::FRAC_PI_2
 }
 
+/// Converts Source Euler angles `[pitch, yaw, roll]` in degrees (an entity's
+/// or static prop's `angles`) into a Bevy rotation.
+///
+/// Source composes them as `Rz(yaw) · Ry(pitch) · Rx(roll)` about its own axes
+/// (`AngleMatrix`), so positive pitch tips the nose down. Because the frame
+/// change in [`direction`] is itself a rotation, the same rotation in Bevy
+/// space turns about the remapped axes: Source Z is Bevy +Y, Source Y is
+/// Bevy −Z and Source X stays +X.
+#[must_use]
+pub fn rotation(angles_degrees: [f32; 3]) -> Quat {
+    let [pitch, yaw, roll] = angles_degrees.map(f32::to_radians);
+    Quat::from_axis_angle(Vec3::Y, yaw)
+        * Quat::from_axis_angle(Vec3::NEG_Z, pitch)
+        * Quat::from_axis_angle(Vec3::X, roll)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_math::Quat;
+    use proptest::prelude::*;
+
+    /// Source's `AngleMatrix`: the model's forward, left and up axes in world
+    /// space for the given angles (degrees), straight from the SDK formulas.
+    fn angle_matrix(pitch: f32, yaw: f32, roll: f32) -> [[f32; 3]; 3] {
+        let (sp, cp) = pitch.to_radians().sin_cos();
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let (sr, cr) = roll.to_radians().sin_cos();
+        [
+            [cp * cy, cp * sy, -sp],
+            [sp * sr * cy - cr * sy, sp * sr * sy + cr * cy, sr * cp],
+            [sp * cr * cy + sr * sy, sp * cr * sy - sr * cy, cr * cp],
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn rotation_matches_source_angle_matrix(
+            pitch in -180.0f32..180.0,
+            yaw in -360.0f32..360.0,
+            roll in -180.0f32..180.0,
+        ) {
+            let quat = rotation([pitch, yaw, roll]);
+            let [forward, left, up] = angle_matrix(pitch, yaw, roll);
+            for (local, world) in [
+                ([1.0, 0.0, 0.0], forward),
+                ([0.0, 1.0, 0.0], left),
+                ([0.0, 0.0, 1.0], up),
+            ] {
+                let rotated = quat * direction(local);
+                prop_assert!((rotated - direction(world)).length() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn positive_pitch_looks_down() {
+        let forward = rotation([30.0, 0.0, 0.0]) * Vec3::X;
+        assert!(forward.y < 0.0, "nose down: {forward}");
+    }
 
     #[test]
     fn yaw_points_the_camera_along_the_source_facing() {

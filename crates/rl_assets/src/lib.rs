@@ -9,9 +9,8 @@
 //! the higher layers never touch the filesystem or care where a file physically
 //! lives (base game, Workshop item, map pakfile, ...).
 //!
-//! Loaders that turn those bytes into Bevy assets (VTF → `Image`,
-//! VMT → material, ...) build on [`source::VfsAssetReader`] and are added in
-//! later milestones.
+//! Loaders turn those bytes into Bevy assets: VTF → `Image`, VMT →
+//! [`SourceMaterial`], BSP → [`MapAsset`] and MDL → [`ModelAsset`].
 
 #![forbid(unsafe_code)]
 
@@ -19,18 +18,24 @@ use bevy_app::{App, Plugin};
 use bevy_asset::AssetApp;
 
 pub mod coords;
+pub mod irradiance;
 pub mod map;
 pub mod material;
+pub mod model;
 pub mod source;
 pub mod texture;
 
-pub use map::{BspLoader, MapAsset, MapLoadError, MapMesh, Spawn};
+pub use map::{
+    BspLoader, IrradianceVolumeData, MapAsset, MapLoadError, MapMesh, PlacedProp, Spawn,
+};
 pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
+pub use model::{MdlLoader, ModelAsset, ModelLoadError, ModelPart};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
+pub use source_formats::props::PropKind;
 pub use texture::{VtfLoadError, VtfLoader};
 
-/// Registers rustlife's asset loaders (VTF textures, BSP maps, and more in
-/// later milestones) and the asset types they produce.
+/// Registers rustlife's asset loaders (VTF textures, VMT materials, BSP maps
+/// and MDL models) and the asset types they produce.
 ///
 /// Unlike [`SourceAssetPlugin`], which must be added *before* Bevy's
 /// `AssetPlugin`, this plugin registers loaders and must be added *after* it
@@ -42,8 +47,10 @@ impl Plugin for SourceLoadersPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<MapAsset>();
         app.init_asset::<SourceMaterial>();
+        app.init_asset::<ModelAsset>();
         app.register_asset_loader(VtfLoader);
         app.register_asset_loader(VmtLoader);
         app.register_asset_loader(BspLoader);
+        app.register_asset_loader(MdlLoader);
     }
 }

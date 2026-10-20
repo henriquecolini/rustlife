@@ -5081,6 +5081,7 @@ dependencies = [
  "bevy_reflect",
  "futures-lite",
  "half",
+ "proptest",
  "source_formats",
  "source_fs",
  "tempfile",
