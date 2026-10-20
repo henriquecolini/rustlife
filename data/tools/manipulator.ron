@@ -1,0 +1,48 @@
+// The Manipulator: rustlife's grab-and-launch physics tool, read by
+// `rl_sim::tools::manipulator`.
+//
+// Lengths are Source units (1 unit = 1 inch), masses kilograms, times
+// seconds. See docs/physics.md.
+Manipulator(
+    grab: (
+        // Props within this distance of the eyes can be grabbed...
+        range: 160.0,
+        // ...if they weigh at most this, kg.
+        max_mass: 250.0,
+        // Props farther away, up to this distance, are pulled in while
+        // secondary fire is held...
+        pull_range: 640.0,
+        // ...at this speed, units/s.
+        pull_speed: 500.0,
+    ),
+    hold: (
+        // Gap between the eyes and the near side of the held prop.
+        distance: 20.0,
+        // The prop closes the gap to its hold point over about this long...
+        follow_time: 0.05,
+        // ...moving at most this fast (units/s) and turning at most this
+        // fast (degrees/s).
+        max_speed: 1500.0,
+        max_angular_speed: 1080.0,
+        // The grip breaks if something holds the prop this far from the
+        // hold point for this long.
+        break_distance: 64.0,
+        break_time: 0.25,
+    ),
+    // Primary fire on a held prop throws it along the view.
+    launch: (
+        range: 0.0,
+        // Speed of a weightless prop, units/s, scaled by mass: a 30 kg
+        // barrel leaves at about 1000 units/s.
+        speed: 1400.0,
+        mass_curve: [(0.0, 1.0), (10.0, 0.9), (30.0, 0.72), (100.0, 0.45), (250.0, 0.25)],
+    ),
+    // Primary fire on a prop that is not held knocks it away.
+    punt: (
+        range: 256.0,
+        speed: 1000.0,
+        mass_curve: [(0.0, 1.0), (30.0, 0.7), (100.0, 0.35), (500.0, 0.05)],
+    ),
+    primary_cooldown: 0.5,
+    secondary_cooldown: 0.4,
+)

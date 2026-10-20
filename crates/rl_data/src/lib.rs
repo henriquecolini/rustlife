@@ -11,12 +11,14 @@
 //! it contains replaces the built-in one, and missing files fall back to the
 //! built-in copies.
 //!
-//! As of M3 the data set is:
+//! As of M4 the data set is:
 //!
 //! | File | Type | Contents |
 //! |------|------|----------|
 //! | `movement.ron` | [`MovementConfig`] | Player movement physics. |
 //! | `simulation.ron` | [`SimulationConfig`] | Tick rate. |
+//! | `physics.ron` | [`PhysicsConfig`] | Prop physics, materials, pushing, impact damage. |
+//! | `tools/manipulator.ron` | [`ManipulatorConfig`] | The grab-and-launch tool. |
 
 #![forbid(unsafe_code)]
 
@@ -25,14 +27,18 @@ use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 
+pub mod manipulator;
 pub mod movement;
+pub mod physics;
 pub mod simulation;
 mod validate;
 
+pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,
     MovementConfig, WaterConfig,
 };
+pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};
 pub use simulation::SimulationConfig;
 pub use validate::Problem;
 
@@ -40,13 +46,22 @@ pub use validate::Problem;
 pub const MOVEMENT_FILE: &str = "movement.ron";
 /// File name of the simulation timing data.
 pub const SIMULATION_FILE: &str = "simulation.ron";
+/// File name of the prop physics data.
+pub const PHYSICS_FILE: &str = "physics.ron";
+/// Path of the Manipulator's data, relative to the data directory.
+pub const MANIPULATOR_FILE: &str = "tools/manipulator.ron";
 
 /// The built-in copy of each data file, from the repository's `data/`.
-const BUILTIN: [(&str, &str); 2] = [
+const BUILTIN: [(&str, &str); 4] = [
     (MOVEMENT_FILE, include_str!("../../../data/movement.ron")),
     (
         SIMULATION_FILE,
         include_str!("../../../data/simulation.ron"),
+    ),
+    (PHYSICS_FILE, include_str!("../../../data/physics.ron")),
+    (
+        MANIPULATOR_FILE,
+        include_str!("../../../data/tools/manipulator.ron"),
     ),
 ];
 
@@ -88,6 +103,10 @@ pub struct GameData {
     pub movement: MovementConfig,
     /// Simulation timing.
     pub simulation: SimulationConfig,
+    /// Prop physics.
+    pub physics: PhysicsConfig,
+    /// The Manipulator tool.
+    pub manipulator: ManipulatorConfig,
 }
 
 impl GameData {
@@ -111,6 +130,8 @@ impl GameData {
         Ok(Self {
             movement: load_file(dir, MOVEMENT_FILE, MovementConfig::validate)?,
             simulation: load_file(dir, SIMULATION_FILE, SimulationConfig::validate)?,
+            physics: load_file(dir, PHYSICS_FILE, PhysicsConfig::validate)?,
+            manipulator: load_file(dir, MANIPULATOR_FILE, ManipulatorConfig::validate)?,
         })
     }
 }
@@ -175,6 +196,35 @@ mod tests {
         let data = GameData::builtin().expect("the repository's data/ must be valid");
         assert_eq!(data.simulation.tick_rate, 66);
         assert!(data.movement.jump.launch_speed(data.movement.gravity) > 0.0);
+        assert!(!data.physics.materials.surfaces.is_empty());
+        assert!(data.manipulator.grab.range > 0.0);
+    }
+
+    #[test]
+    fn builtin_impact_damage_matches_its_documented_example() {
+        let data = GameData::builtin().expect("builtin");
+        // physics.ron: a 30 kg barrel at 1000 units/s deals about 110.
+        let damage = data.physics.impact_damage.damage(30.0, 1000.0);
+        assert!((100.0..120.0).contains(&damage), "{damage}");
+        // manipulator.ron: that barrel leaves at about 1000 units/s.
+        let speed = data.manipulator.launch.speed_for(30.0);
+        assert!((950.0..1050.0).contains(&speed), "{speed}");
+    }
+
+    #[test]
+    fn data_files_in_subdirectories_override_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let tools = dir.path().join("tools");
+        std::fs::create_dir(&tools).expect("mkdir");
+        let mut manipulator = GameData::builtin().expect("builtin").manipulator;
+        manipulator.grab.max_mass = 1.0;
+        std::fs::write(
+            tools.join("manipulator.ron"),
+            ron::to_string(&manipulator).expect("serialize"),
+        )
+        .expect("write");
+        let data = GameData::load(Some(dir.path())).expect("load");
+        assert_eq!(data.manipulator.grab.max_mass, 1.0);
     }
 
     #[test]

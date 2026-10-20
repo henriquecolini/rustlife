@@ -1,0 +1,62 @@
+// Prop physics tuning: rustlife's own values, read by `rl_sim::physics`.
+//
+// Lengths are Source units (1 unit = 1 inch), masses kilograms, times
+// seconds. Prop masses come from each model's own collision model (.phy);
+// see docs/physics.md.
+Physics(
+    // Downward acceleration of props, units/s². Matches movement.ron's
+    // gravity so props and players fall alike.
+    gravity: 800.0,
+    // Speed limits that keep a badly tangled prop from flying off at
+    // absurd speeds: units/s and degrees/s.
+    max_speed: 4000.0,
+    max_angular_speed: 7200.0,
+    // Constraint solver iterations per tick.
+    solver_iterations: 4,
+    materials: (
+        // For surface properties not listed below. A name falls back to its
+        // prefix before the last underscore first: "metal_barrel" uses
+        // "metal" unless "metal_barrel" is listed itself.
+        default: (friction: 0.8, restitution: 0.2, density: 1000.0),
+        surfaces: {
+            "cardboard": (friction: 0.8, restitution: 0.2, density: 300.0),
+            "ceramic": (friction: 0.6, restitution: 0.25, density: 2400.0),
+            "computer": (friction: 0.6, restitution: 0.2, density: 1200.0),
+            "concrete": (friction: 0.9, restitution: 0.1, density: 2400.0),
+            "flesh": (friction: 0.9, restitution: 0.05, density: 1000.0),
+            "glass": (friction: 0.5, restitution: 0.25, density: 2700.0),
+            "metal": (friction: 0.7, restitution: 0.2, density: 2700.0),
+            "metal_barrel": (friction: 0.7, restitution: 0.15, density: 1200.0),
+            "metal_box": (friction: 0.7, restitution: 0.15, density: 1200.0),
+            "metalpanel": (friction: 0.7, restitution: 0.2, density: 2700.0),
+            "paper": (friction: 0.8, restitution: 0.1, density: 400.0),
+            "plastic": (friction: 0.7, restitution: 0.3, density: 1100.0),
+            "pottery": (friction: 0.6, restitution: 0.25, density: 2000.0),
+            "rock": (friction: 0.9, restitution: 0.1, density: 2600.0),
+            "rubber": (friction: 1.0, restitution: 0.6, density: 1100.0),
+            "rubbertire": (friction: 1.0, restitution: 0.6, density: 1100.0),
+            "watermelon": (friction: 0.8, restitution: 0.1, density: 950.0),
+            "wood": (friction: 0.8, restitution: 0.2, density: 700.0),
+        },
+    ),
+    push: (
+        // Players push props as a body this heavy, kg, meeting them head-on:
+        // a 5 kg crate is shoved along at walking speed, a 200 kg dumpster
+        // creeps.
+        player_mass: 85.0,
+        // Largest speed change one tick of pushing gives a prop, units/s.
+        max_speed_change: 400.0,
+    ),
+    impact_damage: (
+        // Props must hit at least this fast to hurt, units/s.
+        min_speed: 200.0,
+        // Impact energy (relative to the player, along the contact) that
+        // does no harm, joules...
+        min_energy: 300.0,
+        // ...and the damage per joule beyond it. A 30 kg barrel thrown at
+        // 1000 units/s carries about 9700 J: about 110 damage.
+        damage_per_joule: 0.012,
+        // Most damage one impact can deal.
+        max_damage: 500.0,
+    ),
+)
