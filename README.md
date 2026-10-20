@@ -54,6 +54,28 @@ The folder to point at is the one containing `hl2mp/`, e.g.
 )
 ```
 
+## Running
+
+```sh
+cargo run --release -p rustlife                          # opens the map browser
+cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map
+```
+
+In the map browser, click a map to load it. In a map, the camera flies freely:
+
+| Input | Action |
+|-------|--------|
+| Mouse | Look |
+| W A S D | Move |
+| Space / Left Ctrl | Rise / sink |
+| Left Shift | Move faster |
+| Esc | Free or recapture the mouse |
+| M | Back to the map browser |
+
+Other options: `--spawn <n>` starts at a different spawn point, and
+`--screenshot <file.png>` renders one frame non-interactively, saves it and
+exits (useful for visual checks).
+
 ## Workshop content
 
 Workshop items you are subscribed to for HL2DM (app 320) are mounted
@@ -76,6 +98,11 @@ cargo xtask ci              # fmt, clippy -D warnings, tests, docs, audit, asset
 cargo xtask content-tests   # tests that need a real HL2DM install
 ```
 
+The content tests read their inputs from environment variables and skip
+silently when unset: `RUSTLIFE_TEST_GAME_DIR` (an HL2DM install),
+`RUSTLIFE_TEST_BSP`, `RUSTLIFE_TEST_VTF` (single files) and
+`RUSTLIFE_TEST_SKY` (a directory holding a sky's six `<suffix>.vtf` faces).
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Roadmap
@@ -83,7 +110,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M0 | Workspace, CI, content discovery, VPK/VFS, inspect CLI | done |
-| M1 | World viewer: BSP, textures, lightmaps, displacements, sky | |
+| M1 | World viewer: BSP, textures, lightmaps, displacements, sky, map browser | done |
 | M2 | Static props and models | |
 | M3 | Source-style movement | |
 | M4 | Physics props and the Manipulator | |
