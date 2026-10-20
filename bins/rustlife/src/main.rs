@@ -2,10 +2,12 @@
 
 #![forbid(unsafe_code)]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
+use rl_client::capture::Capture;
 use rl_config::ContentArgs;
 use source_fs::content::mount_game;
 
@@ -21,6 +23,10 @@ struct Cli {
     /// Map to load, without path or extension (e.g. `dm_lockdown`).
     #[arg(long, default_value = "dm_lockdown")]
     map: String,
+
+    /// Render non-interactively, save one screenshot to this PNG path, and exit.
+    #[arg(long, value_name = "PNG")]
+    screenshot: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -28,6 +34,10 @@ fn main() -> Result<()> {
     // Logging is set up by Bevy's `LogPlugin`; `RUST_LOG` still applies.
     let config = cli.content.load_config()?;
     let game = mount_game(&cli.content.resolve(&config.content))?;
-    rl_client::run(Arc::new(game.vfs), cli.map);
+    let capture = cli.screenshot.map(|path| Capture {
+        path,
+        warmup_secs: 3.0,
+    });
+    rl_client::run(Arc::new(game.vfs), cli.map, capture);
     Ok(())
 }

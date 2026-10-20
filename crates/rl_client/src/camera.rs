@@ -9,6 +9,12 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
+/// Whether the fly camera grabs the cursor on startup. Inserted by
+/// [`crate::run`]; disabled for non-interactive screenshot captures so a
+/// capture never steals the mouse.
+#[derive(Resource)]
+pub struct CursorGrab(pub bool);
+
 /// Marker component and look state for the fly camera.
 #[derive(Component)]
 pub struct FlyCam {
@@ -60,8 +66,15 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// Locks and hides the cursor so mouse-look feels like an FPS.
-fn grab_cursor(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>) {
+/// Locks and hides the cursor so mouse-look feels like an FPS, unless cursor
+/// grabbing has been disabled (e.g. during a screenshot capture).
+fn grab_cursor(
+    grab: Option<Res<CursorGrab>>,
+    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    if grab.is_some_and(|g| !g.0) {
+        return;
+    }
     if let Ok(mut options) = cursor.single_mut() {
         set_grab(&mut options, true);
     }

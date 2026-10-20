@@ -13,18 +13,24 @@ use bevy::prelude::*;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
 use source_fs::Vfs;
 
-use crate::camera::FlyCamPlugin;
+use crate::camera::{CursorGrab, FlyCamPlugin};
+use crate::capture::{Capture, CapturePlugin};
 use crate::world::WorldPlugin;
 
 pub mod camera;
+pub mod capture;
 pub mod world;
 
 /// Builds and runs the client, rendering `map_name` from the content mounted in
 /// `vfs`.
 ///
+/// When `capture` is `Some`, the client runs non-interactively: it does not
+/// grab the cursor, saves one screenshot after a warmup, and exits (see
+/// [`capture`]). Otherwise it runs as the normal interactive viewer.
+///
 /// The `source://` asset source is registered before `DefaultPlugins` (as Bevy
 /// requires for custom sources) and the loaders after it.
-pub fn run(vfs: Arc<Vfs>, map_name: String) -> AppExit {
+pub fn run(vfs: Arc<Vfs>, map_name: String, capture: Option<Capture>) -> AppExit {
     let mut app = App::new();
     app.add_plugins(SourceAssetPlugin::new(vfs));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -35,7 +41,11 @@ pub fn run(vfs: Arc<Vfs>, map_name: String) -> AppExit {
         ..default()
     }));
     app.add_plugins(SourceLoadersPlugin);
+    app.insert_resource(CursorGrab(capture.is_none()));
     app.add_plugins(FlyCamPlugin);
     app.add_plugins(WorldPlugin { map_name });
+    if let Some(capture) = capture {
+        app.add_plugins(CapturePlugin(capture));
+    }
     app.run()
 }
