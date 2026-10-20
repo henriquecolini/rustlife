@@ -1,0 +1,27 @@
+[package]
+name = "rl_net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "rustlife's network protocol: messages, snapshots, transports, prediction and interpolation."
+
+[dependencies]
+glam.workspace = true
+postcard.workspace = true
+renet.workspace = true
+renet_netcode.workspace = true
+rl_data.workspace = true
+rl_sim.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
