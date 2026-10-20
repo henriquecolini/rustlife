@@ -26,6 +26,7 @@ use std::sync::Arc;
 use source_formats::ambient::AmbientLighting;
 use source_formats::bsp::{self, BrushEntity, BspError, MapGeometry, MapSurface, SpawnPoint};
 use source_formats::collision::{self, MapCollision};
+use source_formats::entities::MapEntity;
 use source_formats::lightmap::LightmapAtlas;
 use source_formats::props::{PropKind, PropPlacement};
 use source_formats::skybox::{self, Cubemap};
@@ -136,6 +137,9 @@ pub struct MapAsset {
     /// What players collide with, in Source space; `None` if it could not be
     /// read (the map is then only viewable, not playable).
     pub collision: Option<Arc<MapCollision>>,
+    /// Every entity of the map, Source space, for the simulation to
+    /// interpret (pickups, hazards).
+    pub entities: Arc<[MapEntity]>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -154,6 +158,7 @@ impl Default for MapAsset {
             irradiance: None,
             lighting: None,
             collision: None,
+            entities: Arc::new([]),
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -276,6 +281,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         irradiance,
         lighting: geometry.ambient.clone().map(Arc::new),
         collision: None,
+        entities: geometry.entities.clone().into(),
         center,
         radius: radius.max(1.0),
     }

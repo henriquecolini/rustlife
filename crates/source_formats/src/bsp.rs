@@ -21,6 +21,7 @@ use thiserror::Error;
 use vbsp::Bsp;
 
 use crate::ambient::{self, AmbientLighting};
+use crate::entities::{self, MapEntity};
 use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, Placement, decode_luxel};
 use crate::props::{self, PropPlacement};
 
@@ -112,6 +113,8 @@ pub struct MapGeometry {
     /// The baked ambient light models are lit by, or `None` if the map has
     /// none.
     pub ambient: Option<AmbientLighting>,
+    /// Every entity of the map, for the simulation to interpret.
+    pub entities: Vec<MapEntity>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -191,6 +194,7 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         sky_name: sky_name(&bsp),
         props: props::props(&bsp),
         ambient: ambient::load(&bsp, bytes),
+        entities: entities::entities(&bsp),
     })
 }
 
@@ -551,6 +555,13 @@ mod tests {
         eprintln!("sky: {:?}", geometry.sky_name);
         assert!(geometry.sky_name.is_some(), "worldspawn names a sky");
         assert!(!geometry.spawns.is_empty(), "a DM map has spawn points");
+        assert!(
+            geometry
+                .entities
+                .iter()
+                .any(|entity| entity.classname == "worldspawn"),
+            "every map has a worldspawn entity"
+        );
 
         let lightmap = geometry.lightmap.as_ref().expect("map has baked lighting");
         let lit = lightmap
