@@ -4,13 +4,14 @@ rustlife is a Cargo workspace. Lower layers know nothing about higher ones,
 and nothing below `rl_client` depends on rendering.
 
 ```
-bins/rustlife ─────────► rl_client ──┬──► rl_net (M6) ──► rl_sim ──► rl_data
-bins/rustlife-server ──► rl_server ──┘                       │
-                                     rl_client ──► rl_assets │
-                                                       │     │
-                                                       ▼     ▼
-                                                  source_formats ──► source_fs
-bins/rustlife-inspect ──► rl_config ───────────────────────────────► source_fs
+bins/rustlife ─────────► rl_client ──► rl_server ──┬──► rl_net ──► rl_sim ──► rl_data
+bins/rustlife-server ──────────────────► rl_server │                 ▲
+                                                   └──► rl_level ────┘
+                         rl_client ──► rl_assets          │
+                                           │              │
+                                           ▼              ▼
+                                      source_formats ──► source_fs
+bins/rustlife-inspect ──► rl_config ─────────────────────► source_fs
 ```
 
 | Crate | Responsibility |
@@ -21,15 +22,18 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
 | `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (rapier3d), weapons and the Manipulator, damage, pickups, deathmatch rules. Runs headless; no Bevy. |
-| `rl_net` | Protocol, transport, prediction, interpolation, lag compensation. |
-| `rl_client` / `rl_server` | App composition for each side. |
+| `rl_level` | A map's simulation (collision, spawns, entities, prop bodies) from mounted content, without rendering. |
+| `rl_net` | Protocol, snapshots and deltas, events, transports, the client endpoint with prediction and interpolation. No Bevy. |
+| `rl_server` | The authoritative server: joining, command queues, the tick, snapshots. No Bevy. |
+| `rl_client` | The Bevy app: rendering, input, HUD, hosting or joining a game. |
 
-Crates are introduced by the milestone that needs them. As of M5 the workspace
+Crates are introduced by the milestone that needs them. As of M6 the workspace
 has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
-`rl_sim`, `rl_client`, the `rustlife` and `rustlife-inspect` binaries, and
-`xtask`. `rl_sim` depends only on the format layer and the data schema, so the
-simulation runs (and is tested) without Bevy; the client feeds it the map's
-collision model from the asset and renders its results.
+`rl_sim`, `rl_level`, `rl_net`, `rl_server`, `rl_client`, the `rustlife`,
+`rustlife-server` and `rustlife-inspect` binaries, and `xtask`. Everything up
+to `rl_server` runs without Bevy, so the dedicated server is headless and the
+simulation and netcode are tested without an app; the client renders what
+its connection's replica holds.
 
 ## Content pipeline
 
@@ -69,8 +73,9 @@ collision model from the asset and renders its results.
    materials have no specular (reflectance 0) and the camera does no
    tone-mapping.
 
-The client is a two-state app (`AppState::Browser` / `InGame`); everything a
-map creates is torn down on leaving it, so maps can be switched freely.
+The client is a state machine (`AppState::Browser` / `Connecting` /
+`InGame`); everything a map creates is torn down on leaving it, so maps can
+be switched freely.
 
 ## Props, brush entities and model lighting (M2)
 
@@ -125,7 +130,8 @@ map creates is torn down on leaving it, so maps can be switched freely.
    frame (latching presses until the next tick), simulates in Bevy's
    `FixedUpdate` at the data's tick rate, and puts the camera at the eyes,
    interpolated between the last two ticks. `V` switches to the fly camera
-   (noclip) and back.
+   (noclip) and back. (Since M6 the player's commands go through a
+   server and the client predicts them; see Networking below.)
 
 ## Physics and the Manipulator (M4)
 
@@ -146,9 +152,9 @@ map creates is torn down on leaving it, so maps can be switched freely.
 4. **The Manipulator** (`rl_sim::tools::manipulator`) grabs, pulls, carries,
    launches and punts props as `tools/manipulator.ron` says.
 5. **The tick.** `rl_sim::simulation::Simulation` runs movement, pushing and
-   tools for every player, then steps physics. The client runs it each fixed
-   tick. Props with bodies follow their poses, interpolated between ticks
-   and relit as they move.
+   tools for every player, then steps physics. The server runs it each
+   fixed tick (the client did until M6). Props with bodies follow their
+   poses, interpolated between snapshots and relit as they move.
 
 See [docs/physics.md](docs/physics.md).
 
@@ -168,14 +174,39 @@ See [docs/physics.md](docs/physics.md).
    bullets and swings trace through the map, props and players' boxes,
    projectiles fly and burst, blasts reach whoever the walls do not shelter.
    Deaths score frags in the match (`rules`); the dead respawn away from
-   everyone with the loadout. Randomness is seeded by the tick, so it is
-   deterministic.
+   everyone with the loadout. Randomness is seeded (spread by the
+   command's number, spawns by the tick), so it is deterministic.
 4. **The client** sends weapon choices and reload with each command, draws
    pickups, projectiles and other players from the simulation (`actors`),
    effects from the tick's events (`effects`) and the HUD laid out by
    `hud.ron` (`hud`).
 
 See [docs/combat.md](docs/combat.md).
+
+## Networking (M6)
+
+1. **Levels.** `rl_level::load` reads what gameplay needs from a map — its
+   collision, spawns, entities, and each prop's `.mdl` header and `.phy` —
+   and `Level::simulation` adds the props in placement order, so every
+   machine numbers their bodies alike.
+2. **The server** (`rl_server::Server`) runs the simulation at the fixed
+   tick. It admits players (Hello, Welcome with the map's checksum and the
+   server's gameplay data, Ready), runs their queued commands within a
+   per-tick budget, and sends each player a snapshot of the world as they
+   see it, as a delta from a state they acknowledged, with the tick's
+   events. `rustlife-server` serves a map over UDP.
+3. **The client endpoint** (`rl_net::NetClient`) keeps a replica
+   simulation that snapshots overwrite. It predicts its own player with
+   the shared movement and weapon code, replays unacknowledged commands
+   after each correction, and interpolates everything else between
+   snapshots a little in the past. Commands carry the tick being drawn, so
+   the server rewinds players for hitscan (lag compensation).
+4. **The Bevy client** (`rl_client::net`) hosts each map in-process (also
+   on UDP with `--listen`) or joins one with `--connect`. It runs the
+   connection before the fixed ticks and issues commands in them. Views read
+   the replica (`Game`) and the interpolated world (`Drawn`).
+
+See [docs/netcode.md](docs/netcode.md).
 
 Format notes live in [`docs/formats/`](docs/formats/).
 

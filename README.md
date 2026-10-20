@@ -86,10 +86,24 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Esc | Free or recapture the mouse |
 | M | Back to the map browser |
 
+Every game runs on a server. Playing a map from the browser or with
+`--map` hosts it in-process; to play with others:
+
+```sh
+cargo run --release -p rustlife -- --map dm_lockdown --listen --name Gordon   # host, open on UDP 27015
+cargo run --release -p rustlife -- --connect 192.168.1.20:27015 --name Alyx   # join
+cargo run --release -p rustlife-server -- --map dm_overwatch                  # dedicated server
+```
+
+Each player needs their own copy of the map; the server checks it matches
+and sends its gameplay data, never game files. `--port` picks another UDP
+port, and `--net-sim 100ms,10ms,2%` simulates a bad connection. See
+[docs/netcode.md](docs/netcode.md).
+
 Other options:
 
-- `--spawn <n>` starts at a different spawn point.
-- `--dummies <n>` adds training dummies: players who stand at their spawn
+- `--spawn <n>` starts at a different spawn point (when hosting).
+- `--dummies <n>` adds training dummies to a hosted game: players who stand at their spawn
   points and respawn when killed.
 - `--data-dir <dir>` overrides the built-in gameplay data file by file, e.g.
   with a tweaked `movement.ron`.
@@ -116,6 +130,7 @@ map list labelled with their item id.
 cargo run -p rustlife-inspect -- mounts      # search path order
 cargo run -p rustlife-inspect -- maps        # available maps and their origin
 cargo run -p rustlife-inspect -- ls 'materials/concrete/*.vtf'
+cargo run -p rustlife-server -- --map dm_lockdown --dummies 2   # dedicated server
 ```
 
 ## Development
@@ -144,7 +159,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | M3 | Collision and Source-style movement: walking, air-strafing, bunny-hopping, surfing, crouching, swimming, ladders | done |
 | M4 | Physics props and the Manipulator: `.phy` collision, pushing, impact damage, grab/pull/launch/punt | done |
 | M5 | Data-driven combat: weapons, items, pickups, damage, health and armor, deathmatch rules, HUD | done |
-| M6 | Networking: dedicated/listen servers, prediction, lag compensation | |
+| M6 | Networking: dedicated/listen servers, prediction, interpolation, lag compensation, data sync | done |
 | M7 | Animation, audio, doors, 3D skybox, water | |
 
 ## Legal

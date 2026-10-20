@@ -60,7 +60,7 @@ modes' intervals are its rest after acting.
 
 | Shot | What happens |
 |------|--------------|
-| `Hitscan` | `pellets` rays from the eyes, each turned by up to `spread` degrees (a deterministic draw seeded by tick, player and mode, so prediction will agree). Each stops at the map, a prop or a player's box; a player takes `damage × falloff(distance)`, a prop an impulse of `force` along the ray. |
+| `Hitscan` | `pellets` rays from the eyes, each turned by up to `spread` degrees (a deterministic draw seeded by the command's number, player and mode, so the shooter's prediction sprays exactly as the server does; other players are hit where the shooter saw them, see [netcode.md](netcode.md)). Each stops at the map, a prop or a player's box; a player takes `damage × falloff(distance)`, a prop an impulse of `force` along the ray. |
 | `Melee` | A box of half-width `size` swept `range` units along the view: `damage` to a player, `force` to a prop. Reported as a shot, hit or miss. |
 | `Projectile` | A box of half-width `size` launched from the eyes at `speed` along the view plus `lift` upwards (see below). |
 

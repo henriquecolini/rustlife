@@ -23,6 +23,7 @@ through adding a weapon and an item. How the game then uses them is in
 | `player.ron` | Health, armor, player models |
 | `rules/deathmatch.ron` | Frag and time limits, respawning, the loadout, fall damage |
 | `hud.ron` | HUD layout and colours |
+| `net.ron` | Port, snapshot rate, interpolation delay, command redundancy and backlog, lag-compensation window ([netcode.md](netcode.md)) |
 
 Every file documents its fields in comments, and every type in `rl_data`
 documents them in Rust.
@@ -41,6 +42,10 @@ my-data/
   rules/deathmatch.ron      # a different loadout
   weapons/nailgun.ron       # a new weapon
 ```
+
+On a server, the data is the server's: it sends its whole data set to each
+player who joins, unless their copy hashes the same, and they play by it.
+A modded server needs no modded clients.
 
 ## Validation
 
