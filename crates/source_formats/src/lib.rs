@@ -5,7 +5,7 @@
 //! bytes those mounts hand back into typed, engine-independent values: decoded
 //! textures ([`vtf`]), parsed materials ([`vmt`]), map geometry ([`bsp`]),
 //! models ([`mdl`]), their placements ([`props`]) and the baked light that
-//! models are lit by ([`ambient`]).
+//! models are lit by ([`ambient`], [`vhv`]).
 //!
 //! Nothing here depends on Bevy. Every decoder is a pure function over bytes,
 //! so the format layer can be unit-tested without an `App`, a window or a GPU,
@@ -28,5 +28,6 @@ pub mod lightmap;
 pub mod mdl;
 pub mod props;
 pub mod skybox;
+pub mod vhv;
 pub mod vmt;
 pub mod vtf;

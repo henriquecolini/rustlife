@@ -45,10 +45,13 @@ pub struct PropPlacement {
     pub scale: f32,
     /// Whether this is a static prop or which kind of entity.
     pub kind: PropKind,
-    /// Index of the prop within the `sprp` lump for static props (it names
-    /// the prop's baked vertex lighting, `sp_<index>.vhv`); `None` for
+    /// Index of the prop within the `sprp` lump for static props; `None` for
     /// entities.
     pub static_index: Option<usize>,
+    /// Pakfile path of the prop's baked per-vertex lighting
+    /// (`sp_<index>.vhv`, see [`crate::vhv`]); `None` for entities and for
+    /// static props compiled without it.
+    pub vertex_lighting: Option<String>,
     /// Point the prop should be lit from, when the mapper overrode it; when
     /// `None` the renderer lights the prop from its own centre.
     pub lighting_origin: Option<[f32; 3]>,
@@ -88,6 +91,10 @@ fn static_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 scale: 1.0,
                 kind: PropKind::Static,
                 static_index: Some(index),
+                vertex_lighting: (!prop
+                    .flags
+                    .contains(StaticPropLumpFlags::NO_PER_VERTEX_LIGHTING))
+                .then(|| format!("sp_{index}.vhv")),
                 lighting_origin: prop
                     .flags
                     .contains(StaticPropLumpFlags::USE_LIGHTING_ORIGIN)
@@ -135,6 +142,7 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 scale,
                 kind,
                 static_index: None,
+                vertex_lighting: None,
                 lighting_origin: None,
             })
         })

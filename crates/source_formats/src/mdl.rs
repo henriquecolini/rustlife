@@ -25,6 +25,9 @@ pub struct ModelMesh {
     pub normals: Vec<[f32; 3]>,
     /// Per-vertex texture coordinates.
     pub uvs: Vec<[f32; 2]>,
+    /// Per-vertex index into the model's vertex list (the `.vvd` vertices),
+    /// which baked per-vertex data such as [`crate::vhv`] lighting refers to.
+    pub vertex_ids: Vec<u32>,
 }
 
 /// The renderable contents of a model.
@@ -42,6 +45,13 @@ pub struct ModelGeometry {
     pub bounds: ([f32; 3], [f32; 3]),
     /// The model's `$surfaceprop`, used for physics and impact sounds.
     pub surface_prop: String,
+    /// The model's checksum, shared by its `.vtx`, `.vvd` and any baked
+    /// lighting computed for it.
+    pub checksum: u32,
+    /// Model vertex index of every highest-detail strip-group vertex, in file
+    /// order (body part, model, mesh, strip group). Baked static-prop
+    /// lighting stores one colour per entry, in this order.
+    pub strip_vertex_ids: Vec<u32>,
 }
 
 impl ModelGeometry {
@@ -101,11 +111,11 @@ pub fn load_model(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry, M
 
 fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry, ModelError> {
     let parse = |error: vmdl::ModelError| ModelError::Parse(error.to_string());
-    let model = Model::from_parts(
-        Mdl::read(mdl).map_err(parse)?,
-        Vtx::read(vtx).map_err(parse)?,
-        Vvd::read(vvd).map_err(parse)?,
-    );
+    let mdl = Mdl::read(mdl).map_err(parse)?;
+    let vtx = Vtx::read(vtx).map_err(parse)?;
+    let checksum = u32::from_le_bytes(vtx.header.checksum);
+    let strip_vertex_ids = strip_vertex_ids(&mdl, &vtx);
+    let model = Model::from_parts(mdl, vtx, Vvd::read(vvd).map_err(parse)?);
 
     let meshes: Vec<ModelMesh> = model
         .meshes()
@@ -113,12 +123,18 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
             let mut positions = Vec::new();
             let mut normals = Vec::new();
             let mut uvs = Vec::new();
-            let vertices: Vec<_> = mesh.vertices().collect();
+            let mut vertex_ids = Vec::new();
+            let vertices: Vec<_> = mesh
+                .vertex_strip_indices()
+                .flatten()
+                .zip(mesh.vertices())
+                .collect();
             // Source winds front faces clockwise; Bevy treats counter-clockwise
             // as front. Swapping two corners of every triangle lets the
             // renderer cull back faces correctly.
             for triangle in vertices.as_chunks::<3>().0 {
-                for vertex in [triangle[0], triangle[2], triangle[1]] {
+                for (id, vertex) in [triangle[0], triangle[2], triangle[1]] {
+                    vertex_ids.push(u32::try_from(id).unwrap_or(u32::MAX));
                     let position = model.apply_root_transform(vertex.position);
                     let normal = model.apply_root_transform(vertex.normal);
                     positions.push([position.x, position.y, position.z]);
@@ -131,6 +147,7 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
                 positions,
                 normals,
                 uvs,
+                vertex_ids,
             }
         })
         .filter(|mesh| !mesh.positions.is_empty())
@@ -174,7 +191,34 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
         material_dirs: model.texture_directories().to_vec(),
         bounds: ([min.x, min.y, min.z], [max.x, max.y, max.z]),
         surface_prop: model.surface_prop().to_owned(),
+        checksum,
+        strip_vertex_ids,
     })
+}
+
+/// The model vertex index of each highest-detail strip-group vertex, in the
+/// order `vrad` writes baked lighting: body parts, their models, the models'
+/// meshes, then each mesh's strip groups. A strip-group vertex addresses the
+/// model's vertex list through its model's and mesh's vertex offsets.
+fn strip_vertex_ids(mdl: &Mdl, vtx: &Vtx) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for (mdl_part, vtx_part) in mdl.body_parts.iter().zip(&vtx.body_parts) {
+        for (mdl_model, vtx_model) in mdl_part.models.iter().zip(&vtx_part.models) {
+            let Some(lod) = vtx_model.lods.first() else {
+                continue;
+            };
+            for (mdl_mesh, vtx_mesh) in mdl_model.meshes.iter().zip(&lod.meshes) {
+                let offset = i64::from(mdl_model.vertex_offset) + i64::from(mdl_mesh.vertex_offset);
+                for group in &vtx_mesh.strip_groups {
+                    ids.extend(group.vertices.iter().map(|vertex| {
+                        u32::try_from(offset + i64::from(vertex.original_mesh_vertex_id))
+                            .unwrap_or(u32::MAX)
+                    }));
+                }
+            }
+        }
+    }
+    ids
 }
 
 #[cfg(test)]
@@ -198,6 +242,8 @@ mod tests {
             material_dirs: vec!["models\\props_c17\\".into(), "models/shared/".into()],
             bounds: ([0.0; 3], [0.0; 3]),
             surface_prop: String::new(),
+            checksum: 0,
+            strip_vertex_ids: Vec::new(),
         };
         assert_eq!(
             geometry.material_candidates(0, 0),
@@ -239,6 +285,19 @@ mod tests {
         );
         assert!(triangles > 0);
         assert!(geometry.meshes.iter().all(|m| m.positions.len() % 3 == 0));
+        let vertex_count = geometry
+            .strip_vertex_ids
+            .iter()
+            .max()
+            .map_or(0, |&id| id + 1);
+        assert!(
+            geometry
+                .meshes
+                .iter()
+                .all(|m| m.vertex_ids.len() == m.positions.len()
+                    && m.vertex_ids.iter().all(|&id| id < vertex_count)),
+            "every triangle vertex is a strip-group vertex"
+        );
         assert!(!geometry.material_candidates(0, 0).is_empty());
     }
 }
