@@ -1,0 +1,10 @@
+// A small vial of health.
+Item(
+    name: "Health vial",
+    model: "models/healthvial.mdl",
+    gives: Health(10.0),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

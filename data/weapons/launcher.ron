@@ -1,0 +1,31 @@
+// A rocket launcher. Rockets fly straight and burst on contact; one under
+// your own feet throws you about 640 units/s upwards.
+Weapon(
+    name: "Launcher",
+    slot: 5,
+    position: 0,
+    view_model: Some("models/weapons/v_rpg.mdl"),
+    world_model: "models/weapons/w_rocket_launcher.mdl",
+    clip: None,
+    primary: Some((
+        interval: 1.2,
+        automatic: false,
+        ammo: Reserve(ammo: "rocket", count: 1),
+        shot: Projectile((
+            model: "models/weapons/w_missile.mdl",
+            speed: 1200.0,
+            lift: 0.0,
+            gravity: 0.0,
+            size: 3.0,
+            bounce: None,
+            fuse: None,
+            hit_damage: 0.0,
+            explosion: Some((radius: 200.0, damage: 110.0, knockback: 750.0, force: 80000.0)),
+            lifetime: 8.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.6,
+    pickup: Some((ammo: 3, respawn: 30.0)),
+    sounds: {"fire": "Weapon_RPG.Single"},
+)

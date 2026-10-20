@@ -1,0 +1,20 @@
+// A heavy steel bar for close work.
+Weapon(
+    name: "Pry Bar",
+    slot: 1,
+    position: 1,
+    view_model: Some("models/weapons/v_crowbar.mdl"),
+    world_model: "models/weapons/w_crowbar.mdl",
+    clip: None,
+    primary: Some((
+        interval: 0.45,
+        automatic: true,
+        ammo: Unlimited,
+        // Reaches 72 units, with a 16-unit-wide sweep.
+        shot: Melee((range: 72.0, size: 8.0, damage: 30.0, force: 3000.0)),
+    )),
+    secondary: None,
+    deploy_time: 0.3,
+    pickup: Some((ammo: 0, respawn: 20.0)),
+    sounds: {"swing": "Weapon_Crowbar.Single", "hit": "Weapon_Crowbar.Melee_Hit"},
+)

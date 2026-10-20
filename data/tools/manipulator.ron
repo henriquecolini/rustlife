@@ -2,7 +2,8 @@
 // `rl_sim::tools::manipulator`.
 //
 // Lengths are Source units (1 unit = 1 inch), masses kilograms, times
-// seconds. See docs/physics.md.
+// seconds. How often it acts is in weapons/manipulator.ron, like any
+// weapon's rate of fire. See docs/physics.md.
 Manipulator(
     grab: (
         // Props within this distance of the eyes can be grabbed...
@@ -43,6 +44,4 @@ Manipulator(
         speed: 1000.0,
         mass_curve: [(0.0, 1.0), (30.0, 0.7), (100.0, 0.35), (500.0, 0.05)],
     ),
-    primary_cooldown: 0.5,
-    secondary_cooldown: 0.4,
 )

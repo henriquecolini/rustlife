@@ -1,0 +1,10 @@
+// A wall-mounted health dispenser: a big dose, then a long recharge.
+Item(
+    name: "Health station",
+    model: "models/props_combine/health_charger001.mdl",
+    gives: Health(50.0),
+    // Seconds before it comes back once taken.
+    respawn: 60.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 40.0,
+)

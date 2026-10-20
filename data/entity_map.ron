@@ -1,0 +1,51 @@
+// What the entities a map places become in rustlife, read when a map
+// loads (`rl_sim::pickups`).
+//
+// Maps made for Half-Life 2: Deathmatch stock their arenas with that game's
+// weapon and item entities; rustlife turns each into one of its own weapons
+// (weapons/<id>.ron) or items (items/<id>.ron). Classnames not listed here
+// are ignored.
+EntityMap(
+    classes: {
+        // Weapons.
+        "weapon_crowbar": Weapon("bar"),
+        "weapon_stunstick": Weapon("bar"),
+        "weapon_pistol": Weapon("sidearm"),
+        "weapon_357": Weapon("magnum"),
+        "weapon_smg1": Weapon("smg"),
+        "weapon_ar2": Weapon("rifle"),
+        "weapon_shotgun": Weapon("scattergun"),
+        "weapon_crossbow": Weapon("boltcaster"),
+        "weapon_rpg": Weapon("launcher"),
+        "weapon_frag": Weapon("frag"),
+        // rustlife has no tripmines; their spots hand out frags instead.
+        "weapon_slam": Weapon("frag"),
+        // Everyone spawns with the Manipulator.
+        "weapon_physcannon": Ignore,
+
+        // Health and armor.
+        "item_healthkit": Item("medkit"),
+        "item_healthvial": Item("health_vial"),
+        "item_healthcharger": Item("health_station"),
+        "item_battery": Item("battery"),
+        "item_suitcharger": Item("armor_station"),
+
+        // Ammo.
+        "item_ammo_pistol": Item("pistol_rounds"),
+        "item_ammo_pistol_large": Item("pistol_rounds"),
+        "item_ammo_357": Item("magnum_rounds"),
+        "item_ammo_357_large": Item("magnum_rounds"),
+        "item_ammo_smg1": Item("smg_rounds"),
+        "item_ammo_smg1_large": Item("smg_rounds"),
+        "item_ammo_smg1_grenade": Item("smg_grenades"),
+        "item_ammo_ar2": Item("rifle_cells"),
+        "item_ammo_ar2_large": Item("rifle_cells"),
+        "item_ammo_ar2_altfire": Item("rifle_charges"),
+        "item_box_buckshot": Item("shells"),
+        "item_ammo_crossbow": Item("bolts"),
+        "item_rpg_round": Item("rockets"),
+        // Crates that must be opened, with a type set per crate: not
+        // pickups in rustlife.
+        "item_ammo_crate": Ignore,
+    },
+)

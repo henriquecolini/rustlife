@@ -4,7 +4,9 @@
 //! Secondary fire grabs the prop under the crosshair (or pulls a distant one
 //! closer); the held prop floats in front of the player, following the view;
 //! primary fire launches it, or punts a prop that is not held. The tool
-//! itself is `rl_sim::tools::manipulator`; this file holds its tuning.
+//! itself is `rl_sim::tools::manipulator`; this file holds its tuning. How
+//! often it acts is set like any weapon's rate of fire, in
+//! `weapons/manipulator.ron`.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,10 +24,6 @@ pub struct ManipulatorConfig {
     pub launch: LaunchConfig,
     /// Knocking away a prop that is not held.
     pub punt: LaunchConfig,
-    /// Seconds after primary fire before the tool fires again.
-    pub primary_cooldown: f32,
-    /// Seconds after a grab or drop before secondary fire acts again.
-    pub secondary_cooldown: f32,
 }
 
 /// Picking props up.
@@ -138,8 +136,6 @@ impl ManipulatorConfig {
         launch(check, "launch", &self.launch);
         launch(check, "punt", &self.punt);
         check.positive("punt.range", self.punt.range);
-        check.non_negative("primary_cooldown", self.primary_cooldown);
-        check.non_negative("secondary_cooldown", self.secondary_cooldown);
     }
 }
 

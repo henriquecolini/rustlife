@@ -1,0 +1,18 @@
+// Ammo types: rustlife's own, read by `rl_sim::weapons`.
+//
+// Weapons, items and the spawn loadout refer to these by id. `max` caps the
+// rounds a player carries (rounds loaded in clips are not counted).
+Ammo(
+    types: {
+        "pistol": (name: "Pistol rounds", max: 150),
+        "magnum": (name: "Magnum rounds", max: 18),
+        "smg": (name: "SMG rounds", max: 225),
+        "smg_grenade": (name: "SMG grenades", max: 3),
+        "rifle": (name: "Rifle cells", max: 60),
+        "rifle_charge": (name: "Rifle charges", max: 3),
+        "buckshot": (name: "Shells", max: 30),
+        "bolt": (name: "Bolts", max: 10),
+        "rocket": (name: "Rockets", max: 3),
+        "frag": (name: "Frags", max: 5),
+    },
+)

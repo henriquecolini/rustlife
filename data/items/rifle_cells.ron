@@ -1,0 +1,10 @@
+// A rifle energy cell.
+Item(
+    name: "Rifle cells",
+    model: "models/items/combine_rifle_cartridge01.mdl",
+    gives: Ammo({"rifle": 30}),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

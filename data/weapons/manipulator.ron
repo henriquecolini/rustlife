@@ -1,0 +1,17 @@
+// The Manipulator: grab, carry, throw and punt props. Its grip and throws
+// are tuned in tools/manipulator.ron; this file makes it a weapon.
+Weapon(
+    name: "Manipulator",
+    slot: 1,
+    position: 0,
+    view_model: Some("models/weapons/v_physcannon.mdl"),
+    world_model: "models/weapons/w_physics.mdl",
+    clip: None,
+    // Launch the held prop, or punt one in front; then rest this long.
+    primary: Some((interval: 0.5, automatic: true, ammo: Unlimited, shot: Manipulator)),
+    // Grab (or pull, or drop); then rest this long.
+    secondary: Some((interval: 0.4, automatic: true, ammo: Unlimited, shot: Manipulator)),
+    deploy_time: 0.4,
+    pickup: None,
+    sounds: {"launch": "Weapon_PhysCannon.Launch", "pickup": "Weapon_PhysCannon.Pickup"},
+)

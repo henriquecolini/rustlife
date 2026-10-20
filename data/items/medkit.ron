@@ -1,0 +1,10 @@
+// A first-aid kit.
+Item(
+    name: "Medkit",
+    model: "models/items/healthkit.mdl",
+    gives: Health(25.0),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

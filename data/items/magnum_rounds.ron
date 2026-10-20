@@ -1,0 +1,10 @@
+// A few magnum rounds.
+Item(
+    name: "Magnum rounds",
+    model: "models/items/357ammo.mdl",
+    gives: Ammo({"magnum": 6}),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

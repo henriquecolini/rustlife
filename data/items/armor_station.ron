@@ -1,0 +1,10 @@
+// A wall-mounted armor dispenser: a big charge, then a long recharge.
+Item(
+    name: "Armor station",
+    model: "models/props_combine/suit_charger001.mdl",
+    gives: Armor(50.0),
+    // Seconds before it comes back once taken.
+    respawn: 60.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 40.0,
+)

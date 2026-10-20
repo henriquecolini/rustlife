@@ -1,0 +1,10 @@
+// A charge orb for the rifle's secondary fire.
+Item(
+    name: "Rifle charge",
+    model: "models/items/combine_rifle_ammo01.mdl",
+    gives: Ammo({"rifle_charge": 1}),
+    // Seconds before it comes back once taken.
+    respawn: 30.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

@@ -1,0 +1,10 @@
+// A grenade for the SMG's launcher.
+Item(
+    name: "SMG grenade",
+    model: "models/items/ar2_grenade.mdl",
+    gives: Ammo({"smg_grenade": 1}),
+    // Seconds before it comes back once taken.
+    respawn: 30.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

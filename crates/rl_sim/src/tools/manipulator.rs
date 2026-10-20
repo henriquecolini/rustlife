@@ -47,6 +47,17 @@ pub enum ToolEvent {
     DryFire,
 }
 
+/// How long the tool rests after acting: the intervals of the weapon's fire
+/// modes (`weapons/manipulator.ron`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Intervals {
+    /// Seconds after a launch, punt or dry fire before primary fire acts
+    /// again.
+    pub primary: f32,
+    /// Seconds after a grab or drop before secondary fire acts again.
+    pub secondary: f32,
+}
+
 /// Where a player's tool is aimed from this tick.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Aim {
@@ -103,12 +114,14 @@ impl Manipulator {
     }
 
     /// Runs the tool for one tick of `dt` seconds for `player` (whose box
-    /// is `player_body`), aiming along `aim` with `buttons` held.
+    /// is `player_body`), aiming along `aim` with `buttons` held, resting
+    /// for `intervals` after acting.
     pub fn tick(
         &mut self,
         player_body: BodyId,
         aim: &Aim,
         buttons: Buttons,
+        intervals: Intervals,
         dt: f32,
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
@@ -132,31 +145,27 @@ impl Manipulator {
 
         if self.held.is_some() {
             if buttons.contains(Buttons::ATTACK) && self.primary_cooldown == 0.0 {
-                self.launch(aim, physics, config)
+                self.launch(aim, physics, config, intervals)
             } else if secondary_pressed && self.secondary_cooldown == 0.0 {
                 self.secondary_spent = true;
-                self.release(physics, config).map(ToolEvent::Dropped)
+                self.release(physics, intervals).map(ToolEvent::Dropped)
             } else {
-                self.hold(aim, dt, physics, config)
+                self.hold(aim, dt, physics, config, intervals)
             }
         } else if buttons.contains(Buttons::ATTACK) && self.primary_cooldown == 0.0 {
-            Some(self.punt(aim, world, physics, config))
+            Some(self.punt(aim, world, physics, config, intervals))
         } else if secondary_held && !self.secondary_spent && self.secondary_cooldown == 0.0 {
-            self.reach(player_body, aim, world, physics, config)
+            self.reach(player_body, aim, world, physics, config, intervals)
         } else {
             None
         }
     }
 
     /// Lets go of the held prop, restoring its gravity.
-    fn release(
-        &mut self,
-        physics: &mut PhysicsWorld,
-        config: &ManipulatorConfig,
-    ) -> Option<BodyId> {
+    fn release(&mut self, physics: &mut PhysicsWorld, intervals: Intervals) -> Option<BodyId> {
         let held = self.held.take()?;
         physics.set_held(held.body, None);
-        self.secondary_cooldown = config.secondary_cooldown;
+        self.secondary_cooldown = intervals.secondary;
         Some(held.body)
     }
 
@@ -166,12 +175,13 @@ impl Manipulator {
         aim: &Aim,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
+        intervals: Intervals,
     ) -> Option<ToolEvent> {
-        let body = self.release(physics, config)?;
+        let body = self.release(physics, intervals)?;
         let mass = physics.mass(body).unwrap_or(1.0);
         let (_, spin) = physics.velocity(body).unwrap_or_default();
         physics.set_velocity(body, aim.forward() * config.launch.speed_for(mass), spin);
-        self.primary_cooldown = config.primary_cooldown;
+        self.primary_cooldown = intervals.primary;
         Some(ToolEvent::Launched(body))
     }
 
@@ -182,8 +192,9 @@ impl Manipulator {
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
+        intervals: Intervals,
     ) -> ToolEvent {
-        self.primary_cooldown = config.primary_cooldown;
+        self.primary_cooldown = intervals.primary;
         let forward = aim.forward();
         let Some((body, point)) = aim_at(aim, config.punt.range, world, physics) else {
             return ToolEvent::DryFire;
@@ -205,6 +216,7 @@ impl Manipulator {
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
+        intervals: Intervals,
     ) -> Option<ToolEvent> {
         let grab = &config.grab;
         let range = grab.range.max(grab.pull_range);
@@ -225,7 +237,7 @@ impl Manipulator {
                 relative_rotation: aim.yaw_rotation().inverse() * rotation,
                 blocked_secs: 0.0,
             });
-            self.secondary_cooldown = config.secondary_cooldown;
+            self.secondary_cooldown = intervals.secondary;
             return Some(ToolEvent::Grabbed(body));
         }
         let center = physics.center_of_mass(body)?;
@@ -243,6 +255,7 @@ impl Manipulator {
         dt: f32,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
+        intervals: Intervals,
     ) -> Option<ToolEvent> {
         let tuning = &config.hold;
         let held = self.held.as_mut()?;
@@ -259,7 +272,7 @@ impl Manipulator {
             held.blocked_secs += dt;
             if held.blocked_secs > tuning.break_time {
                 let body = held.body;
-                self.release(physics, config);
+                self.release(physics, intervals);
                 return Some(ToolEvent::GripBroke(body));
             }
         } else {

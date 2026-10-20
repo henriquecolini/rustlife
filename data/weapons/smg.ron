@@ -1,0 +1,47 @@
+// A fast-firing submachine gun with an underslung grenade launcher.
+Weapon(
+    name: "SMG",
+    slot: 3,
+    position: 0,
+    view_model: Some("models/weapons/v_smg1.mdl"),
+    world_model: "models/weapons/w_smg1.mdl",
+    clip: Some((ammo: "smg", size: 45, reload: Whole(time: 1.5))),
+    primary: Some((
+        interval: 0.075,
+        automatic: true,
+        ammo: Clip(1),
+        shot: Hitscan((
+            pellets: 1,
+            damage: 9.0,
+            spread: 3.0,
+            range: 8192.0,
+            falloff: Some((start: 768.0, end: 2048.0, min_scale: 0.5)),
+            force: 800.0,
+        )),
+    )),
+    // A contact grenade: arcs under full gravity and bursts where it lands.
+    secondary: Some((
+        interval: 1.0,
+        automatic: false,
+        ammo: Reserve(ammo: "smg_grenade", count: 1),
+        shot: Projectile((
+            model: "models/items/ar2_grenade.mdl",
+            speed: 1000.0,
+            lift: 0.0,
+            gravity: 1.0,
+            size: 2.0,
+            bounce: None,
+            fuse: None,
+            hit_damage: 0.0,
+            explosion: Some((radius: 220.0, damage: 100.0, knockback: 600.0, force: 60000.0)),
+            lifetime: 10.0,
+        )),
+    )),
+    deploy_time: 0.5,
+    pickup: Some((ammo: 45, respawn: 20.0)),
+    sounds: {
+        "fire": "Weapon_SMG1.Single",
+        "fire2": "Weapon_SMG1.Double",
+        "reload": "Weapon_SMG1.Reload",
+    },
+)

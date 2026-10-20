@@ -1,0 +1,31 @@
+// A thrown fragmentation grenade: bounces, then bursts 2.5 seconds after
+// leaving the hand (or at once if it strikes a player).
+Weapon(
+    name: "Frag",
+    slot: 5,
+    position: 1,
+    view_model: Some("models/weapons/v_grenade.mdl"),
+    world_model: "models/weapons/w_grenade.mdl",
+    clip: None,
+    primary: Some((
+        interval: 1.0,
+        automatic: false,
+        ammo: Reserve(ammo: "frag", count: 1),
+        shot: Projectile((
+            model: "models/weapons/w_grenade.mdl",
+            speed: 900.0,
+            lift: 150.0,
+            gravity: 1.0,
+            size: 3.0,
+            bounce: Some(0.45),
+            fuse: Some(2.5),
+            hit_damage: 0.0,
+            explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
+            lifetime: 3.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.4,
+    pickup: Some((ammo: 1, respawn: 15.0)),
+    sounds: {"throw": "WeaponFrag.Throw"},
+)

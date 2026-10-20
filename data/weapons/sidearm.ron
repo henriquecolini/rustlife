@@ -1,0 +1,26 @@
+// A semi-automatic pistol: quick and accurate as fast as you can click.
+Weapon(
+    name: "Sidearm",
+    slot: 2,
+    position: 0,
+    view_model: Some("models/weapons/v_pistol.mdl"),
+    world_model: "models/weapons/w_pistol.mdl",
+    clip: Some((ammo: "pistol", size: 15, reload: Whole(time: 1.4))),
+    primary: Some((
+        interval: 0.12,
+        automatic: false,
+        ammo: Clip(1),
+        shot: Hitscan((
+            pellets: 1,
+            damage: 12.0,
+            spread: 1.0,
+            range: 8192.0,
+            falloff: Some((start: 1024.0, end: 3072.0, min_scale: 0.5)),
+            force: 1200.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.4,
+    pickup: Some((ammo: 30, respawn: 20.0)),
+    sounds: {"fire": "Weapon_Pistol.Single", "reload": "Weapon_Pistol.Reload"},
+)

@@ -1,0 +1,30 @@
+// A rail crossbow: one fast, slightly dropping bolt that kills outright.
+Weapon(
+    name: "Boltcaster",
+    slot: 4,
+    position: 1,
+    view_model: Some("models/weapons/v_crossbow.mdl"),
+    world_model: "models/weapons/w_crossbow.mdl",
+    clip: Some((ammo: "bolt", size: 1, reload: Whole(time: 1.9))),
+    primary: Some((
+        interval: 0.4,
+        automatic: false,
+        ammo: Clip(1),
+        shot: Projectile((
+            model: "models/crossbow_bolt.mdl",
+            speed: 3500.0,
+            lift: 0.0,
+            gravity: 0.05,
+            size: 1.0,
+            bounce: None,
+            fuse: None,
+            hit_damage: 100.0,
+            explosion: None,
+            lifetime: 5.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.6,
+    pickup: Some((ammo: 6, respawn: 30.0)),
+    sounds: {"fire": "Weapon_Crossbow.Single", "reload": "Weapon_Crossbow.Reload"},
+)

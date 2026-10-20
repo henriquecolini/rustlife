@@ -1,0 +1,10 @@
+// A box of pistol rounds.
+Item(
+    name: "Pistol rounds",
+    model: "models/items/boxsrounds.mdl",
+    gives: Ammo({"pistol": 24}),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

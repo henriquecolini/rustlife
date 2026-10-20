@@ -1,0 +1,26 @@
+// A six-shot revolver: slow, precise, and two body shots take most players.
+Weapon(
+    name: "Hand Cannon",
+    slot: 2,
+    position: 1,
+    view_model: Some("models/weapons/v_357.mdl"),
+    world_model: "models/weapons/w_357.mdl",
+    clip: Some((ammo: "magnum", size: 6, reload: Whole(time: 2.8))),
+    primary: Some((
+        interval: 0.75,
+        automatic: false,
+        ammo: Clip(1),
+        shot: Hitscan((
+            pellets: 1,
+            damage: 70.0,
+            spread: 0.3,
+            range: 8192.0,
+            falloff: None,
+            force: 6000.0,
+        )),
+    )),
+    secondary: None,
+    deploy_time: 0.5,
+    pickup: Some((ammo: 6, respawn: 30.0)),
+    sounds: {"fire": "Weapon_357.Single", "reload": "Weapon_357.Reload"},
+)

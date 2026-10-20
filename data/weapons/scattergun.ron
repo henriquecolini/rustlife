@@ -1,0 +1,39 @@
+// A pump shotgun, loaded a shell at a time. Secondary fire empties both
+// barrels' worth at once.
+Weapon(
+    name: "Scattergun",
+    slot: 4,
+    position: 0,
+    view_model: Some("models/weapons/v_shotgun.mdl"),
+    world_model: "models/weapons/w_shotgun.mdl",
+    clip: Some((ammo: "buckshot", size: 6, reload: PerRound(start: 0.4, each: 0.45))),
+    primary: Some((
+        interval: 0.85,
+        automatic: false,
+        ammo: Clip(1),
+        shot: Hitscan((
+            pellets: 7,
+            damage: 9.0,
+            spread: 5.0,
+            range: 4096.0,
+            falloff: Some((start: 256.0, end: 1024.0, min_scale: 0.35)),
+            force: 500.0,
+        )),
+    )),
+    secondary: Some((
+        interval: 1.3,
+        automatic: false,
+        ammo: Clip(2),
+        shot: Hitscan((
+            pellets: 12,
+            damage: 9.0,
+            spread: 8.0,
+            range: 4096.0,
+            falloff: Some((start: 256.0, end: 1024.0, min_scale: 0.35)),
+            force: 500.0,
+        )),
+    )),
+    deploy_time: 0.5,
+    pickup: Some((ammo: 12, respawn: 20.0)),
+    sounds: {"fire": "Weapon_Shotgun.Single", "fire2": "Weapon_Shotgun.Double", "reload": "Weapon_Shotgun.Reload"},
+)

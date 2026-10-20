@@ -1,0 +1,10 @@
+// An armor cell.
+Item(
+    name: "Battery",
+    model: "models/items/battery.mdl",
+    gives: Armor(15.0),
+    // Seconds before it comes back once taken.
+    respawn: 25.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

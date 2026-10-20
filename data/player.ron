@@ -1,0 +1,25 @@
+// A player's health, armor and looks, read by `rl_sim::combat`.
+Player(
+    health: (
+        // Health on spawning, and the most health pickups give.
+        spawn: 100.0,
+        max: 100.0,
+    ),
+    armor: (
+        spawn: 0.0,
+        max: 100.0,
+        // While it lasts, armor takes this share of every hit...
+        absorb: 0.6,
+        // ...losing this many points per point of damage it takes.
+        cost: 1.0,
+    ),
+    // Each player is drawn with the next model of this list.
+    models: [
+        "models/humans/group03/male_07.mdl",
+        "models/combine_soldier.mdl",
+        "models/humans/group03/female_02.mdl",
+        "models/police.mdl",
+        "models/humans/group03/male_02.mdl",
+        "models/combine_soldier_prisonguard.mdl",
+    ],
+)

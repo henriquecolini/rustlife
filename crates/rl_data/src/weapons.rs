@@ -1,0 +1,535 @@
+//! `weapons/<id>.ron`: what players carry and shoot with.
+//!
+//! A weapon is composed from data rather than coded: a clip (or none), up to
+//! two fire modes, and for each mode the kind of shot it makes — bullets
+//! ([`HitscanConfig`]), a swing ([`MeleeConfig`]), a projectile
+//! ([`ProjectileConfig`]) or the Manipulator's grab and launch
+//! ([`Shot::Manipulator`], tuned in `tools/manipulator.ron`). A new weapon is
+//! a new file; its id is the file name without `.ron`.
+//!
+//! The code that runs weapons is `rl_sim::weapons`; `docs/data-driven.md`
+//! walks through adding one.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::validate::Validator;
+
+/// Highest weapon slot (the number key that selects it).
+pub const MAX_SLOT: u8 = 9;
+
+/// One weapon.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename = "Weapon", deny_unknown_fields)]
+pub struct WeaponConfig {
+    /// Name shown on the HUD and in the kill feed.
+    pub name: String,
+    /// The number key that selects it, `1..=9`.
+    pub slot: u8,
+    /// Order among the weapons of the same slot, lowest first.
+    pub position: u8,
+    /// Model drawn in the player's hands, first person, if any.
+    pub view_model: Option<String>,
+    /// Model drawn for pickups and in other players' hands.
+    pub world_model: String,
+    /// The weapon's magazine, if it has one. Fire modes that use
+    /// [`FireAmmo::Clip`] take rounds from it.
+    pub clip: Option<ClipConfig>,
+    /// What primary fire does.
+    pub primary: Option<FireConfig>,
+    /// What secondary fire does.
+    pub secondary: Option<FireConfig>,
+    /// Seconds after switching to the weapon before it can fire.
+    pub deploy_time: f32,
+    /// How the weapon is picked up from the map, if it can be.
+    pub pickup: Option<WeaponPickupConfig>,
+    /// Sound event names by purpose (`"fire"`, `"reload"`, ...), played by
+    /// the client once audio arrives.
+    pub sounds: BTreeMap<String, String>,
+}
+
+/// A weapon's magazine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClipConfig {
+    /// The ammo type loaded into it (a key of `ammo.ron`).
+    pub ammo: String,
+    /// Rounds it holds.
+    pub size: u32,
+    /// How it is refilled from the carried ammo.
+    pub reload: Reload,
+}
+
+/// How a clip is refilled.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Reload {
+    /// The whole clip at once after `time` seconds.
+    Whole {
+        /// Seconds to reload.
+        time: f32,
+    },
+    /// One round at a time: `start` seconds to begin, then one round every
+    /// `each` seconds. Firing interrupts it with whatever is loaded.
+    PerRound {
+        /// Seconds before the first round goes in.
+        start: f32,
+        /// Seconds per round.
+        each: f32,
+    },
+}
+
+/// One fire mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FireConfig {
+    /// Seconds between shots (or, for the Manipulator, between actions).
+    pub interval: f32,
+    /// Keeps firing while the button is held; otherwise every shot needs a
+    /// fresh press.
+    pub automatic: bool,
+    /// What a shot uses up.
+    pub ammo: FireAmmo,
+    /// What a shot is.
+    pub shot: Shot,
+}
+
+/// What a shot uses up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum FireAmmo {
+    /// Nothing: the mode never runs dry.
+    Unlimited,
+    /// This many rounds from the weapon's clip; the weapon needs a
+    /// [`clip`](WeaponConfig::clip).
+    Clip(u32),
+    /// This many rounds straight from the carried ammo of a type.
+    Reserve {
+        /// The ammo type (a key of `ammo.ron`).
+        ammo: String,
+        /// Rounds per shot.
+        count: u32,
+    },
+}
+
+/// What a shot is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Shot {
+    /// Instant bullets along the view.
+    Hitscan(HitscanConfig),
+    /// A short-range swing.
+    Melee(MeleeConfig),
+    /// A moving projectile that may explode.
+    Projectile(ProjectileConfig),
+    /// The Manipulator: primary fire launches or punts, secondary grabs or
+    /// drops (`tools/manipulator.ron`).
+    Manipulator,
+}
+
+/// Bullets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HitscanConfig {
+    /// Bullets per shot, each with its own spread.
+    pub pellets: u32,
+    /// Damage per bullet, before falloff.
+    pub damage: f32,
+    /// Largest angle between a bullet and the view, degrees.
+    pub spread: f32,
+    /// Farthest a bullet reaches, units.
+    pub range: f32,
+    /// Damage loss over distance, if any.
+    pub falloff: Option<Falloff>,
+    /// Impulse a bullet gives the prop it hits, kg·units/s.
+    pub force: f32,
+}
+
+/// Damage falling off linearly with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Falloff {
+    /// Full damage up to this distance, units...
+    pub start: f32,
+    /// ...falling linearly to `min_scale` of it at this distance and
+    /// beyond.
+    pub end: f32,
+    /// Fraction of the damage left at `end`.
+    pub min_scale: f32,
+}
+
+impl Falloff {
+    /// The damage multiplier at `distance` units.
+    #[must_use]
+    pub fn scale(&self, distance: f32) -> f32 {
+        if distance <= self.start {
+            return 1.0;
+        }
+        if distance >= self.end || self.end <= self.start {
+            return self.min_scale;
+        }
+        let t = (distance - self.start) / (self.end - self.start);
+        1.0 + (self.min_scale - 1.0) * t
+    }
+}
+
+/// A swing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeleeConfig {
+    /// Reach from the eyes, units.
+    pub range: f32,
+    /// Half the width of the box swept along the view, units: a swing
+    /// connects with things slightly off the crosshair.
+    pub size: f32,
+    /// Damage dealt.
+    pub damage: f32,
+    /// Impulse given to a prop hit, kg·units/s.
+    pub force: f32,
+}
+
+/// A projectile: a small box flying from the eyes along the view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectileConfig {
+    /// Model drawn for it.
+    pub model: String,
+    /// Launch speed, units/s.
+    pub speed: f32,
+    /// Extra launch speed upwards, units/s, for lobbed throws.
+    pub lift: f32,
+    /// Fraction of the world's gravity it falls under (0 flies straight).
+    pub gravity: f32,
+    /// Half the width of its collision box, units.
+    pub size: f32,
+    /// Bounces off what it hits, keeping this fraction of its speed;
+    /// `None` stops (and explodes or sticks) at the first hit.
+    pub bounce: Option<f32>,
+    /// Explodes this many seconds after launch, if set; a projectile that
+    /// neither bounces nor has a fuse explodes on impact.
+    pub fuse: Option<f32>,
+    /// Damage to a player hit directly, besides any explosion.
+    pub hit_damage: f32,
+    /// The blast when it goes off, if it explodes.
+    pub explosion: Option<ExplosionConfig>,
+    /// Seconds before it disappears if nothing else ends it.
+    pub lifetime: f32,
+}
+
+/// A blast: damage and push falling off linearly from its centre.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplosionConfig {
+    /// Reach of the blast, units.
+    pub radius: f32,
+    /// Damage at the centre.
+    pub damage: f32,
+    /// Speed given to a player at the centre, units/s, away from it.
+    pub knockback: f32,
+    /// Impulse given to a prop at the centre, kg·units/s.
+    pub force: f32,
+}
+
+impl ExplosionConfig {
+    /// How strongly the blast reaches `distance` units from its centre:
+    /// 1 at the centre, falling linearly to 0 at the radius.
+    #[must_use]
+    pub fn scale(&self, distance: f32) -> f32 {
+        if self.radius <= 0.0 {
+            return 0.0;
+        }
+        (1.0 - distance / self.radius).clamp(0.0, 1.0)
+    }
+}
+
+/// Picking the weapon up from the map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponPickupConfig {
+    /// Carried ammo of the weapon's [main type](WeaponConfig::ammo_type)
+    /// given with it (a new weapon also comes with a full clip).
+    pub ammo: u32,
+    /// Seconds before the pickup comes back.
+    pub respawn: f32,
+}
+
+impl WeaponConfig {
+    /// The weapon's main ammo type: its clip's, else the first type a fire
+    /// mode takes straight from the carried ammo.
+    #[must_use]
+    pub fn ammo_type(&self) -> Option<&str> {
+        if let Some(clip) = &self.clip {
+            return Some(&clip.ammo);
+        }
+        [&self.primary, &self.secondary]
+            .into_iter()
+            .flatten()
+            .find_map(|fire| match &fire.ammo {
+                FireAmmo::Reserve { ammo, .. } => Some(ammo.as_str()),
+                _ => None,
+            })
+    }
+
+    /// Every fire mode the weapon has, primary first.
+    pub fn fire_modes(&self) -> impl Iterator<Item = &FireConfig> {
+        [&self.primary, &self.secondary].into_iter().flatten()
+    }
+
+    /// Every ammo type the weapon refers to.
+    pub fn ammo_types(&self) -> impl Iterator<Item = &str> {
+        let clip = self.clip.as_ref().map(|clip| clip.ammo.as_str());
+        let reserve = self.fire_modes().filter_map(|fire| match &fire.ammo {
+            FireAmmo::Reserve { ammo, .. } => Some(ammo.as_str()),
+            _ => None,
+        });
+        clip.into_iter().chain(reserve)
+    }
+
+    /// Checks every value for sense on its own; references to other files
+    /// are checked by [`crate::GameData`].
+    pub(crate) fn validate(&self, check: &mut Validator) {
+        if self.name.trim().is_empty() {
+            check.fail("name", "must not be empty");
+        }
+        if !(1..=MAX_SLOT).contains(&self.slot) {
+            check.fail(
+                "slot",
+                &format!("must be within 1..={MAX_SLOT}, got {}", self.slot),
+            );
+        }
+        if self.world_model.trim().is_empty() {
+            check.fail("world_model", "must name a model");
+        }
+        check.non_negative("deploy_time", self.deploy_time);
+        if let Some(clip) = &self.clip {
+            if clip.size == 0 {
+                check.fail("clip.size", "must hold at least one round");
+            }
+            match clip.reload {
+                Reload::Whole { time } => check.non_negative("clip.reload.time", time),
+                Reload::PerRound { start, each } => {
+                    check.non_negative("clip.reload.start", start);
+                    check.positive("clip.reload.each", each);
+                }
+            }
+        }
+        if self.primary.is_none() && self.secondary.is_none() {
+            check.fail("primary", "a weapon needs at least one fire mode");
+        }
+        for (field, fire) in [("primary", &self.primary), ("secondary", &self.secondary)] {
+            if let Some(fire) = fire {
+                self.validate_fire(check, field, fire);
+            }
+        }
+        if let Some(pickup) = &self.pickup {
+            check.non_negative("pickup.respawn", pickup.respawn);
+        }
+    }
+
+    fn validate_fire(&self, check: &mut Validator, field: &str, fire: &FireConfig) {
+        check.positive(&format!("{field}.interval"), fire.interval);
+        match &fire.ammo {
+            FireAmmo::Unlimited => {}
+            FireAmmo::Clip(count) => {
+                if self.clip.is_none() {
+                    check.fail(
+                        &format!("{field}.ammo"),
+                        "takes from a clip the weapon lacks",
+                    );
+                }
+                if *count == 0 {
+                    check.fail(&format!("{field}.ammo"), "must use at least one round");
+                }
+                if self.clip.as_ref().is_some_and(|clip| *count > clip.size) {
+                    check.fail(
+                        &format!("{field}.ammo"),
+                        "uses more rounds than the clip holds",
+                    );
+                }
+            }
+            FireAmmo::Reserve { count, .. } => {
+                if *count == 0 {
+                    check.fail(&format!("{field}.ammo"), "must use at least one round");
+                }
+            }
+        }
+        let shot = format!("{field}.shot");
+        match &fire.shot {
+            Shot::Hitscan(hitscan) => validate_hitscan(check, &shot, hitscan),
+            Shot::Melee(melee) => {
+                check.positive(&format!("{shot}.range"), melee.range);
+                check.non_negative(&format!("{shot}.size"), melee.size);
+                check.non_negative(&format!("{shot}.damage"), melee.damage);
+                check.non_negative(&format!("{shot}.force"), melee.force);
+            }
+            Shot::Projectile(projectile) => validate_projectile(check, &shot, projectile),
+            Shot::Manipulator => {}
+        }
+    }
+}
+
+fn validate_hitscan(check: &mut Validator, field: &str, hitscan: &HitscanConfig) {
+    if hitscan.pellets == 0 {
+        check.fail(&format!("{field}.pellets"), "must fire at least one bullet");
+    }
+    check.non_negative(&format!("{field}.damage"), hitscan.damage);
+    check.range(&format!("{field}.spread"), hitscan.spread, 0.0, 90.0);
+    check.positive(&format!("{field}.range"), hitscan.range);
+    check.non_negative(&format!("{field}.force"), hitscan.force);
+    if let Some(falloff) = &hitscan.falloff {
+        check.non_negative(&format!("{field}.falloff.start"), falloff.start);
+        if falloff.end < falloff.start {
+            check.fail(
+                &format!("{field}.falloff.end"),
+                "must not be nearer than start",
+            );
+        }
+        check.range(
+            &format!("{field}.falloff.min_scale"),
+            falloff.min_scale,
+            0.0,
+            1.0,
+        );
+    }
+}
+
+fn validate_projectile(check: &mut Validator, field: &str, projectile: &ProjectileConfig) {
+    if projectile.model.trim().is_empty() {
+        check.fail(&format!("{field}.model"), "must name a model");
+    }
+    check.positive(&format!("{field}.speed"), projectile.speed);
+    check.non_negative(&format!("{field}.lift"), projectile.lift);
+    check.non_negative(&format!("{field}.gravity"), projectile.gravity);
+    check.non_negative(&format!("{field}.size"), projectile.size);
+    if let Some(bounce) = projectile.bounce {
+        check.range(&format!("{field}.bounce"), bounce, 0.0, 1.0);
+    }
+    if let Some(fuse) = projectile.fuse {
+        check.positive(&format!("{field}.fuse"), fuse);
+    }
+    check.non_negative(&format!("{field}.hit_damage"), projectile.hit_damage);
+    check.positive(&format!("{field}.lifetime"), projectile.lifetime);
+    if let Some(explosion) = &projectile.explosion {
+        check.positive(&format!("{field}.explosion.radius"), explosion.radius);
+        check.non_negative(&format!("{field}.explosion.damage"), explosion.damage);
+        check.non_negative(&format!("{field}.explosion.knockback"), explosion.knockback);
+        check.non_negative(&format!("{field}.explosion.force"), explosion.force);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pistol() -> WeaponConfig {
+        WeaponConfig {
+            name: "Test".to_owned(),
+            slot: 2,
+            position: 0,
+            view_model: None,
+            world_model: "models/w.mdl".to_owned(),
+            clip: Some(ClipConfig {
+                ammo: "pistol".to_owned(),
+                size: 12,
+                reload: Reload::Whole { time: 1.0 },
+            }),
+            primary: Some(FireConfig {
+                interval: 0.2,
+                automatic: false,
+                ammo: FireAmmo::Clip(1),
+                shot: Shot::Hitscan(HitscanConfig {
+                    pellets: 1,
+                    damage: 10.0,
+                    spread: 1.0,
+                    range: 4096.0,
+                    falloff: None,
+                    force: 100.0,
+                }),
+            }),
+            secondary: None,
+            deploy_time: 0.5,
+            pickup: None,
+            sounds: BTreeMap::new(),
+        }
+    }
+
+    fn problems(weapon: &WeaponConfig) -> Vec<String> {
+        let mut check = Validator::default();
+        weapon.validate(&mut check);
+        check.finish().into_iter().map(|p| p.field).collect()
+    }
+
+    #[test]
+    fn a_sensible_weapon_passes() {
+        assert!(problems(&pistol()).is_empty());
+        assert_eq!(pistol().ammo_type(), Some("pistol"));
+    }
+
+    #[test]
+    fn clip_fire_needs_a_clip_that_holds_enough() {
+        let mut weapon = pistol();
+        weapon.clip = None;
+        assert_eq!(problems(&weapon), ["primary.ammo"]);
+        let mut weapon = pistol();
+        if let Some(fire) = &mut weapon.primary {
+            fire.ammo = FireAmmo::Clip(13);
+        }
+        assert_eq!(problems(&weapon), ["primary.ammo"]);
+    }
+
+    #[test]
+    fn nonsense_values_are_reported_by_field() {
+        let mut weapon = pistol();
+        weapon.slot = 0;
+        if let Some(Shot::Hitscan(hitscan)) = weapon.primary.as_mut().map(|fire| &mut fire.shot) {
+            hitscan.pellets = 0;
+            hitscan.falloff = Some(Falloff {
+                start: 100.0,
+                end: 50.0,
+                min_scale: 2.0,
+            });
+        }
+        assert_eq!(
+            problems(&weapon),
+            [
+                "slot",
+                "primary.shot.pellets",
+                "primary.shot.falloff.end",
+                "primary.shot.falloff.min_scale"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_weapon_without_fire_modes_is_rejected() {
+        let mut weapon = pistol();
+        weapon.primary = None;
+        assert_eq!(problems(&weapon), ["primary"]);
+    }
+
+    #[test]
+    fn falloff_is_linear_between_its_ends() {
+        let falloff = Falloff {
+            start: 100.0,
+            end: 300.0,
+            min_scale: 0.5,
+        };
+        assert_eq!(falloff.scale(50.0), 1.0);
+        assert_eq!(falloff.scale(200.0), 0.75);
+        assert_eq!(falloff.scale(1000.0), 0.5);
+    }
+
+    #[test]
+    fn blasts_fade_to_nothing_at_their_radius() {
+        let blast = ExplosionConfig {
+            radius: 200.0,
+            damage: 100.0,
+            knockback: 0.0,
+            force: 0.0,
+        };
+        assert_eq!(blast.scale(0.0), 1.0);
+        assert_eq!(blast.scale(50.0), 0.75);
+        assert_eq!(blast.scale(250.0), 0.0);
+    }
+}

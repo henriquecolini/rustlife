@@ -1,0 +1,35 @@
+// Free-for-all deathmatch, read by `rl_sim::rules`.
+//
+// Times are seconds, speeds units/s.
+Rules(
+    // The match ends when someone reaches this many frags (0: no limit)...
+    frag_limit: 25,
+    // ...or after this long (0: no limit).
+    time_limit: 600.0,
+    // Pause between matches, scores on show.
+    intermission: 8.0,
+    respawn: (
+        // The dead may respawn (fire or jump) after this long...
+        delay: 1.5,
+        // ...and are respawned anyway after this long.
+        force: 6.0,
+        // Spawn points are ranked by distance from the nearest other living
+        // player; one of the best few is picked at random.
+        candidates: 3,
+    ),
+    // Everyone spawns with these, the active one in hand and full clips.
+    loadout: (
+        weapons: ["manipulator", "bar", "sidearm", "smg", "frag"],
+        active: "smg",
+        ammo: {"pistol": 45, "smg": 90, "frag": 1},
+    ),
+    // Your own blasts hurt you this much (they still throw you as hard:
+    // rocket jumps cost about 50 health).
+    self_damage: 0.5,
+    // Frags lost for dying by your own hand, a fall or the map.
+    suicide_penalty: 1,
+    // Landing faster than safe_speed hurts, rising linearly to
+    // fatal_damage at fatal_speed. A plain jump lands at about 270 units/s;
+    // a fall of 210 units reaches safe_speed.
+    fall_damage: (safe_speed: 580.0, fatal_speed: 1024.0, fatal_damage: 100.0),
+)

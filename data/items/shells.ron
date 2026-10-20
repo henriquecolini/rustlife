@@ -1,0 +1,10 @@
+// A box of shells.
+Item(
+    name: "Shells",
+    model: "models/items/boxbuckshot.mdl",
+    gives: Ammo({"buckshot": 12}),
+    // Seconds before it comes back once taken.
+    respawn: 20.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+)

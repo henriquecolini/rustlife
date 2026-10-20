@@ -3,15 +3,17 @@
 //! Everything tunable about how the game plays lives in RON files under
 //! `data/` rather than in code. This crate defines the schema of each file
 //! (with `deny_unknown_fields`, so a typo is an error rather than a silently
-//! ignored key), validates the values, and loads them.
+//! ignored key), validates the values, checks that files agree with each
+//! other (a weapon cannot name a missing ammo type), and loads them.
 //!
 //! The repository's `data/` directory is compiled into the crate, so the game
 //! always has a complete, valid set ([`GameData::builtin`]). A data directory
 //! given at run time ([`GameData::load`]) overrides it file by file: any file
 //! it contains replaces the built-in one, and missing files fall back to the
-//! built-in copies.
+//! built-in copies. Files it adds to `weapons/` and `items/` add weapons and
+//! items.
 //!
-//! As of M4 the data set is:
+//! As of M5 the data set is:
 //!
 //! | File | Type | Contents |
 //! |------|------|----------|
@@ -19,28 +21,53 @@
 //! | `simulation.ron` | [`SimulationConfig`] | Tick rate. |
 //! | `physics.ron` | [`PhysicsConfig`] | Prop physics, materials, pushing, impact damage. |
 //! | `tools/manipulator.ron` | [`ManipulatorConfig`] | The grab-and-launch tool. |
+//! | `ammo.ron` | [`AmmoConfig`] | Ammo types and how much of each a player carries. |
+//! | `weapons/<id>.ron` | [`WeaponConfig`] | One weapon each. |
+//! | `items/<id>.ron` | [`ItemConfig`] | One health, armor or ammo pickup each. |
+//! | `entity_map.ron` | [`EntityMapConfig`] | Map entity classes → rustlife pickups. |
+//! | `player.ron` | [`PlayerConfig`] | Health, armor, player models. |
+//! | `rules/deathmatch.ron` | [`RulesConfig`] | Limits, respawning, loadout, fall damage. |
+//! | `hud.ron` | [`HudConfig`] | HUD layout and colours. |
 
 #![forbid(unsafe_code)]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 
+pub mod ammo;
+pub mod entity_map;
+pub mod hud;
+pub mod items;
 pub mod manipulator;
 pub mod movement;
 pub mod physics;
+pub mod player;
+pub mod rules;
 pub mod simulation;
 mod validate;
+pub mod weapons;
 
+pub use ammo::{AmmoConfig, AmmoType};
+pub use entity_map::{EntityMapConfig, MappedEntity};
+pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
+pub use items::{ItemConfig, ItemEffect};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,
     MovementConfig, WaterConfig,
 };
 pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};
+pub use player::{ArmorConfig, HealthConfig, PlayerConfig};
+pub use rules::{FallDamageConfig, LoadoutConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;
 pub use validate::Problem;
+pub use weapons::{
+    ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig, MeleeConfig,
+    ProjectileConfig, Reload, Shot, WeaponConfig, WeaponPickupConfig,
+};
 
 /// File name of the movement data.
 pub const MOVEMENT_FILE: &str = "movement.ron";
@@ -50,19 +77,62 @@ pub const SIMULATION_FILE: &str = "simulation.ron";
 pub const PHYSICS_FILE: &str = "physics.ron";
 /// Path of the Manipulator's data, relative to the data directory.
 pub const MANIPULATOR_FILE: &str = "tools/manipulator.ron";
+/// File name of the ammo types.
+pub const AMMO_FILE: &str = "ammo.ron";
+/// Directory of the weapons, one file each.
+pub const WEAPONS_DIR: &str = "weapons";
+/// Directory of the items, one file each.
+pub const ITEMS_DIR: &str = "items";
+/// File name of the map entity mapping.
+pub const ENTITY_MAP_FILE: &str = "entity_map.ron";
+/// File name of the player data.
+pub const PLAYER_FILE: &str = "player.ron";
+/// File name of the HUD layout.
+pub const HUD_FILE: &str = "hud.ron";
+pub use rules::DEATHMATCH_FILE;
+
+/// Pairs each data file's path (relative to `data/`) with its built-in text.
+macro_rules! builtin_files {
+    ($($name:literal),* $(,)?) => {
+        [$(($name, include_str!(concat!("../../../data/", $name)))),*]
+    };
+}
 
 /// The built-in copy of each data file, from the repository's `data/`.
-const BUILTIN: [(&str, &str); 4] = [
-    (MOVEMENT_FILE, include_str!("../../../data/movement.ron")),
-    (
-        SIMULATION_FILE,
-        include_str!("../../../data/simulation.ron"),
-    ),
-    (PHYSICS_FILE, include_str!("../../../data/physics.ron")),
-    (
-        MANIPULATOR_FILE,
-        include_str!("../../../data/tools/manipulator.ron"),
-    ),
+const BUILTIN: &[(&str, &str)] = &builtin_files![
+    "movement.ron",
+    "simulation.ron",
+    "physics.ron",
+    "tools/manipulator.ron",
+    "ammo.ron",
+    "entity_map.ron",
+    "player.ron",
+    "rules/deathmatch.ron",
+    "hud.ron",
+    "weapons/bar.ron",
+    "weapons/boltcaster.ron",
+    "weapons/frag.ron",
+    "weapons/launcher.ron",
+    "weapons/magnum.ron",
+    "weapons/manipulator.ron",
+    "weapons/rifle.ron",
+    "weapons/scattergun.ron",
+    "weapons/sidearm.ron",
+    "weapons/smg.ron",
+    "items/armor_station.ron",
+    "items/battery.ron",
+    "items/bolts.ron",
+    "items/health_station.ron",
+    "items/health_vial.ron",
+    "items/magnum_rounds.ron",
+    "items/medkit.ron",
+    "items/pistol_rounds.ron",
+    "items/rifle_cells.ron",
+    "items/rifle_charges.ron",
+    "items/rockets.ron",
+    "items/shells.ron",
+    "items/smg_grenades.ron",
+    "items/smg_rounds.ron",
 ];
 
 /// Errors from loading gameplay data. Each names the file it concerns.
@@ -86,7 +156,8 @@ pub enum DataError {
         #[source]
         source: Box<ron::error::SpannedError>,
     },
-    /// The file parsed, but some values make no sense.
+    /// The file parsed, but some values make no sense. For problems between
+    /// files, `file` is `references` and each field names its file.
     #[error("{file}: {}", problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
     Invalid {
         /// Where the file came from (a path, or `builtin:<name>`).
@@ -107,6 +178,20 @@ pub struct GameData {
     pub physics: PhysicsConfig,
     /// The Manipulator tool.
     pub manipulator: ManipulatorConfig,
+    /// Ammo types.
+    pub ammo: AmmoConfig,
+    /// Weapons by id (their file name).
+    pub weapons: BTreeMap<String, WeaponConfig>,
+    /// Items by id (their file name).
+    pub items: BTreeMap<String, ItemConfig>,
+    /// What map entities become.
+    pub entity_map: EntityMapConfig,
+    /// Health, armor and models.
+    pub player: PlayerConfig,
+    /// The rules of the game.
+    pub rules: RulesConfig,
+    /// The HUD.
+    pub hud: HudConfig,
 }
 
 impl GameData {
@@ -121,18 +206,109 @@ impl GameData {
     }
 
     /// Loads the data, taking each file from `dir` when it exists there and
-    /// from the built-in set otherwise.
+    /// from the built-in set otherwise, then checks the files agree.
     ///
     /// # Errors
     ///
-    /// Fails on the first file that cannot be read, parsed or validated.
+    /// Fails on the first file that cannot be read, parsed or validated, or
+    /// with every disagreement between files.
     pub fn load(dir: Option<&Path>) -> Result<Self, DataError> {
-        Ok(Self {
+        let data = Self {
             movement: load_file(dir, MOVEMENT_FILE, MovementConfig::validate)?,
             simulation: load_file(dir, SIMULATION_FILE, SimulationConfig::validate)?,
             physics: load_file(dir, PHYSICS_FILE, PhysicsConfig::validate)?,
             manipulator: load_file(dir, MANIPULATOR_FILE, ManipulatorConfig::validate)?,
-        })
+            ammo: load_file(dir, AMMO_FILE, AmmoConfig::validate)?,
+            weapons: load_dir(dir, WEAPONS_DIR, WeaponConfig::validate)?,
+            items: load_dir(dir, ITEMS_DIR, ItemConfig::validate)?,
+            entity_map: load_file(dir, ENTITY_MAP_FILE, EntityMapConfig::validate)?,
+            player: load_file(dir, PLAYER_FILE, PlayerConfig::validate)?,
+            rules: load_file(dir, DEATHMATCH_FILE, RulesConfig::validate)?,
+            hud: load_file(dir, HUD_FILE, HudConfig::validate)?,
+        };
+        let problems = data.reference_problems();
+        if problems.is_empty() {
+            Ok(data)
+        } else {
+            Err(DataError::Invalid {
+                file: "references".to_owned(),
+                problems,
+            })
+        }
+    }
+
+    /// Every reference from one file to something another file should
+    /// define but does not.
+    fn reference_problems(&self) -> Vec<Problem> {
+        let mut check = validate::Validator::default();
+        let ammo = |check: &mut validate::Validator, field: String, id: &str| {
+            if !self.ammo.contains(id) {
+                check.fail(&field, &format!("no ammo type \"{id}\" in {AMMO_FILE}"));
+            }
+        };
+        let weapon = |check: &mut validate::Validator, field: String, id: &str| {
+            if !self.weapons.contains_key(id) {
+                check.fail(&field, &format!("no weapon \"{id}\" in {WEAPONS_DIR}/"));
+            }
+        };
+        for (id, config) in &self.weapons {
+            for ammo_type in config.ammo_types() {
+                ammo(&mut check, format!("{WEAPONS_DIR}/{id}.ron"), ammo_type);
+            }
+            if config.pickup.as_ref().is_some_and(|pickup| pickup.ammo > 0)
+                && config.ammo_type().is_none()
+            {
+                check.fail(
+                    &format!("{WEAPONS_DIR}/{id}.ron: pickup.ammo"),
+                    "the weapon uses no ammo to give",
+                );
+            }
+        }
+        for (id, item) in &self.items {
+            if let ItemEffect::Ammo(rounds) = &item.gives {
+                for ammo_type in rounds.keys() {
+                    ammo(
+                        &mut check,
+                        format!("{ITEMS_DIR}/{id}.ron: gives"),
+                        ammo_type,
+                    );
+                }
+            }
+        }
+        for (classname, mapped) in &self.entity_map.classes {
+            let field = format!("{ENTITY_MAP_FILE}: classes.{classname}");
+            match mapped {
+                MappedEntity::Weapon(id) => {
+                    weapon(&mut check, field, id);
+                    if self.weapons.get(id).is_some_and(|w| w.pickup.is_none()) {
+                        check.fail(
+                            &format!("{ENTITY_MAP_FILE}: classes.{classname}"),
+                            &format!("weapon \"{id}\" has no pickup"),
+                        );
+                    }
+                }
+                MappedEntity::Item(id) if !self.items.contains_key(id) => {
+                    check.fail(&field, &format!("no item \"{id}\" in {ITEMS_DIR}/"));
+                }
+                MappedEntity::Item(_) | MappedEntity::Ignore => {}
+            }
+        }
+        let loadout = &self.rules.loadout;
+        for id in &loadout.weapons {
+            weapon(
+                &mut check,
+                format!("{DEATHMATCH_FILE}: loadout.weapons"),
+                id,
+            );
+        }
+        for ammo_type in loadout.ammo.keys() {
+            ammo(
+                &mut check,
+                format!("{DEATHMATCH_FILE}: loadout.ammo"),
+                ammo_type,
+            );
+        }
+        check.finish()
     }
 }
 
@@ -153,6 +329,65 @@ fn load_file<T: DeserializeOwned>(
         _ => (format!("builtin:{name}"), builtin_text(name).to_owned()),
     };
     parse(&file, &text, validate)
+}
+
+/// Loads every `.ron` file of directory `subdir`: the built-in ones plus
+/// any the data directory adds, keyed by file name without extension.
+fn load_dir<T: DeserializeOwned>(
+    dir: Option<&Path>,
+    subdir: &str,
+    validate: fn(&T, &mut validate::Validator),
+) -> Result<BTreeMap<String, T>, DataError> {
+    let prefix = format!("{subdir}/");
+    let mut names: BTreeSet<String> = BUILTIN
+        .iter()
+        .filter_map(|(name, _)| name.strip_prefix(&prefix))
+        .map(str::to_owned)
+        .collect();
+    if let Some(path) = dir.map(|dir| dir.join(subdir))
+        && path.is_dir()
+    {
+        let entries = std::fs::read_dir(&path).map_err(|source| DataError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|source| DataError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "ron") {
+                names.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    names
+        .into_iter()
+        .map(|name| {
+            let id = name.trim_end_matches(".ron").to_owned();
+            let file = format!("{prefix}{name}");
+            if !is_valid_id(&id) {
+                return Err(DataError::Invalid {
+                    file,
+                    problems: vec![Problem {
+                        field: "file name".to_owned(),
+                        message: "ids are lower-case letters, digits and underscores".to_owned(),
+                    }],
+                });
+            }
+            Ok((id, load_file(dir, &file, validate)?))
+        })
+        .collect()
+}
+
+/// Whether `id` is a valid weapon or item id: lower-case ASCII letters,
+/// digits and underscores.
+fn is_valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Parses and validates `text`, attributing errors to `file`.
@@ -198,6 +433,33 @@ mod tests {
         assert!(data.movement.jump.launch_speed(data.movement.gravity) > 0.0);
         assert!(!data.physics.materials.surfaces.is_empty());
         assert!(data.manipulator.grab.range > 0.0);
+        assert!(data.weapons.contains_key("manipulator"));
+        assert!(!data.items.is_empty());
+    }
+
+    #[test]
+    fn every_file_in_the_data_directory_is_built_in() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let mut found = Vec::new();
+        let mut pending = vec![root.clone()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read data/") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "ron") {
+                    let relative = path.strip_prefix(&root).expect("under data/");
+                    found.push(relative.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        for name in &found {
+            assert!(
+                BUILTIN.iter().any(|(file, _)| file == name),
+                "data/{name} is missing from BUILTIN"
+            );
+        }
+        assert_eq!(found.len(), BUILTIN.len(), "BUILTIN lists a missing file");
     }
 
     #[test]
@@ -244,6 +506,66 @@ mod tests {
     }
 
     #[test]
+    fn new_weapon_files_add_weapons() {
+        let builtin = GameData::builtin().expect("builtin");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let weapons = dir.path().join(WEAPONS_DIR);
+        std::fs::create_dir(&weapons).expect("mkdir");
+        let mut nailgun = builtin.weapons["smg"].clone();
+        nailgun.name = "Nailgun".to_owned();
+        std::fs::write(
+            weapons.join("nailgun.ron"),
+            ron::to_string(&nailgun).expect("serialize"),
+        )
+        .expect("write");
+        let data = GameData::load(Some(dir.path())).expect("load");
+        assert_eq!(data.weapons.len(), builtin.weapons.len() + 1);
+        assert_eq!(data.weapons["nailgun"].name, "Nailgun");
+    }
+
+    #[test]
+    fn badly_named_weapon_files_are_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let weapons = dir.path().join(WEAPONS_DIR);
+        std::fs::create_dir(&weapons).expect("mkdir");
+        std::fs::write(weapons.join("Nail Gun.ron"), "").expect("write");
+        let error = GameData::load(Some(dir.path())).expect_err("bad id");
+        assert!(matches!(error, DataError::Invalid { .. }), "{error}");
+    }
+
+    #[test]
+    fn dangling_references_are_reported_with_their_files() {
+        let mut data = GameData::builtin().expect("builtin");
+        data.ammo.types.remove("buckshot");
+        data.rules.loadout.weapons.push("bfg".to_owned());
+        data.entity_map.classes.insert(
+            "item_cake".to_owned(),
+            MappedEntity::Item("cake".to_owned()),
+        );
+        let fields: Vec<String> = data
+            .reference_problems()
+            .into_iter()
+            .map(|problem| problem.field)
+            .collect();
+        assert!(
+            fields.contains(&"weapons/scattergun.ron".to_owned()),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&"items/shells.ron: gives".to_owned()),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&"rules/deathmatch.ron: loadout.weapons".to_owned()),
+            "{fields:?}"
+        );
+        assert!(
+            fields.contains(&"entity_map.ron: classes.item_cake".to_owned()),
+            "{fields:?}"
+        );
+    }
+
+    #[test]
     fn unknown_fields_are_rejected() {
         let error = parse::<SimulationConfig>(
             "test",
@@ -279,5 +601,13 @@ mod tests {
         let mut check = validate::Validator::default();
         SimulationConfig { tick_rate: 0 }.validate(&mut check);
         assert_eq!(check.finish().len(), 1);
+    }
+
+    #[test]
+    fn ids_are_lower_case_words() {
+        assert!(is_valid_id("smg_2"));
+        assert!(!is_valid_id("SMG"));
+        assert!(!is_valid_id("nail gun"));
+        assert!(!is_valid_id(""));
     }
 }

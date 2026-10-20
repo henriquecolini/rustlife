@@ -23,7 +23,7 @@ use crate::collision::{CollisionWorld, find_free_position};
 use crate::movement::{MoveEvents, PlayerState, UserCmd, simulate};
 use crate::physics::{BodyId, Impact, PhysicsWorld, PropDesc};
 use crate::scene::Scene;
-use crate::tools::manipulator::{Aim, Manipulator, ToolEvent};
+use crate::tools::manipulator::{Aim, Intervals, Manipulator, ToolEvent};
 
 /// A player of a [`Simulation`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -59,6 +59,7 @@ pub struct Simulation {
     players: Vec<Player>,
     movement: MovementConfig,
     manipulator: ManipulatorConfig,
+    manipulator_intervals: Intervals,
     dt: f32,
 }
 
@@ -75,6 +76,7 @@ impl Simulation {
             players: Vec::new(),
             movement: data.movement.clone(),
             manipulator: data.manipulator.clone(),
+            manipulator_intervals: manipulator_intervals(data),
             dt,
         }
     }
@@ -176,6 +178,7 @@ impl Simulation {
                 player.body,
                 &aim,
                 cmd.buttons,
+                self.manipulator_intervals,
                 self.dt,
                 &self.world,
                 &mut self.physics,
@@ -210,5 +213,16 @@ impl Simulation {
         };
         let hull = crate::collision::Hull::from(&self.movement.hulls.standing);
         find_free_position(&scene, origin, &hull)
+    }
+}
+
+/// The Manipulator's rest after each action: the intervals of the fire
+/// modes of `weapons/manipulator.ron`, or none if it has no such mode.
+fn manipulator_intervals(data: &GameData) -> Intervals {
+    let weapon = data.weapons.get("manipulator");
+    let interval = |fire: Option<&rl_data::FireConfig>| fire.map_or(0.0, |fire| fire.interval);
+    Intervals {
+        primary: interval(weapon.and_then(|weapon| weapon.primary.as_ref())),
+        secondary: interval(weapon.and_then(|weapon| weapon.secondary.as_ref())),
     }
 }
