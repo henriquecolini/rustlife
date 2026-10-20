@@ -20,10 +20,12 @@ use bevy_asset::AssetApp;
 
 pub mod coords;
 pub mod map;
+pub mod material;
 pub mod source;
 pub mod texture;
 
 pub use map::{BspLoader, MapAsset, MapLoadError, MapMesh};
+pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use texture::{VtfLoadError, VtfLoader};
 
@@ -39,7 +41,9 @@ pub struct SourceLoadersPlugin;
 impl Plugin for SourceLoadersPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<MapAsset>();
+        app.init_asset::<SourceMaterial>();
         app.register_asset_loader(VtfLoader);
+        app.register_asset_loader(VmtLoader);
         app.register_asset_loader(BspLoader);
     }
 }

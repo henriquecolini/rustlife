@@ -99,6 +99,20 @@ pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
     Ok(describe(&vmt_parser::from_str(text)?))
 }
 
+/// Returns the `include` path of a `patch` material, or `None` for any other
+/// shader. Lets a VFS-aware caller fetch the base file's bytes before calling
+/// [`parse_resolved`], since this crate does no I/O of its own.
+///
+/// # Errors
+///
+/// Returns [`VmtError::Parse`] on malformed input.
+pub fn patch_include(text: &str) -> Result<Option<String>, VmtError> {
+    match vmt_parser::from_str(text)? {
+        Material::Patch(patch) => Ok(Some(patch.include)),
+        _ => Ok(None),
+    }
+}
+
 /// Parses VMT `text`, resolving a `patch` by loading the text of the material
 /// it includes through `load_base`.
 ///
@@ -208,6 +222,26 @@ mod tests {
         .expect("parse");
         assert_eq!(desc.kind, MaterialKind::Patch);
         assert_eq!(desc.base_texture, None);
+    }
+
+    #[test]
+    fn patch_include_reports_the_base_path() {
+        let patch = r#"
+            "patch"
+            {
+                "include" "materials/brick/brickwall.vmt"
+                "replace" { "$basetexture" "brick/override" }
+            }
+        "#;
+        assert_eq!(
+            patch_include(patch).unwrap().as_deref(),
+            Some("materials/brick/brickwall.vmt")
+        );
+        // A non-patch material has no include.
+        assert_eq!(
+            patch_include(r#""UnlitGeneric" { "$basetexture" "x" }"#).unwrap(),
+            None
+        );
     }
 
     #[test]

@@ -16,6 +16,15 @@ use std::collections::HashMap;
 use thiserror::Error;
 use vbsp::Bsp;
 
+/// BSP lump index of the embedded pakfile (a zip archive of map-specific
+/// content: patched cubemap materials, custom textures and models).
+const LUMP_PAKFILE: usize = 40;
+/// Size of one entry in the BSP lump directory: `fileofs`, `filelen` and
+/// `version` as `i32`, then a 4-byte `fourCC`.
+const LUMP_ENTRY_SIZE: usize = 16;
+/// Offset of the lump directory: after the `"VBSP"` magic and the version.
+const LUMP_DIRECTORY_OFFSET: usize = 8;
+
 /// One mesh's worth of triangles: every three consecutive vertices form a
 /// triangle (a triangle list), all sharing one `material`.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +116,34 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
     Ok(MapGeometry { surfaces })
 }
 
+/// Returns the raw bytes of a BSP's embedded pakfile (lump 40) — a zip archive
+/// — or `None` if the map has no pakfile or the header is too short or invalid.
+///
+/// The caller mounts these bytes as a zip to make the map's own materials and
+/// textures available while that map is loaded. This reads only the lump
+/// directory, so it is cheap and never allocates the whole file.
+///
+/// Compressed lumps (LZMA) are not unpacked here; an LZMA-compressed pakfile
+/// would be returned as-is and fail to mount as a zip, which the caller handles
+/// by simply not mounting it. HL2DM maps store the pakfile uncompressed.
+#[must_use]
+pub fn pakfile_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    if bytes.len() < LUMP_DIRECTORY_OFFSET || &bytes[0..4] != b"VBSP" {
+        return None;
+    }
+    let entry = LUMP_DIRECTORY_OFFSET + LUMP_PAKFILE * LUMP_ENTRY_SIZE;
+    let file_offset = i32::from_le_bytes(bytes.get(entry..entry + 4)?.try_into().ok()?);
+    let file_length = i32::from_le_bytes(bytes.get(entry + 4..entry + 8)?.try_into().ok()?);
+
+    let start = usize::try_from(file_offset).ok()?;
+    let length = usize::try_from(file_length).ok()?;
+    if length == 0 {
+        return None;
+    }
+    let end = start.checked_add(length)?;
+    Some(bytes.get(start..end)?.to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,6 +152,14 @@ mod tests {
     fn non_bsp_bytes_error_without_panicking() {
         assert!(load_geometry(b"not a bsp").is_err());
         assert!(load_geometry(&[]).is_err());
+    }
+
+    #[test]
+    fn pakfile_bytes_rejects_non_bsp_and_short_input() {
+        assert_eq!(pakfile_bytes(b""), None);
+        assert_eq!(pakfile_bytes(b"not a bsp"), None);
+        // Valid magic but truncated before the lump directory.
+        assert_eq!(pakfile_bytes(b"VBSP\x14\0\0\0"), None);
     }
 
     /// Smoke test against a real map. Set `RUSTLIFE_TEST_BSP` to a `.bsp` path
@@ -140,5 +185,10 @@ mod tests {
         );
         assert!(!geometry.surfaces.is_empty(), "a real map has surfaces");
         assert!(triangles > 0, "a real map has triangles");
+
+        // The embedded pakfile should be a mountable zip (starts with "PK").
+        let pak = pakfile_bytes(&bytes).expect("map has a pakfile");
+        assert_eq!(&pak[0..2], b"PK", "pakfile is a zip archive");
+        eprintln!("pakfile: {} bytes", pak.len());
     }
 }

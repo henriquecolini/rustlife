@@ -21,6 +21,11 @@ pub mod camera;
 pub mod capture;
 pub mod world;
 
+/// The mounted game content, shared with systems (e.g. to mount a map's
+/// pakfile on load). Cloning is cheap — it is an `Arc`.
+#[derive(Resource, Clone)]
+pub struct GameVfs(pub Arc<Vfs>);
+
 /// Builds and runs the client, rendering `map_name` from the content mounted in
 /// `vfs`.
 ///
@@ -32,6 +37,7 @@ pub mod world;
 /// requires for custom sources) and the loaders after it.
 pub fn run(vfs: Arc<Vfs>, map_name: String, capture: Option<Capture>) -> AppExit {
     let mut app = App::new();
+    app.insert_resource(GameVfs(vfs.clone()));
     app.add_plugins(SourceAssetPlugin::new(vfs));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {

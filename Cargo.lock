@@ -5085,6 +5085,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "rl_assets",
+ "source_formats",
  "source_fs",
  "tracing",
 ]
