@@ -87,16 +87,17 @@ pub(crate) struct Placeholder(pub(crate) Handle<StandardMaterial>);
 #[derive(Component)]
 pub(crate) struct Surface(pub(crate) String);
 
-/// Which spawn point the camera starts at (wrapped to the map's spawn count).
+/// The spawn point asked to start at, if any (wrapped to the map's spawn
+/// count): where the camera starts, and in a hosted game the player.
 #[derive(Resource)]
-pub(crate) struct StartSpawn(pub(crate) usize);
+pub(crate) struct StartSpawn(pub(crate) Option<usize>);
 
 /// Loads the [`CurrentMap`] on entering [`AppState::InGame`], renders it, and
 /// unloads it again on leaving (`M` returns to the map browser).
 pub struct WorldPlugin {
-    /// Index of the spawn point to start the camera at; wraps around, so any
-    /// value is valid.
-    pub spawn: usize,
+    /// Index of the spawn point to start at, if one was asked for; wraps
+    /// around, so any value is valid.
+    pub spawn: Option<usize>,
 }
 
 impl Plugin for WorldPlugin {
@@ -309,7 +310,8 @@ fn spawn_when_loaded(
         // Prefer a player spawn at eye height (64 units) facing the spawn's
         // direction, so the view starts inside the playable space; fall back
         // to the geometry centre for maps without spawns.
-        let spawn = (!map.spawns.is_empty()).then(|| map.spawns[start.0 % map.spawns.len()]);
+        let spawn =
+            (!map.spawns.is_empty()).then(|| map.spawns[start.0.unwrap_or(0) % map.spawns.len()]);
         if let Some(spawn) = spawn {
             transform.translation =
                 spawn.position + Vec3::Y * (64.0 * rl_assets::coords::METERS_PER_UNIT);

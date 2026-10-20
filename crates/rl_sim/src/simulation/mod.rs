@@ -348,6 +348,12 @@ impl Simulation {
         self.physics.refresh();
     }
 
+    /// Where players spawn.
+    #[must_use]
+    pub fn spawns(&self) -> &[Spawn] {
+        &self.spawns
+    }
+
     /// Sets where players spawn.
     pub fn set_spawns(&mut self, spawns: Vec<Spawn>) {
         self.spawns = spawns;

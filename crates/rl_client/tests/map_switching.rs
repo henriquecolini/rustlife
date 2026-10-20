@@ -74,7 +74,7 @@ fn switching_maps_unloads_the_previous_one() {
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CurrentMap("dm_lockdown".into()));
     app.insert_state(AppState::InGame);
-    app.add_plugins(WorldPlugin { spawn: 0 });
+    app.add_plugins(WorldPlugin { spawn: None });
 
     let first = wait_for_surfaces(&mut app);
     assert!(first > 0, "dm_lockdown spawned surfaces");

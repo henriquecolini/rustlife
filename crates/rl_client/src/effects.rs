@@ -12,7 +12,8 @@ use rl_data::Shot;
 use rl_sim::combat::hitscan::Struck;
 
 use crate::AppState;
-use crate::player::{Sim, Ticked};
+use crate::net::Game;
+use crate::player::Ticked;
 use crate::world::MapScoped;
 
 /// Seconds a tracer stays visible.
@@ -71,19 +72,19 @@ fn collect(
     mut commands: Commands,
     time: Res<Time>,
     mut ticks: MessageReader<Ticked>,
-    sim: Option<Res<Sim>>,
+    game: Game,
     mut lines: ResMut<Lines>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(sim) = sim else {
+    let Some(sim) = game.sim() else {
         ticks.clear();
         return;
     };
     let now = time.elapsed_secs();
     for Ticked(events) in ticks.read() {
         for shot in &events.shots {
-            let bullet = sim.0.arsenal().weapon(shot.weapon).is_some_and(|weapon| {
+            let bullet = sim.arsenal().weapon(shot.weapon).is_some_and(|weapon| {
                 weapon
                     .fire_modes()
                     .any(|fire| matches!(fire.shot, Shot::Hitscan(_)))
@@ -91,7 +92,6 @@ fn collect(
             let end = coords::position(shot.trace.end.to_array());
             if bullet {
                 let yaw = sim
-                    .0
                     .player(shot.player)
                     .map_or(0.0, |player| player.look.1)
                     .to_radians();

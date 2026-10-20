@@ -1,7 +1,8 @@
-//! Local play in a headless app over a real install: the player spawns on
-//! the map, lands on its floor and walks when forward is held, the map's
-//! props become physics bodies, and the map is stocked for a fight. Gated on
-//! `RUSTLIFE_TEST_GAME_DIR` and `#[ignore]`d so content-free CI still passes.
+//! Hosted play in a headless app over a real install: the client hosts the
+//! map in-process and joins it; the player spawns on the map, lands on its
+//! floor and walks when forward is held, the map's props have bodies, and
+//! the map is stocked for a fight. Gated on `RUSTLIFE_TEST_GAME_DIR` and
+//! `#[ignore]`d so content-free CI still passes.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,11 +17,14 @@ use bevy::mesh::Mesh;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
-use rl_client::player::{LocalPlayer, PlayerPlugin, Sim, ViewMode};
+use rl_client::net::{Connection, NetPlugin, NetSettings, Network};
+use rl_client::player::{LocalPlayer, PlayerPlugin, ViewMode};
 use rl_client::props::{PhysicsBody, PropsPlugin};
 use rl_client::world::WorldPlugin;
 use rl_client::{AppState, CurrentMap, GameVfs};
 use rl_data::GameData;
+use rl_net::conditioner::NetConditions;
+use rl_sim::simulation::Simulation;
 use source_fs::content::{ContentOptions, mount_game};
 
 /// Updates the app for `seconds` of real time, so fixed ticks accumulate.
@@ -34,6 +38,15 @@ fn run_for(app: &mut App, seconds: f32) {
 
 fn player(app: &App) -> Option<LocalPlayer> {
     app.world().get_resource::<LocalPlayer>().copied()
+}
+
+/// The client's replica of the game.
+fn sim(app: &App) -> Option<&Simulation> {
+    app.world()
+        .get_resource::<Connection>()?
+        .0
+        .session()
+        .map(rl_net::Session::sim)
 }
 
 /// A headless client in `dm_lockdown` at spawn `spawn`, with `dummies`
@@ -66,10 +79,17 @@ fn client(spawn: usize, dummies: usize) -> Option<App> {
     app.insert_resource(CurrentMap("dm_lockdown".into()));
     app.insert_state(AppState::InGame);
     app.add_plugins((
-        WorldPlugin { spawn },
+        WorldPlugin { spawn: Some(spawn) },
         PlayerPlugin {
             data: GameData::builtin().expect("data"),
-            dummies,
+        },
+        NetPlugin {
+            settings: NetSettings {
+                network: Network::Host { port: None },
+                name: "tester".to_owned(),
+                conditions: NetConditions::NONE,
+                dummies,
+            },
         },
         PropsPlugin,
     ));
@@ -119,15 +139,16 @@ fn the_maps_props_become_physics_bodies() {
         return;
     };
 
-    // Wait for the models to stream in and their bodies to be made.
-    let bodies = |app: &App| {
-        app.world()
-            .get_resource::<Sim>()
-            .map_or(0, |sim| sim.0.physics().props().count())
-    };
+    // Wait for the game to start and the props to find their bodies.
+    let bodies = |app: &App| sim(app).map_or(0, |sim| sim.physics().props().count());
     for _ in 0..3000 {
         app.update();
-        if bodies(&app) > 300 {
+        let moving = app
+            .world_mut()
+            .query::<&PhysicsBody>()
+            .iter(app.world())
+            .count();
+        if bodies(&app) > 300 && moving > 10 {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -143,8 +164,7 @@ fn the_maps_props_become_physics_bodies() {
 
     // Nothing falls out of the world while the props settle.
     run_for(&mut app, 2.0);
-    let sim = app.world().resource::<Sim>();
-    let physics = sim.0.physics();
+    let physics = sim(&app).expect("game").physics();
     let fallen = physics
         .props()
         .filter_map(|body| physics.pose(body))
@@ -161,18 +181,19 @@ fn the_map_is_stocked_and_weapons_answer_their_keys() {
     };
     wait_for_player(&mut app);
     let local = player(&app).expect("player").id;
+    run_for(&mut app, 0.2);
     {
-        let sim = &app.world().resource::<Sim>().0;
+        let sim = sim(&app).expect("game");
         assert_eq!(sim.players().count(), 3, "the player and two dummies");
         assert!(sim.pickups().len() > 50, "{}", sim.pickups().len());
     }
     let weapon = |app: &App| {
-        let sim = &app.world().resource::<Sim>().0;
+        let sim = sim(app).expect("game");
         let active = sim.player(local).and_then(|p| p.inventory.active());
         active.and_then(|weapon| sim.arsenal().weapon_name(weapon).map(str::to_owned))
     };
     let clip = |app: &App| {
-        let sim = &app.world().resource::<Sim>().0;
+        let sim = sim(app).expect("game");
         let player = sim.player(local).expect("player");
         player
             .inventory

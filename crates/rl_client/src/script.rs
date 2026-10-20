@@ -16,9 +16,14 @@
 //!   way off, facing them — and hold primary fire at them for a while;
 //! - **visit**: go and look at the pickup nearest the player.
 //!
+//! Only walking and pressing fire are plain input; the other steps move
+//! the player or hand them a weapon, which only a game this client hosts
+//! allows. Joining a server, those steps are skipped.
+//!
 //! It is a debugging aid only; normal play never inserts one.
 
 use bevy::prelude::*;
+use rl_sim::collision::contents::{MASK_PLAYER_SOLID, MASK_SHOT};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::BodyId;
 use rl_sim::simulation::{PlayerId, Simulation};
@@ -32,6 +37,10 @@ const SHOOT_STAND_OFF: f32 = 320.0;
 const VISIT_STAND_OFF: f32 = 90.0;
 /// Rounds of the scripted weapon's ammo given with it.
 const SCRIPT_AMMO: u32 = 1000;
+/// Directions tried around a target when looking for somewhere to stand.
+const STAND_DIRECTIONS: usize = 16;
+/// A place to stand needs a floor at most this far below the feet, units.
+const FLOOR_REACH: f32 = 64.0;
 
 /// Scripted actions by app time, in seconds.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
@@ -126,7 +135,22 @@ impl<T: Copy> Search<T> {
     }
 }
 
-/// Adjusts `cmd` for app time `now`.
+/// Adjusts `cmd` for app time `now` with the steps that are plain input:
+/// walking and pressing fire.
+pub(crate) fn apply_input(script: &mut InputScript, now: f32, cmd: &mut UserCmd) {
+    if let Some((start, duration)) = script.walk
+        && (start..start + duration).contains(&now)
+    {
+        cmd.forward = 1.0;
+    }
+    if !script.progress.fired && script.fire_at.is_some_and(|at| now >= at) {
+        script.progress.fired = true;
+        cmd.buttons = cmd.buttons | Buttons::ATTACK;
+    }
+}
+
+/// Adjusts `cmd` for app time `now` with every step, acting on the hosted
+/// game's simulation `sim`.
 pub(crate) fn apply(
     script: &mut InputScript,
     now: f32,
@@ -140,18 +164,10 @@ pub(crate) fn apply(
             cmd.select = arm(player, sim, name);
         }
     }
-    if let Some((start, duration)) = script.walk
-        && (start..start + duration).contains(&now)
-    {
-        cmd.forward = 1.0;
-    }
     if script.grab_at.is_some_and(|at| now >= at) {
         grab(script, player, sim, cmd);
     }
-    if !script.progress.fired && script.fire_at.is_some_and(|at| now >= at) {
-        script.progress.fired = true;
-        cmd.buttons = cmd.buttons | Buttons::ATTACK;
-    }
+    apply_input(script, now, cmd);
     if let Some((start, duration)) = script.shoot
         && (start..start + duration).contains(&now)
     {
@@ -180,14 +196,13 @@ fn go_to_nearest_pickup(player: PlayerId, sim: &mut Simulation) -> Option<(f32, 
             a.distance_squared(origin)
                 .total_cmp(&b.distance_squared(origin))
         })?;
-    let away = (origin - at).truncate().normalize_or(Vec2::X);
-    let stand = at.truncate() + away * VISIT_STAND_OFF;
-    if !sim.teleport_player(player, Vec3::new(stand.x, stand.y, at.z + 1.0)) {
+    let look = at + Vec3::Z * 4.0;
+    if !stand_near(player, sim, origin, at, VISIT_STAND_OFF, look) {
         warn!("script: no room to stand by the pickup at {at}");
         return None;
     }
     info!("script: looking at the pickup at {at}");
-    Some(angles_to(sim.eye_position(player)?, at + Vec3::Z * 4.0))
+    Some(angles_to(sim.eye_position(player)?, look))
 }
 
 /// Gives `player` the weapon with id `name` and plenty of its ammo;
@@ -252,6 +267,44 @@ fn shoot(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: 
     }
 }
 
+/// Moves `player` `distance` units from `at` (on its level), facing back
+/// towards it: the first of several directions — starting from the side
+/// the player came from — with room to stand, a floor underfoot and a clear
+/// view of `look`. Returns whether such a place was found.
+fn stand_near(
+    player: PlayerId,
+    sim: &mut Simulation,
+    from: Vec3,
+    at: Vec3,
+    distance: f32,
+    look: Vec3,
+) -> bool {
+    let away = (from - at).truncate().normalize_or(Vec2::X);
+    for step in 0..STAND_DIRECTIONS {
+        let turn = std::f32::consts::TAU * step as f32 / STAND_DIRECTIONS as f32;
+        let direction = Vec2::from_angle(turn).rotate(away);
+        let stand = at.truncate() + direction * distance;
+        if !sim.teleport_player(player, Vec3::new(stand.x, stand.y, at.z + 1.0)) {
+            continue;
+        }
+        let Some(feet) = sim.player(player).map(|player| player.state.origin) else {
+            return false;
+        };
+        let world = sim.world();
+        let floor = world
+            .trace_ray(feet, feet - Vec3::Z * FLOOR_REACH, MASK_PLAYER_SOLID)
+            .hit();
+        let seen = sim
+            .eye_position(player)
+            .is_some_and(|eye| !world.trace_ray(eye, look, MASK_SHOT).hit());
+        if floor && seen {
+            return true;
+        }
+    }
+    sim.teleport_player(player, from);
+    false
+}
+
 /// View angles from `player`'s eyes to `target`'s chest, if both live.
 fn aim_at_player(player: PlayerId, target: PlayerId, sim: &Simulation) -> Option<(f32, f32)> {
     let eye = sim.eye_position(player)?;
@@ -280,9 +333,14 @@ fn go_to_nearest_player(player: PlayerId, sim: &mut Simulation) -> Option<(Playe
             a.1.distance_squared(origin)
                 .total_cmp(&b.1.distance_squared(origin))
         })?;
-    let away = (origin - at).truncate().normalize_or(Vec2::X);
-    let stand = at.truncate() + away * SHOOT_STAND_OFF;
-    if !sim.teleport_player(player, Vec3::new(stand.x, stand.y, at.z + 1.0)) {
+    if !stand_near(
+        player,
+        sim,
+        origin,
+        at,
+        SHOOT_STAND_OFF,
+        at + Vec3::Z * 40.0,
+    ) {
         warn!("script: no room to stand by {target:?}");
         return None;
     }
@@ -304,13 +362,12 @@ fn go_to_nearest_prop(player: PlayerId, sim: &mut Simulation) -> Option<(BodyId,
             a.1.distance_squared(origin)
                 .total_cmp(&b.1.distance_squared(origin))
         })?;
-    let away = (origin - center).truncate().normalize_or(Vec2::X);
-    let stand = center.truncate() + away * GRAB_STAND_OFF;
-    let feet = Vec3::new(stand.x, stand.y, center.z - 16.0);
-    if !sim.teleport_player(player, feet) {
+    let floor = center - Vec3::Z * 16.0;
+    if !stand_near(player, sim, origin, floor, GRAB_STAND_OFF, center) {
         warn!("script: no room to stand by prop {body:?}");
         return None;
     }
+    let feet = sim.player(player)?.state.origin;
     let eye = sim.eye_position(player)?;
     let (pitch, yaw) = angles_to(eye, center);
     info!("script: grabbing prop {body:?} from {feet}");

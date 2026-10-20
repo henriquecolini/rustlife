@@ -1,7 +1,15 @@
 //! The rustlife client binary: mount the player's game content and play a map.
+//!
+//! ```text
+//! rustlife --map dm_lockdown                    # host a game, alone
+//! rustlife --map dm_lockdown --listen           # host it for others too (--port)
+//! rustlife --connect 192.168.1.20:27015         # join a server
+//! rustlife --connect 127.0.0.1:27015 --net-sim 100ms,10ms,2%
+//! ```
 
 #![forbid(unsafe_code)]
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,9 +17,11 @@ use anyhow::Result;
 use clap::Parser;
 use rl_client::ClientOptions;
 use rl_client::capture::Capture;
+use rl_client::net::{NetSettings, Network};
 use rl_client::script::InputScript;
 use rl_config::ContentArgs;
 use rl_data::GameData;
+use rl_net::conditioner::NetConditions;
 use source_fs::content::mount_game;
 
 #[derive(Debug, Parser)]
@@ -23,14 +33,37 @@ struct Cli {
     #[command(flatten)]
     content: ContentArgs,
 
-    /// Map to load directly, without path or extension (e.g. `dm_lockdown`).
+    /// Map to host directly, without path or extension (e.g. `dm_lockdown`).
     /// Omit it to start in the map browser.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "connect")]
     map: Option<String>,
 
-    /// Spawn point to start at (wraps around the map's spawn count).
-    #[arg(long, default_value_t = 0)]
-    spawn: usize,
+    /// Join the server at this address (e.g. `127.0.0.1:27015`) instead of
+    /// hosting.
+    #[arg(long, value_name = "ADDRESS")]
+    connect: Option<SocketAddr>,
+
+    /// Open the hosted game to other players over UDP.
+    #[arg(long, conflicts_with = "connect")]
+    listen: bool,
+
+    /// With `--listen`, the UDP port (default: `net.ron`'s).
+    #[arg(long, requires = "listen")]
+    port: Option<u16>,
+
+    /// The name other players see.
+    #[arg(long, default_value = "player")]
+    name: String,
+
+    /// Simulate a bad network: added round-trip latency, jitter and loss,
+    /// e.g. `100ms,10ms,2%`.
+    #[arg(long, value_name = "LATENCY[,JITTER[,LOSS]]")]
+    net_sim: Option<NetConditions>,
+
+    /// Spawn point to start at (wraps around the map's spawn count); in a
+    /// hosted game, the player is moved there once in.
+    #[arg(long)]
+    spawn: Option<usize>,
 
     /// Directory of gameplay data files overriding the built-in ones, file
     /// by file (e.g. a tweaked `movement.ron`).
@@ -54,8 +87,8 @@ struct Cli {
     #[arg(long, value_name = "SECS", requires = "grab_prop")]
     throw_after: Option<f32>,
 
-    /// Add this many training dummies: players who stand still where they
-    /// spawn and respawn when killed.
+    /// Add this many training dummies to a hosted game: players who stand
+    /// still where they spawn and respawn when killed.
     #[arg(long, default_value_t = 0, value_name = "N")]
     dummies: usize,
 
@@ -86,8 +119,9 @@ const LOAD_SECS: f32 = 3.0;
 const GRAB_SECS: f32 = 1.5;
 /// Seconds a scripted visit to a pickup waits for its model to light.
 const VISIT_SECS: f32 = 0.5;
-/// Seconds after a scripted throw before the shot, with the prop in flight.
-const THROW_SHOT_SECS: f32 = 0.2;
+/// Seconds after a scripted throw before the shot, with the prop in flight
+/// (props are drawn a tenth of a second in the past).
+const THROW_SHOT_SECS: f32 = 0.35;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -124,6 +158,18 @@ fn main() -> Result<()> {
         path,
         warmup_secs: shot_secs,
     });
+    let network = match cli.connect {
+        Some(address) => Network::Join(address),
+        None => Network::Host {
+            port: cli.listen.then(|| cli.port.unwrap_or(data.net.port)),
+        },
+    };
+    let net = NetSettings {
+        network,
+        name: cli.name,
+        conditions: cli.net_sim.unwrap_or(NetConditions::NONE),
+        dummies: cli.dummies,
+    };
     rl_client::run(
         Arc::new(game.vfs),
         ClientOptions {
@@ -132,7 +178,7 @@ fn main() -> Result<()> {
             capture,
             script,
             data,
-            dummies: cli.dummies,
+            net,
         },
     );
     Ok(())

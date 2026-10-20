@@ -9,6 +9,7 @@
 //!
 //! The scoreboard shows while `Tab` is held and between matches.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use bevy::prelude::*;
@@ -19,7 +20,8 @@ use rl_sim::simulation::{Kill, Life, PlayerId, Simulation};
 use rl_sim::weapons::{Arsenal, Inventory, Phase};
 
 use crate::AppState;
-use crate::player::{Gameplay, LocalPlayer, Sim, Ticked};
+use crate::net::{Game, Roster};
+use crate::player::{Gameplay, Ticked};
 
 /// Seconds a pickup message stays on screen.
 const PICKUP_MESSAGE_SECS: f32 = 2.0;
@@ -298,32 +300,36 @@ fn spawn_crosshair(commands: &mut Commands, hud: &HudConfig) {
 fn log_events(
     time: Res<Time>,
     mut ticks: MessageReader<Ticked>,
-    sim: Option<Res<Sim>>,
-    local: Option<Res<LocalPlayer>>,
+    game: Game,
+    roster: Res<Roster>,
     gameplay: Res<Gameplay>,
     mut log: ResMut<HudLog>,
 ) {
-    let (Some(sim), Some(local)) = (sim, local) else {
+    let (Some(sim), Some(local)) = (game.sim(), game.local()) else {
         ticks.clear();
         return;
+    };
+    let names = Names {
+        local,
+        roster: &roster.0,
     };
     let now = time.elapsed_secs();
     for Ticked(events) in ticks.read() {
         for kill in &events.kills {
             log.kills
-                .push((kill_line(kill, local.id, sim.0.arsenal()), now));
+                .push((kill_line(kill, &names, sim.arsenal()), now));
         }
         for &(player, index) in &events.pickups {
-            if player == local.id
-                && let Some(pickup) = sim.0.pickups().get(index)
+            if player == local
+                && let Some(pickup) = sim.pickups().get(index)
             {
                 log.pickup = Some((pickup.name.clone(), now));
             }
         }
         for damage in &events.damage {
-            if damage.victim == local.id {
+            if damage.victim == local {
                 log.hurt = Some((now, damage.health_lost));
-            } else if damage.damage.attacker == Some(local.id) {
+            } else if damage.damage.attacker == Some(local) {
                 log.hit = Some(now);
             }
         }
@@ -336,15 +342,14 @@ fn log_events(
 
 /// Health and armor.
 fn update_vitals(
-    sim: Option<Res<Sim>>,
-    local: Option<Res<LocalPlayer>>,
+    game: Game,
     gameplay: Res<Gameplay>,
     mut texts: Query<(&Readout, &mut Text, &mut TextColor)>,
 ) {
-    let Some(player) = sim
-        .as_ref()
-        .zip(local)
-        .and_then(|(sim, local)| sim.0.player(local.id).cloned())
+    let Some(player) = game
+        .sim()
+        .zip(game.local())
+        .and_then(|(sim, local)| sim.player(local))
     else {
         return;
     };
@@ -369,19 +374,18 @@ fn update_vitals(
 
 /// Ammo and the carried weapons.
 fn update_weapons(
-    sim: Option<Res<Sim>>,
-    local: Option<Res<LocalPlayer>>,
+    game: Game,
     gameplay: Res<Gameplay>,
     mut texts: Query<(&Readout, &mut Text, &mut TextColor, &ChildOf)>,
     mut panels: Query<&mut Visibility>,
 ) {
-    let (Some(sim), Some(local)) = (sim, local) else {
+    let (Some(sim), Some(local)) = (game.sim(), game.local()) else {
         return;
     };
-    let Some(player) = sim.0.player(local.id) else {
+    let Some(player) = sim.player(local) else {
         return;
     };
-    let arsenal = sim.0.arsenal();
+    let arsenal = sim.arsenal();
     let hud = &gameplay.0.hud;
     let (main, secondary) = ammo_lines(&player.inventory, arsenal);
     // Only a weapon with a clip can have an empty one.
@@ -421,22 +425,25 @@ fn update_weapons(
 fn update_status(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    sim: Option<Res<Sim>>,
-    local: Option<Res<LocalPlayer>>,
+    game: Game,
+    roster: Res<Roster>,
     log: Res<HudLog>,
     mut texts: Query<(&Readout, &mut Text, &ChildOf)>,
     mut panels: Query<&mut Visibility>,
 ) {
-    let (Some(sim), Some(local)) = (sim, local) else {
+    let (Some(sim), Some(local)) = (game.sim(), game.local()) else {
         return;
     };
+    let names = Names {
+        local,
+        roster: &roster.0,
+    };
     let now = time.elapsed_secs();
-    let sim = &sim.0;
     let over = !sim.game().playing();
     for (readout, mut text, parent) in &mut texts {
         let line = match readout {
-            Readout::Score => score_line(sim, local.id),
-            Readout::Message => message_line(sim, local.id, &log, now),
+            Readout::Score => score_line(sim, local),
+            Readout::Message => message_line(sim, &names, &log, now),
             Readout::KillFeed => log
                 .kills
                 .iter()
@@ -452,7 +459,7 @@ fn update_status(
                         Visibility::Hidden
                     };
                 }
-                scoreboard(sim, local.id)
+                scoreboard(sim, &names)
             }
             _ => continue,
         };
@@ -494,18 +501,29 @@ fn set_text(text: &mut Text, line: String) {
     }
 }
 
-/// A player's name on the HUD.
-fn name(player: PlayerId, local: PlayerId) -> String {
-    if player == local {
-        "You".to_owned()
-    } else {
-        format!("Player {}", player.index() + 1)
+/// How the HUD names players: the local one "You", others by the name
+/// they joined with, or by number (training dummies have no name).
+struct Names<'a> {
+    local: PlayerId,
+    roster: &'a BTreeMap<PlayerId, String>,
+}
+
+impl Names<'_> {
+    fn of(&self, player: PlayerId) -> String {
+        if player == self.local {
+            "You".to_owned()
+        } else {
+            self.roster
+                .get(&player)
+                .cloned()
+                .unwrap_or_else(|| format!("Player {}", player.index() + 1))
+        }
     }
 }
 
 /// A kill feed line: `killer [weapon] victim`.
-fn kill_line(kill: &Kill, local: PlayerId, arsenal: &Arsenal) -> String {
-    let victim = name(kill.victim, local);
+fn kill_line(kill: &Kill, names: &Names, arsenal: &Arsenal) -> String {
+    let victim = names.of(kill.victim);
     let how = match kill.cause {
         Cause::Weapon(weapon) => arsenal
             .weapon(weapon)
@@ -515,7 +533,7 @@ fn kill_line(kill: &Kill, local: PlayerId, arsenal: &Arsenal) -> String {
         Cause::Hazard => "hazard".to_owned(),
     };
     match kill.killer.filter(|&killer| killer != kill.victim) {
-        Some(killer) => format!("{} [{how}] {victim}", name(killer, local)),
+        Some(killer) => format!("{} [{how}] {victim}", names.of(killer)),
         None => format!("{victim} [{how}]"),
     }
 }
@@ -602,11 +620,12 @@ fn score_line(sim: &Simulation, local: PlayerId) -> String {
 
 /// The message in the middle of the screen: the match's end, the player's
 /// death and respawn, or the last pickup.
-fn message_line(sim: &Simulation, local: PlayerId, log: &HudLog, now: f32) -> String {
+fn message_line(sim: &Simulation, names: &Names, log: &HudLog, now: f32) -> String {
+    let local = names.local;
     if let MatchState::Intermission { winner, left } = sim.game().state() {
         let result = winner.map_or_else(
             || "Match over: a draw".to_owned(),
-            |winner| format!("Match over: {} won", name(winner, local)),
+            |winner| format!("Match over: {} won", names.of(winner)),
         );
         return format!("{result}\nNext match in {}", clock(left));
     }
@@ -618,7 +637,7 @@ fn message_line(sim: &Simulation, local: PlayerId, log: &HudLog, now: f32) -> St
         let dead_for = sim.tick_count().saturating_sub(since) as f32 * sim.dt();
         let by = killer.filter(|&killer| killer != local).map_or_else(
             || "You died".to_owned(),
-            |killer| format!("Killed by {}", name(killer, local)),
+            |killer| format!("Killed by {}", names.of(killer)),
         );
         let hint = if dead_for < respawn.delay {
             format!("Respawn in {:.1}", respawn.delay - dead_for)
@@ -634,7 +653,7 @@ fn message_line(sim: &Simulation, local: PlayerId, log: &HudLog, now: f32) -> St
 }
 
 /// Every player's score, best first.
-fn scoreboard(sim: &Simulation, local: PlayerId) -> String {
+fn scoreboard(sim: &Simulation, names: &Names) -> String {
     let mut rows: Vec<_> = sim
         .players()
         .map(|(id, _)| (id, sim.game().score(id)))
@@ -644,7 +663,7 @@ fn scoreboard(sim: &Simulation, local: PlayerId) -> String {
     for (id, score) in rows {
         lines.push(format!(
             "{:<12}{:>7}{:>8}",
-            name(id, local),
+            names.of(id),
             score.frags,
             score.deaths
         ));
@@ -662,6 +681,15 @@ mod tests {
         Arsenal::new(&GameData::builtin().expect("builtin"))
     }
 
+    const NO_NAMES: &BTreeMap<PlayerId, String> = &BTreeMap::new();
+
+    fn names(local: PlayerId) -> Names<'static> {
+        Names {
+            local,
+            roster: NO_NAMES,
+        }
+    }
+
     #[test]
     fn kill_lines_name_killer_weapon_and_victim() {
         let arsenal = arsenal();
@@ -673,15 +701,19 @@ mod tests {
             cause,
         };
         assert_eq!(
-            kill_line(&kill(Some(you), Cause::Weapon(smg)), you, &arsenal),
+            kill_line(&kill(Some(you), Cause::Weapon(smg)), &names(you), &arsenal),
             "You [SMG] Player 3"
         );
         assert_eq!(
-            kill_line(&kill(None, Cause::Fall), you, &arsenal),
+            kill_line(&kill(None, Cause::Fall), &names(you), &arsenal),
             "Player 3 [fall]"
         );
         assert_eq!(
-            kill_line(&kill(Some(other), Cause::Weapon(smg)), you, &arsenal),
+            kill_line(
+                &kill(Some(other), Cause::Weapon(smg)),
+                &names(you),
+                &arsenal
+            ),
             "Player 3 [SMG]",
             "a suicide names only the victim"
         );
@@ -714,6 +746,18 @@ mod tests {
         let lines: Vec<&str> = list.lines().collect();
         assert_eq!(lines.first(), Some(&"  1 Manipulator"));
         assert!(lines.contains(&"> 3 SMG"), "{list}");
+    }
+
+    #[test]
+    fn players_are_named_by_the_roster() {
+        let roster = BTreeMap::from([(PlayerId::from_index(1), "Alyx".to_owned())]);
+        let names = Names {
+            local: PlayerId::from_index(0),
+            roster: &roster,
+        };
+        assert_eq!(names.of(PlayerId::from_index(0)), "You");
+        assert_eq!(names.of(PlayerId::from_index(1)), "Alyx");
+        assert_eq!(names.of(PlayerId::from_index(4)), "Player 5");
     }
 
     #[test]
@@ -770,13 +814,13 @@ mod tests {
         let (you, them) = (PlayerId::from_index(0), PlayerId::from_index(1));
         let log = HudLog::default();
         // Seen by the victim (as if they were the local player).
-        let message = message_line(&sim, them, &log, 0.0);
+        let message = message_line(&sim, &names(them), &log, 0.0);
         assert!(
             message.starts_with("Killed by Player 1\nRespawn in"),
             "{message}"
         );
-        assert_eq!(message_line(&sim, you, &log, 0.0), "");
-        let board = scoreboard(&sim, you);
+        assert_eq!(message_line(&sim, &names(you), &log, 0.0), "");
+        let board = scoreboard(&sim, &names(you));
         let rows: Vec<&str> = board.lines().collect();
         assert_eq!(rows.len(), 3);
         assert!(
@@ -792,7 +836,12 @@ mod tests {
         let mut data = GameData::builtin().expect("builtin");
         data.rules.frag_limit = 1;
         let sim = duel(10.0, &data);
-        let message = message_line(&sim, PlayerId::from_index(1), &HudLog::default(), 0.0);
+        let message = message_line(
+            &sim,
+            &names(PlayerId::from_index(1)),
+            &HudLog::default(),
+            0.0,
+        );
         assert!(message.starts_with("Match over: Player 1 won"), "{message}");
     }
 }

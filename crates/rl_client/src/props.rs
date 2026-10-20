@@ -19,14 +19,17 @@
 //! A prop for which neither is available falls back to the irradiance
 //! volume.
 //!
-//! Once its model is in (and the map's [`Sim`] exists), every solid prop
-//! also gets a body in the physics world, built by
-//! [`rl_sim::physics::prop_desc`] from its placement and the model's `.phy`.
-//! Props that can move carry a [`PhysicsBody`]: after each tick their pose
-//! is read back from the simulation, and each frame their transform is
-//! interpolated between the last two ticks' poses. A moving prop lit by the
-//! engine's model lighting is relit when it has moved or turned noticeably,
-//! at most a few times a second.
+//! Every solid prop has a body in the game's physics world, made when the
+//! level was loaded (`rl_level`) and numbered by placement, so the client
+//! knows each prop's body from its place in the map's list
+//! ([`LevelBodies`]). Props that can move carry a [`PhysicsBody`] and are
+//! drawn each frame where [`Drawn`] puts them: interpolated between the
+//! server's snapshots, a little in the past. The prop the local player
+//! holds is the exception: it is drawn where the server last had it
+//! relative to the player's view, moved with the view as it turns now, so
+//! carrying feels immediate. A moving prop lit by the engine's model
+//! lighting is relit when it has moved or turned noticeably, at most a few
+//! times a second.
 
 use std::collections::HashMap;
 
@@ -34,12 +37,12 @@ use bevy::prelude::*;
 use rl_assets::coords;
 use rl_assets::vertex_lighting::{colors_by_vertex, cube_lit_mesh, vertex_lit_mesh};
 use rl_assets::{MapAsset, ModelAsset, PlacedProp, PropKind, VertexLightingAsset};
-use rl_sim::physics::{BodyId, BodyPose, Motion, prop_desc};
+use rl_sim::physics::{BodyId, BodyPose};
 use source_formats::ambient::{AmbientCube, AmbientLighting};
-use source_formats::props::PropPlacement;
 
 use crate::AppState;
-use crate::player::{Gameplay, Sim, SimulationTick};
+use crate::net::{Drawn, Game, LevelBodies};
+use crate::player::{LocalPlayer, Movement, ViewAngles};
 use crate::world::{MapHandle, MapScoped, MaterialMaps, Placeholder, Surface, VertexLit};
 
 /// A moving prop is relit once it has moved this far since it was last
@@ -74,12 +77,6 @@ impl Plugin for PropsPlugin {
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(
-                FixedUpdate,
-                record_body_poses
-                    .after(SimulationTick)
-                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -95,8 +92,9 @@ pub struct Prop {
     pub kind: PropKind,
     /// The prop's baked per-vertex lighting, if it has any.
     pub lighting: Option<Handle<VertexLightingAsset>>,
-    /// The placement in Source space, for its physics body.
-    pub placement: PropPlacement,
+    /// Its index in the map's placements, which names its body; `None` for
+    /// models the game places (pickups, projectiles, players).
+    pub index: Option<usize>,
 }
 
 /// A model that moves (a physics prop, a projectile, another player): it is
@@ -104,23 +102,15 @@ pub struct Prop {
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct Moving;
 
-/// A prop that can move, and its body's pose after the last two ticks.
+/// A prop that can move: its body in the game.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct PhysicsBody {
-    /// The body in the simulation.
-    pub id: BodyId,
-    /// Pose after the previous tick.
-    previous: BodyPose,
-    /// Pose after the latest tick.
-    current: BodyPose,
-}
+pub struct PhysicsBody(pub BodyId);
 
 /// Marks a [`Prop`] whose model has not been attached yet.
 #[derive(Component)]
 struct AwaitingModel;
 
-/// Marks a [`Prop`] whose model is attached but whose physics body has not
-/// been made yet.
+/// Marks a map [`Prop`] not yet matched with its body.
 #[derive(Component)]
 struct AwaitingBody;
 
@@ -170,8 +160,6 @@ pub(crate) fn spawn_model(
     model: &str,
     transform: Transform,
 ) -> Entity {
-    let mut placement = PropPlacement::new(model, [0.0; 3], [0.0; 3], PropKind::Dynamic);
-    placement.solid = source_formats::props::PropSolid::None;
     commands
         .spawn((
             Prop {
@@ -179,7 +167,7 @@ pub(crate) fn spawn_model(
                 skin: 0,
                 kind: PropKind::Dynamic,
                 lighting: None,
-                placement,
+                index: None,
             },
             AwaitingModel,
             transform,
@@ -211,7 +199,7 @@ fn spawn_props(
     let Some(map) = handle.and_then(|handle| maps.get(&handle.0)) else {
         return;
     };
-    for prop in &map.props {
+    for (index, prop) in map.props.iter().enumerate() {
         let model = models
             .0
             .entry(prop.model.clone())
@@ -226,9 +214,10 @@ fn spawn_props(
                     .vertex_lighting
                     .as_ref()
                     .map(|path| asset_server.load(path.clone())),
-                placement: prop.source.clone(),
+                index: Some(index),
             },
             AwaitingModel,
+            AwaitingBody,
             transform_of(prop),
             Visibility::default(),
             MapScoped,
@@ -314,7 +303,7 @@ fn attach_models(
         };
 
         let mut root = commands.entity(entity);
-        root.remove::<AwaitingModel>().insert(AwaitingBody);
+        root.remove::<AwaitingModel>();
         if matches!(light, PropLight::Cube(..)) {
             root.insert(CubeLit {
                 translation: transform.translation,
@@ -349,71 +338,97 @@ fn attach_models(
     }
 }
 
-/// Gives every prop whose model is in a body in the simulation; props that
-/// can move get a [`PhysicsBody`] to follow it.
+/// Matches every map prop with its body once the game is entered; props
+/// that can move get a [`PhysicsBody`].
 fn add_bodies(
     mut commands: Commands,
     waiting: Query<(Entity, &Prop), With<AwaitingBody>>,
-    models: Res<Assets<ModelAsset>>,
-    sim: Option<ResMut<Sim>>,
-    gameplay: Res<Gameplay>,
+    bodies: Res<LevelBodies>,
+    game: Game,
 ) {
-    let Some(mut sim) = sim else {
+    let Some(sim) = game.sim() else {
         return;
     };
+    let physics = sim.physics();
     for (entity, prop) in &waiting {
-        commands.entity(entity).remove::<AwaitingBody>();
-        let Some(model) = models.get(&prop.model) else {
-            continue;
-        };
-        let Some(desc) = prop_desc(
-            &prop.placement,
-            model.physics.as_deref(),
-            model.source_bounds,
-            &model.surface_prop,
-            &gameplay.0.physics,
-        ) else {
-            continue;
-        };
-        let id = sim.0.add_prop(&desc);
-        if desc.motion == Motion::Dynamic || desc.free_on_grab {
-            let pose = BodyPose {
-                position: desc.origin,
-                rotation: desc.rotation,
-            };
-            commands.entity(entity).insert((
-                PhysicsBody {
-                    id,
-                    previous: pose,
-                    current: pose,
-                },
-                Moving,
-            ));
+        let mut root = commands.entity(entity);
+        root.remove::<AwaitingBody>();
+        let body = prop
+            .index
+            .and_then(|index| bodies.0.get(index).copied().flatten());
+        if let Some(body) = body
+            && (physics.is_dynamic(body) || physics.is_grabbable(body))
+        {
+            root.insert((PhysicsBody(body), Moving));
         }
     }
 }
 
-/// Reads every moving prop's pose back from the simulation after a tick.
-fn record_body_poses(sim: Option<Res<Sim>>, mut bodies: Query<&mut PhysicsBody>) {
-    let Some(sim) = sim else {
+/// Places every moving prop where it is drawn this frame; the one the
+/// local player holds, relative to their view.
+fn follow_bodies(
+    drawn: Res<Drawn>,
+    game: Game,
+    held: HeldView,
+    mut bodies: Query<(&PhysicsBody, &mut Transform)>,
+) {
+    let Some(world) = &drawn.0 else {
         return;
     };
-    for mut body in &mut bodies {
-        if let Some(pose) = sim.0.physics().pose(body.id) {
-            body.previous = body.current;
-            body.current = pose;
-        }
+    let carried = held.carried(&game);
+    for (body, mut transform) in &mut bodies {
+        let pose = match carried {
+            Some((id, pose)) if id == body.0 => pose,
+            _ => match world.props.get(&body.0) {
+                Some(pose) => *pose,
+                None => continue,
+            },
+        };
+        transform.translation = coords::position(pose.position.to_array());
+        transform.rotation = coords::rotation_from_source(pose.rotation);
     }
 }
 
-/// Places every moving prop between its last two ticks' poses.
-fn follow_bodies(time: Res<Time<Fixed>>, mut bodies: Query<(&PhysicsBody, &mut Transform)>) {
-    let alpha = time.overstep_fraction();
-    for (body, mut transform) in &mut bodies {
-        let position = body.previous.position.lerp(body.current.position, alpha);
-        let rotation = body.previous.rotation.slerp(body.current.rotation, alpha);
-        transform.translation = coords::position(position.to_array());
-        transform.rotation = coords::rotation_from_source(rotation);
+/// What drawing the held prop by the view needs.
+#[derive(bevy::ecs::system::SystemParam)]
+struct HeldView<'w> {
+    local: Option<Res<'w, LocalPlayer>>,
+    angles: Res<'w, ViewAngles>,
+    movement: Res<'w, Movement>,
+    time: Res<'w, Time<Fixed>>,
+}
+
+impl HeldView<'_> {
+    /// The prop the local player holds and where to draw it: where the
+    /// newest snapshot has it relative to the player's eyes and view, moved
+    /// to their predicted eyes and current view.
+    fn carried(&self, game: &Game) -> Option<(BodyId, BodyPose)> {
+        let local = self.local.as_ref()?;
+        let session = game.session()?;
+        let body = session.sim().player(local.id)?.manipulator.held()?;
+        let latest = session.latest()?;
+        let then = latest.players.get(&local.id)?;
+        let pose = *latest.props.get(&body)?;
+        let config = &self.movement.0;
+        let eye = |state: &rl_sim::movement::PlayerState| {
+            state.origin + Vec3::Z * state.eye_height(config)
+        };
+        let view = |pitch: f32, yaw: f32| {
+            Quat::from_rotation_z(yaw.to_radians()) * Quat::from_rotation_y(pitch.to_radians())
+        };
+        let (pitch, yaw) = then.motion.look;
+        let offset = view(pitch, yaw).inverse() * (pose.position - eye(&then.motion.state));
+        let alpha = self.time.overstep_fraction();
+        let eye_now =
+            eye(&local.previous).lerp(eye(&local.current), alpha) + session.prediction_error();
+        let turn = Quat::from_rotation_z((self.angles.yaw - yaw).to_radians());
+        Some((
+            body,
+            BodyPose {
+                position: eye_now + view(self.angles.pitch, self.angles.yaw) * offset,
+                rotation: turn * pose.rotation,
+            },
+        ))
     }
 }
 
@@ -497,7 +512,12 @@ mod tests {
             skin: 0,
             kind: PropKind::Static,
             vertex_lighting: None,
-            source: PropPlacement::new("models/a.mdl", [0.0; 3], [0.0; 3], PropKind::Static),
+            source: source_formats::props::PropPlacement::new(
+                "models/a.mdl",
+                [0.0; 3],
+                [0.0; 3],
+                PropKind::Static,
+            ),
         };
         let transform = transform_of(&prop);
         assert_eq!(transform.translation, prop.translation);

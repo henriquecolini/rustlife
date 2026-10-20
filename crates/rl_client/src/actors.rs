@@ -1,100 +1,81 @@
-//! Models the simulation moves: pickups, projectiles and other players.
+//! Models the game moves: pickups, projectiles and other players.
 //!
 //! Each is drawn with its model through the props pipeline
 //! (`props::spawn_model`: lit like any prop, but with no physics
-//! body of its own) and placed from the simulation:
+//! body of its own) and placed from the game:
 //!
 //! - **pickups** where the map put them, hidden while taken;
 //! - **projectiles** along their flight, turned to face where they fly,
 //!   appearing and vanishing with them;
 //! - **other players** at their feet, turned to their view's yaw, hidden
-//!   while dead. Models show their reference pose until animation arrives
-//!   (M7).
+//!   while dead; models come and go as players join and leave. Models show
+//!   their reference pose until animation arrives (M7).
 //!
-//! Things that move are interpolated between the last two ticks, like the
-//! camera and the props.
+//! Projectiles and other players are drawn where [`Drawn`] places them:
+//! interpolated between two of the server's snapshots, a little in the
+//! past, every frame.
 
 use bevy::prelude::*;
 use rl_assets::coords;
 use rl_sim::simulation::PlayerId;
 
 use crate::AppState;
-use crate::player::{Gameplay, LocalPlayer, Sim, SimulationTick};
+use crate::net::{Drawn, Game};
+use crate::player::Gameplay;
 use crate::props::{ModelHandles, Moving, spawn_model};
 
-/// Draws the simulation's pickups, projectiles and other players.
+/// Draws the game's pickups, projectiles and other players.
 pub struct ActorsPlugin;
 
 impl Plugin for ActorsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ActorsSpawned>()
+        app.init_resource::<PickupsSpawned>()
             .add_systems(OnEnter(AppState::InGame), reset)
             .add_systems(
                 Update,
-                (spawn_actors, show_pickups, place_players, place_projectiles)
+                (spawn_pickups, show_pickups, draw_players, draw_projectiles)
                     .chain()
-                    .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(
-                FixedUpdate,
-                (record_players, record_projectiles)
-                    .after(SimulationTick)
                     .run_if(in_state(AppState::InGame)),
             );
     }
 }
 
-/// Whether the pickups and players of the current simulation have models.
+/// Whether the pickups of the current game have models.
 #[derive(Resource, Default)]
-struct ActorsSpawned(bool);
+struct PickupsSpawned(bool);
 
 /// The model of a pickup, by index into the simulation's pickups.
 #[derive(Component)]
 struct PickupView(usize);
 
-/// The model of another player, and where they stood after the last two
-/// ticks: feet (Source space) and yaw (degrees).
+/// The model of another player.
 #[derive(Component)]
-struct PlayerView {
-    id: PlayerId,
-    previous: (Vec3, f32),
-    current: (Vec3, f32),
-    alive: bool,
-}
+struct PlayerView(PlayerId);
 
-/// The model of a projectile, and where it was after the last two ticks
-/// (Source space).
+/// The model of a projectile, by its id.
 #[derive(Component)]
-struct ProjectileView {
-    id: u32,
-    previous: Vec3,
-    current: Vec3,
-    velocity: Vec3,
-}
+struct ProjectileView(u32);
 
-fn reset(mut spawned: ResMut<ActorsSpawned>) {
+fn reset(mut spawned: ResMut<PickupsSpawned>) {
     spawned.0 = false;
 }
 
-/// Gives every pickup and every other player a model once the simulation
-/// exists.
-fn spawn_actors(
+/// Gives every pickup a model once the game's simulation exists.
+fn spawn_pickups(
     mut commands: Commands,
-    mut spawned: ResMut<ActorsSpawned>,
+    mut spawned: ResMut<PickupsSpawned>,
     mut models: ResMut<ModelHandles>,
     asset_server: Res<AssetServer>,
-    sim: Option<Res<Sim>>,
-    local: Option<Res<LocalPlayer>>,
-    gameplay: Res<Gameplay>,
+    game: Game,
 ) {
-    let (Some(sim), Some(local)) = (sim, local) else {
+    let Some(sim) = game.sim() else {
         return;
     };
     if spawned.0 {
         return;
     }
     spawned.0 = true;
-    for (index, pickup) in sim.0.pickups().iter().enumerate() {
+    for (index, pickup) in sim.pickups().iter().enumerate() {
         let transform = Transform {
             translation: coords::position(pickup.origin.to_array()),
             rotation: coords::rotation(pickup.angles),
@@ -109,90 +90,19 @@ fn spawn_actors(
         );
         commands.entity(entity).insert(PickupView(index));
     }
-    let player_models = &gameplay.0.player.models;
-    for (id, player) in sim.0.players().filter(|&(id, _)| id != local.id) {
-        let Some(model) = player_models.get(id.index() % player_models.len().max(1)) else {
-            continue;
-        };
-        let at = (player.state.origin, player.look.1);
-        let entity = spawn_model(
-            &mut commands,
-            &mut models,
-            &asset_server,
-            model,
-            player_transform(at),
-        );
-        commands.entity(entity).insert((
-            PlayerView {
-                id,
-                previous: at,
-                current: at,
-                alive: player.alive(),
-            },
-            Moving,
-        ));
-    }
-}
-
-/// The transform of a player model standing at `feet` facing `yaw`.
-fn player_transform((feet, yaw): (Vec3, f32)) -> Transform {
-    Transform {
-        translation: coords::position(feet.to_array()),
-        rotation: coords::rotation([0.0, yaw, 0.0]),
-        ..default()
-    }
 }
 
 /// Hides taken pickups.
-fn show_pickups(sim: Option<Res<Sim>>, mut pickups: Query<(&PickupView, &mut Visibility)>) {
-    let Some(sim) = sim else {
+fn show_pickups(game: Game, mut pickups: Query<(&PickupView, &mut Visibility)>) {
+    let Some(sim) = game.sim() else {
         return;
     };
     for (view, mut visibility) in &mut pickups {
         let shown = sim
-            .0
             .pickups()
             .get(view.0)
             .is_some_and(rl_sim::pickups::Pickup::available);
-        let wanted = if shown {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        visibility.set_if_neq(wanted);
-    }
-}
-
-/// Reads every other player's position back after a tick.
-fn record_players(sim: Option<Res<Sim>>, mut players: Query<&mut PlayerView>) {
-    let Some(sim) = sim else {
-        return;
-    };
-    for mut view in &mut players {
-        if let Some(player) = sim.0.player(view.id) {
-            let now = (player.state.origin, player.look.1);
-            // Do not glide across the map from where they died.
-            view.previous = if view.alive == player.alive() {
-                view.current
-            } else {
-                now
-            };
-            view.current = now;
-            view.alive = player.alive();
-        }
-    }
-}
-
-/// Places other players between their last two ticks; hides the dead.
-fn place_players(
-    time: Res<Time<Fixed>>,
-    mut players: Query<(&PlayerView, &mut Transform, &mut Visibility)>,
-) {
-    let alpha = time.overstep_fraction();
-    for (view, mut transform, mut visibility) in &mut players {
-        let feet = view.previous.0.lerp(view.current.0, alpha);
-        *transform = player_transform((feet, view.current.1));
-        visibility.set_if_neq(if view.alive {
+        visibility.set_if_neq(if shown {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -200,35 +110,94 @@ fn place_players(
     }
 }
 
-/// Follows the simulation's projectiles after a tick: new ones get a model,
-/// gone ones lose theirs.
-fn record_projectiles(
+/// The transform of a player model standing at `feet` facing `yaw`.
+fn player_transform(feet: Vec3, yaw: f32) -> Transform {
+    Transform {
+        translation: coords::position(feet.to_array()),
+        rotation: coords::rotation([0.0, yaw, 0.0]),
+        ..default()
+    }
+}
+
+/// Places every other player where they are drawn this frame, hiding the
+/// dead; gives newcomers a model and takes it from those who left.
+fn draw_players(
     mut commands: Commands,
-    sim: Option<Res<Sim>>,
+    drawn: Res<Drawn>,
+    game: Game,
+    gameplay: Res<Gameplay>,
     mut models: ResMut<ModelHandles>,
     asset_server: Res<AssetServer>,
-    mut views: Query<(Entity, &mut ProjectileView)>,
+    mut views: Query<(Entity, &PlayerView, &mut Transform, &mut Visibility)>,
 ) {
-    let Some(sim) = sim else {
+    let Some(world) = &drawn.0 else {
         return;
     };
-    let projectiles = sim.0.projectiles();
-    for (entity, mut view) in &mut views {
-        match projectiles
-            .iter()
-            .find(|projectile| projectile.id == view.id)
-        {
-            Some(projectile) => {
-                view.previous = view.current;
-                view.current = projectile.position;
-                view.velocity = projectile.velocity;
+    let local = game.local();
+    let mut shown = Vec::new();
+    for (entity, view, mut transform, mut visibility) in &mut views {
+        match world.players.get(&view.0).filter(|_| Some(view.0) != local) {
+            Some(pose) => {
+                *transform = player_transform(pose.feet, pose.yaw);
+                visibility.set_if_neq(if pose.alive {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+                shown.push(view.0);
             }
             None => commands.entity(entity).despawn(),
         }
     }
-    let arsenal = sim.0.arsenal();
-    for projectile in projectiles {
-        if views.iter().any(|(_, view)| view.id == projectile.id) {
+    let player_models = &gameplay.0.player.models;
+    for (&id, pose) in &world.players {
+        if Some(id) == local || shown.contains(&id) {
+            continue;
+        }
+        let Some(model) = player_models.get(id.index() % player_models.len().max(1)) else {
+            continue;
+        };
+        let entity = spawn_model(
+            &mut commands,
+            &mut models,
+            &asset_server,
+            model,
+            player_transform(pose.feet, pose.yaw),
+        );
+        commands.entity(entity).insert((PlayerView(id), Moving));
+    }
+}
+
+/// Places every projectile where it is drawn this frame: new ones get a
+/// model, gone ones lose theirs.
+fn draw_projectiles(
+    mut commands: Commands,
+    drawn: Res<Drawn>,
+    game: Game,
+    mut models: ResMut<ModelHandles>,
+    asset_server: Res<AssetServer>,
+    mut views: Query<(Entity, &ProjectileView, &mut Transform)>,
+) {
+    let (Some(world), Some(sim)) = (&drawn.0, game.sim()) else {
+        return;
+    };
+    let mut shown = Vec::new();
+    for (entity, view, mut transform) in &mut views {
+        match world
+            .projectiles
+            .iter()
+            .find(|projectile| projectile.id == view.0)
+        {
+            Some(projectile) => {
+                *transform = projectile_transform(projectile.position, projectile.velocity);
+                shown.push(view.0);
+            }
+            None => commands.entity(entity).despawn(),
+        }
+    }
+    let arsenal = sim.arsenal();
+    for projectile in &world.projectiles {
+        if shown.contains(&projectile.id) {
             continue;
         }
         let Some(rl_data::Shot::Projectile(config)) = arsenal
@@ -237,23 +206,16 @@ fn record_projectiles(
         else {
             continue;
         };
-        let transform = projectile_transform(projectile.position, projectile.velocity);
         let entity = spawn_model(
             &mut commands,
             &mut models,
             &asset_server,
             &config.model,
-            transform,
+            projectile_transform(projectile.position, projectile.velocity),
         );
-        commands.entity(entity).insert((
-            ProjectileView {
-                id: projectile.id,
-                previous: projectile.position,
-                current: projectile.position,
-                velocity: projectile.velocity,
-            },
-            Moving,
-        ));
+        commands
+            .entity(entity)
+            .insert((ProjectileView(projectile.id), Moving));
     }
 }
 
@@ -267,18 +229,6 @@ fn projectile_transform(position: Vec3, velocity: Vec3) -> Transform {
         translation: coords::position(position.to_array()),
         rotation: coords::rotation([pitch, yaw, 0.0]),
         ..default()
-    }
-}
-
-/// Places projectiles between their last two ticks.
-fn place_projectiles(
-    time: Res<Time<Fixed>>,
-    mut projectiles: Query<(&ProjectileView, &mut Transform)>,
-) {
-    let alpha = time.overstep_fraction();
-    for (view, mut transform) in &mut projectiles {
-        let position = view.previous.lerp(view.current, alpha);
-        *transform = projectile_transform(position, view.velocity);
     }
 }
 
@@ -296,5 +246,13 @@ mod tests {
         let transform = projectile_transform(Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0));
         let facing = transform.rotation * Vec3::X;
         assert!(facing.y > 0.6, "{facing}");
+    }
+
+    #[test]
+    fn players_stand_at_their_feet_facing_their_yaw() {
+        let transform = player_transform(Vec3::new(10.0, 0.0, 0.0), 90.0);
+        assert!(transform.translation.x > 0.0);
+        let facing = transform.rotation * Vec3::X;
+        assert!(facing.abs_diff_eq(Vec3::NEG_Z, 1e-5), "{facing}");
     }
 }

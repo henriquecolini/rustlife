@@ -3,9 +3,11 @@
 //!
 //! It loads a BSP and its props through the `source://` asset source and lets
 //! the player fight through it ([`player`], [`input`]): rustlife's movement,
-//! weapons and Manipulator, the map's pickups ([`actors`]), with a HUD
-//! ([`hud`]) and combat effects ([`effects`]); or fly it in noclip. Later
-//! milestones add networking and audio on top of the same app.
+//! weapons and Manipulator, the map's pickups and other players
+//! ([`actors`]), with a HUD ([`hud`]) and combat effects ([`effects`]); or
+//! fly it in noclip. Every game runs on a server ([`net`]): one the client
+//! hosts in-process — open to others with `--listen` — or a remote one it
+//! joins with `--connect`. Audio comes with a later milestone.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +24,7 @@ use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::effects::EffectsPlugin;
 use crate::hud::HudPlugin;
+use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
 use crate::script::InputScript;
@@ -34,6 +37,7 @@ pub mod capture;
 pub mod effects;
 pub mod hud;
 pub mod input;
+pub mod net;
 pub mod player;
 pub mod props;
 pub mod script;
@@ -45,7 +49,9 @@ pub enum AppState {
     /// Choosing a map in the [`browser`].
     #[default]
     Browser,
-    /// Viewing [`CurrentMap`].
+    /// Joining a server, until it says which map to load.
+    Connecting,
+    /// Playing [`CurrentMap`].
     InGame,
 }
 
@@ -61,20 +67,22 @@ pub struct GameVfs(pub Arc<Vfs>);
 /// How the client should start.
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
-    /// Map to load straight away (without path or extension); `None` opens
-    /// the map browser.
+    /// Map to host straight away (without path or extension); `None` opens
+    /// the map browser (or, when joining, waits for the server's map).
     pub map: Option<String>,
-    /// Index of the spawn point to start at; wraps around the map's spawns.
-    pub spawn: usize,
+    /// Index of the spawn point to start at, if any; wraps around the
+    /// map's spawns.
+    pub spawn: Option<usize>,
     /// Run non-interactively and save one screenshot (see [`capture`]).
     pub capture: Option<Capture>,
     /// Scripted input, for captures of the player moving and using the
     /// Manipulator.
     pub script: Option<InputScript>,
-    /// The gameplay data to play with.
+    /// The gameplay data to play with (a server's own replaces it).
     pub data: GameData,
-    /// Training dummies to add: players who stand still and respawn.
-    pub dummies: usize,
+    /// Hosting or joining, the player's name, simulated network trouble,
+    /// training dummies.
+    pub net: NetSettings,
 }
 
 /// Builds and runs the client over the content mounted in `vfs`.
@@ -86,10 +94,10 @@ pub struct ClientOptions {
 /// The `source://` asset source is registered before `DefaultPlugins` (as Bevy
 /// requires for custom sources) and the loaders after it.
 pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
-    let start = if options.map.is_some() {
-        AppState::InGame
-    } else {
-        AppState::Browser
+    let start = match (&options.net.network, &options.map) {
+        (net::Network::Join(_), _) => AppState::Connecting,
+        (net::Network::Host { .. }, Some(_)) => AppState::InGame,
+        (net::Network::Host { .. }, None) => AppState::Browser,
     };
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
@@ -112,9 +120,9 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         },
         PropsPlugin,
         BrowserPlugin,
-        PlayerPlugin {
-            data: options.data,
-            dummies: options.dummies,
+        PlayerPlugin { data: options.data },
+        NetPlugin {
+            settings: options.net,
         },
         ActorsPlugin,
         HudPlugin,

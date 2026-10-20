@@ -5568,6 +5568,9 @@ dependencies = [
  "bevy",
  "rl_assets",
  "rl_data",
+ "rl_level",
+ "rl_net",
+ "rl_server",
  "rl_sim",
  "source_formats",
  "source_fs",
@@ -5761,6 +5764,7 @@ dependencies = [
  "rl_client",
  "rl_config",
  "rl_data",
+ "rl_net",
  "source_fs",
 ]
 

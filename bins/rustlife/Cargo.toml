@@ -17,6 +17,7 @@ path = "src/main.rs"
 rl_client.workspace = true
 rl_config.workspace = true
 rl_data.workspace = true
+rl_net.workspace = true
 source_fs.workspace = true
 anyhow.workspace = true
 clap.workspace = true
