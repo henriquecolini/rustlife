@@ -34,6 +34,9 @@ pub struct ModelPart {
     pub mesh: Handle<Mesh>,
     /// Index into each skin of [`ModelAsset::skins`].
     pub material: usize,
+    /// Model vertex index of each of the mesh's vertices, which baked
+    /// per-vertex lighting is indexed by.
+    pub vertex_ids: Vec<u32>,
 }
 
 /// A loaded model: its meshes and, per skin, the material each slot uses.
@@ -47,6 +50,11 @@ pub struct ModelAsset {
     pub skins: Vec<Vec<Option<String>>>,
     /// Axis-aligned bounds `(min, max)` in Bevy space, model frame.
     pub bounds: (Vec3, Vec3),
+    /// The model's checksum, which baked lighting must match.
+    pub checksum: u32,
+    /// Model vertex index of each highest-detail strip-group vertex, the
+    /// order baked lighting is stored in.
+    pub strip_vertex_ids: Vec<u32>,
 }
 
 impl ModelAsset {
@@ -118,12 +126,15 @@ impl AssetLoader for MdlLoader {
             .map(|(index, mesh)| ModelPart {
                 mesh: load_context.add_labeled_asset(format!("mesh{index}"), mesh_of(mesh)),
                 material: mesh.material,
+                vertex_ids: mesh.vertex_ids.clone(),
             })
             .collect();
         Ok(ModelAsset {
             parts,
             skins,
             bounds: bevy_bounds(geometry.bounds),
+            checksum: geometry.checksum,
+            strip_vertex_ids: geometry.strip_vertex_ids,
         })
     }
 
@@ -197,6 +208,10 @@ fn bevy_bounds((min, max): ([f32; 3], [f32; 3])) -> (Vec3, Vec3) {
 }
 
 /// Converts one model mesh (Source space) into a Bevy [`Mesh`].
+///
+/// The mesh stays readable on the CPU after upload: props with baked
+/// lighting draw a vertex-coloured copy of it (see
+/// [`crate::vertex_lighting::vertex_lit_mesh`]).
 fn mesh_of(mesh: &ModelMesh) -> Mesh {
     let positions: Vec<[f32; 3]> = mesh
         .positions
@@ -210,7 +225,7 @@ fn mesh_of(mesh: &ModelMesh) -> Mesh {
         .collect();
     Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
@@ -252,6 +267,8 @@ mod tests {
             parts: Vec::new(),
             skins: vec![vec![Some("a".into()), None], vec![Some("b".into())]],
             bounds: (Vec3::ZERO, Vec3::ZERO),
+            checksum: 0,
+            strip_vertex_ids: Vec::new(),
         };
         assert_eq!(model.material(1, 0), Some("b"));
         assert_eq!(model.material(7, 0), Some("a"));
@@ -266,6 +283,7 @@ mod tests {
             positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             normals: vec![[0.0, 0.0, 1.0]; 3],
             uvs: vec![[0.0; 2]; 3],
+            vertex_ids: vec![0, 1, 2],
         });
         assert_eq!(mesh.count_vertices(), 3);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());

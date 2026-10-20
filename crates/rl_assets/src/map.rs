@@ -68,6 +68,9 @@ pub struct PlacedProp {
     pub skin: usize,
     /// Static prop or entity kind.
     pub kind: PropKind,
+    /// Asset path of the prop's baked per-vertex lighting
+    /// (`source://sp_<index>.vhv`), if it was compiled with one.
+    pub vertex_lighting: Option<String>,
 }
 
 /// The map's ambient light as an irradiance volume, placed over the world.
@@ -241,6 +244,10 @@ fn placed_prop(prop: &PropPlacement) -> PlacedProp {
         scale: prop.scale,
         skin: prop.skin,
         kind: prop.kind,
+        vertex_lighting: prop
+            .vertex_lighting
+            .as_ref()
+            .map(|path| format!("{SOURCE}://{path}")),
     }
 }
 
@@ -415,6 +422,7 @@ mod tests {
             scale: 2.0,
             kind: PropKind::Physics,
             static_index: None,
+            vertex_lighting: None,
             lighting_origin: None,
         });
         assert_eq!(prop.model, "source://models/props_c17/oildrum001.mdl");
