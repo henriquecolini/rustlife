@@ -10,6 +10,12 @@
 //! resolved to names (relative to `materials/`, without extension) by probing
 //! the model's `$cdmaterials` directories for the first VMT that exists, so
 //! the client can share its material cache between world and models.
+//!
+//! The loader also reads the model's `.phy` collision model when there is
+//! one, which the simulation builds the prop's physics body from; it stays in
+//! Source space, like everything the simulation consumes.
+
+use std::sync::Arc;
 
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, RenderAssetUsages};
@@ -18,6 +24,7 @@ use bevy_mesh::{Mesh, PrimitiveTopology};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
 use source_formats::mdl::{self, ModelError, ModelGeometry, ModelMesh};
+use source_formats::phy::{self, PhysicsModel};
 use thiserror::Error;
 
 use crate::coords;
@@ -55,6 +62,13 @@ pub struct ModelAsset {
     /// Model vertex index of each highest-detail strip-group vertex, the
     /// order baked lighting is stored in.
     pub strip_vertex_ids: Vec<u32>,
+    /// The model's bounds `(min, max)` in Source space, model frame: the
+    /// collision box of models without a physics model.
+    pub source_bounds: ([f32; 3], [f32; 3]),
+    /// The model's `$surfaceprop`, lower-cased.
+    pub surface_prop: String,
+    /// The model's physics collision model, if it ships a readable `.phy`.
+    pub physics: Option<Arc<PhysicsModel>>,
 }
 
 impl ModelAsset {
@@ -119,6 +133,7 @@ impl AssetLoader for MdlLoader {
 
         let geometry = mdl::load_model(&mdl, &vtx, &vvd)?;
         let skins = resolve_skins(load_context, &geometry).await;
+        let physics = load_physics(load_context, &stem).await;
         let parts = geometry
             .meshes
             .iter()
@@ -135,6 +150,9 @@ impl AssetLoader for MdlLoader {
             bounds: bevy_bounds(geometry.bounds),
             checksum: geometry.checksum,
             strip_vertex_ids: geometry.strip_vertex_ids,
+            source_bounds: geometry.bounds,
+            surface_prop: geometry.surface_prop.to_ascii_lowercase(),
+            physics,
         })
     }
 
@@ -152,6 +170,23 @@ fn model_stem(path: &str) -> String {
             path[..cut].to_owned()
         }
         _ => path,
+    }
+}
+
+/// Reads and decodes `<stem>.phy`. Most models without physics simply have
+/// no such file; a present but unreadable one is logged, and the model then
+/// collides as its bounding box.
+async fn load_physics(load_context: &mut LoadContext<'_>, stem: &str) -> Option<Arc<PhysicsModel>> {
+    let bytes = load_context
+        .read_asset_bytes(format!("{SOURCE}://{stem}.phy"))
+        .await
+        .ok()?;
+    match phy::decode(&bytes) {
+        Ok(model) => Some(Arc::new(model)),
+        Err(error) => {
+            tracing::warn!(model = stem, "unreadable physics model: {error}");
+            None
+        }
     }
 }
 
@@ -269,6 +304,9 @@ mod tests {
             bounds: (Vec3::ZERO, Vec3::ZERO),
             checksum: 0,
             strip_vertex_ids: Vec::new(),
+            source_bounds: ([0.0; 3], [0.0; 3]),
+            surface_prop: String::new(),
+            physics: None,
         };
         assert_eq!(model.material(1, 0), Some("b"));
         assert_eq!(model.material(7, 0), Some("a"));

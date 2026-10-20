@@ -95,6 +95,8 @@ pub struct PlacedProp {
     /// Asset path of the prop's baked per-vertex lighting
     /// (`source://sp_<index>.vhv`), if it was compiled with one.
     pub vertex_lighting: Option<String>,
+    /// The placement in Source space, for the simulation.
+    pub source: PropPlacement,
 }
 
 /// The map's ambient light as an irradiance volume, placed over the world.
@@ -324,6 +326,7 @@ fn placed_prop(prop: &PropPlacement) -> PlacedProp {
             .vertex_lighting
             .as_ref()
             .map(|path| format!("{SOURCE}://{path}")),
+        source: prop.clone(),
     }
 }
 
@@ -451,6 +454,8 @@ fn lightmap_image(atlas: &LightmapAtlas) -> Image {
 
 #[cfg(test)]
 mod tests {
+    use source_formats::props::PropSolid;
+
     use super::*;
 
     #[test]
@@ -500,6 +505,9 @@ mod tests {
             static_index: None,
             vertex_lighting: None,
             lighting_origin: None,
+            solid: PropSolid::Hull,
+            spawnflags: 0,
+            mass_scale: 1.0,
         });
         assert_eq!(prop.model, "source://models/props_c17/oildrum001.mdl");
         assert_eq!(prop.translation, coords::position([64.0, 0.0, 0.0]));

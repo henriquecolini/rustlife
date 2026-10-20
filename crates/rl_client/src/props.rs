@@ -244,6 +244,8 @@ fn engine_lighting(
 
 #[cfg(test)]
 mod tests {
+    use source_formats::props::PropPlacement;
+
     use super::*;
 
     #[test]
@@ -256,6 +258,7 @@ mod tests {
             skin: 0,
             kind: PropKind::Static,
             vertex_lighting: None,
+            source: PropPlacement::new("models/a.mdl", [0.0; 3], [0.0; 3], PropKind::Static),
         };
         let transform = transform_of(&prop);
         assert_eq!(transform.translation, prop.translation);

@@ -13,7 +13,7 @@
 //! Both become a [`PropPlacement`] in Source space; turning the placement into
 //! a transform happens at the render boundary.
 
-use vbsp::{Bsp, StaticPropLumpFlags};
+use vbsp::{Bsp, SolidType, StaticPropLumpFlags};
 
 use crate::bsp::parse_vector;
 
@@ -27,6 +27,32 @@ pub enum PropKind {
     Dynamic,
     /// A `prop_physics`-style entity: simulated as a rigid body (from M4).
     Physics,
+}
+
+/// What a placed model collides as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PropSolid {
+    /// Nothing collides with it.
+    None,
+    /// Its model's bounding box.
+    Box,
+    /// Its model's physics hull (`.phy`), or the bounding box if it has
+    /// none.
+    Hull,
+}
+
+/// `spawnflags` bits of `prop_physics`-style entities.
+pub mod spawnflags {
+    /// The body starts asleep, at rest until something touches it.
+    pub const START_ASLEEP: u32 = 1;
+    /// Debris: collides with the world and other props, but not players.
+    pub const DEBRIS: u32 = 4;
+    /// The body does not move until enabled.
+    pub const MOTION_DISABLED: u32 = 8;
+    /// A motion-disabled body is freed when grabbed.
+    pub const ENABLE_MOTION_ON_GRAB: u32 = 64;
+    /// Players cannot pick the body up.
+    pub const PREVENT_PICKUP: u32 = 512;
 }
 
 /// One model placed in a map, in Source space.
@@ -55,6 +81,40 @@ pub struct PropPlacement {
     /// Point the prop should be lit from, when the mapper overrode it; when
     /// `None` the renderer lights the prop from its own centre.
     pub lighting_origin: Option<[f32; 3]>,
+    /// What the prop collides as.
+    pub solid: PropSolid,
+    /// The entity's `spawnflags` (see [`spawnflags`]); 0 for static props.
+    pub spawnflags: u32,
+    /// Multiplier on the model's mass (`massScale`), positive.
+    pub mass_scale: f32,
+}
+
+impl PropPlacement {
+    /// A placement of `model` at `origin` with `angles`, with every other
+    /// property at its default: skin 0, unscaled, collides by its hull, no
+    /// flags, no baked lighting.
+    #[must_use]
+    pub fn new(
+        model: impl Into<String>,
+        origin: [f32; 3],
+        angles: [f32; 3],
+        kind: PropKind,
+    ) -> Self {
+        Self {
+            model: model.into(),
+            origin,
+            angles,
+            skin: 0,
+            scale: 1.0,
+            kind,
+            static_index: None,
+            vertex_lighting: None,
+            lighting_origin: None,
+            solid: PropSolid::Hull,
+            spawnflags: 0,
+            mass_scale: 1.0,
+        }
+    }
 }
 
 /// Entity `rendermode` meaning "don't render" (`kRenderNone`).
@@ -103,6 +163,9 @@ fn static_props(bsp: &Bsp) -> Vec<PropPlacement> {
                         prop.lighting_origin.y,
                         prop.lighting_origin.z,
                     ]),
+                solid: static_solid(prop.solid),
+                spawnflags: 0,
+                mass_scale: 1.0,
             })
         })
         .collect()
@@ -129,11 +192,13 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 .prop("skin")
                 .and_then(|skin| skin.trim().parse().ok())
                 .unwrap_or(0);
-            let scale = entity
-                .prop("modelscale")
-                .and_then(|scale| scale.trim().parse::<f32>().ok())
-                .filter(|scale| scale.is_finite() && *scale > 0.0)
-                .unwrap_or(1.0);
+            let positive = |key: &'static str| {
+                entity
+                    .prop(key)
+                    .and_then(|value| value.trim().parse::<f32>().ok())
+                    .filter(|value| value.is_finite() && *value > 0.0)
+            };
+            let scale = positive("modelscale").unwrap_or(1.0);
             Some(PropPlacement {
                 model,
                 origin,
@@ -144,6 +209,13 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 static_index: None,
                 vertex_lighting: None,
                 lighting_origin: None,
+                solid: entity_solid(kind, entity.prop("solid")),
+                spawnflags: entity
+                    .prop("spawnflags")
+                    .and_then(|flags| flags.trim().parse().ok())
+                    .unwrap_or(0),
+                // Hammer writes `massScale`; key lookups ignore case.
+                mass_scale: positive("massscale").unwrap_or(1.0),
             })
         })
         .collect()
@@ -163,6 +235,29 @@ fn entity_kind(classname: &str) -> Option<PropKind> {
     } else {
         // `prop_dynamic`, `prop_dynamic_override`, `prop_door_rotating`, ...
         Some(PropKind::Dynamic)
+    }
+}
+
+/// How a static prop collides, from its compiled solid type.
+fn static_solid(solid: SolidType) -> PropSolid {
+    match solid {
+        SolidType::None => PropSolid::None,
+        SolidType::Bbox | SolidType::Obb | SolidType::ObbYaw => PropSolid::Box,
+        _ => PropSolid::Hull,
+    }
+}
+
+/// How a prop entity collides: physics props always by their hull; other
+/// props by their `solid` key (0 none, 2 bounding box, 6 hull, the
+/// default).
+fn entity_solid(kind: PropKind, solid: Option<&str>) -> PropSolid {
+    if kind == PropKind::Physics {
+        return PropSolid::Hull;
+    }
+    match solid.map(str::trim) {
+        Some("0") => PropSolid::None,
+        Some("2" | "3" | "4") => PropSolid::Box,
+        _ => PropSolid::Hull,
     }
 }
 
@@ -193,6 +288,17 @@ mod tests {
         assert_eq!(entity_kind("prop_door_rotating"), Some(PropKind::Dynamic));
         assert_eq!(entity_kind("func_brush"), None);
         assert_eq!(entity_kind("info_player_deathmatch"), None);
+    }
+
+    #[test]
+    fn decides_how_props_collide() {
+        assert_eq!(static_solid(SolidType::None), PropSolid::None);
+        assert_eq!(static_solid(SolidType::Bbox), PropSolid::Box);
+        assert_eq!(static_solid(SolidType::Physics), PropSolid::Hull);
+        assert_eq!(entity_solid(PropKind::Physics, Some("0")), PropSolid::Hull);
+        assert_eq!(entity_solid(PropKind::Dynamic, Some("0")), PropSolid::None);
+        assert_eq!(entity_solid(PropKind::Dynamic, Some(" 2")), PropSolid::Box);
+        assert_eq!(entity_solid(PropKind::Dynamic, None), PropSolid::Hull);
     }
 
     #[test]
