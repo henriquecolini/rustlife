@@ -31,6 +31,21 @@ pub fn direction(source: [f32; 3]) -> Vec3 {
     Vec3::new(source[0], source[2], -source[1])
 }
 
+/// Converts a Bevy-space position back to Source space (the inverse of
+/// [`position`]).
+#[must_use]
+pub fn to_source_position(bevy: Vec3) -> [f32; 3] {
+    let v = bevy / METERS_PER_UNIT;
+    [v.x, -v.z, v.y]
+}
+
+/// Converts a Bevy-space direction back to Source space (the inverse of
+/// [`direction`]).
+#[must_use]
+pub fn to_source_direction(bevy: Vec3) -> [f32; 3] {
+    [bevy.x, -bevy.z, bevy.y]
+}
+
 /// Converts a Source yaw (degrees around +Z, 0 facing +X) into a Bevy yaw
 /// (radians around +Y, for a camera whose unrotated view looks along -Z).
 ///
@@ -93,6 +108,18 @@ mod tests {
                 let rotated = quat * direction(local);
                 prop_assert!((rotated - direction(world)).length() < 1e-4);
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn source_round_trips(x in -16384.0f32..16384.0, y in -16384.0f32..16384.0, z in -16384.0f32..16384.0) {
+            let back = to_source_position(position([x, y, z]));
+            for (a, b) in back.iter().zip([x, y, z]) {
+                prop_assert!((a - b).abs() < 1e-2);
+            }
+            let turned = to_source_direction(direction([x, y, z]));
+            prop_assert!(turned.iter().zip([x, y, z]).all(|(a, b)| (a - b).abs() < 1e-6));
         }
     }
 

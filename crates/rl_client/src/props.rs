@@ -6,20 +6,34 @@
 //! child `Surface`, so the world's material resolver textures it with the
 //! skin's material like any world surface.
 //!
-//! Models are not lightmapped. A static prop compiled with baked per-vertex
-//! lighting (`sp_<index>.vhv`, direct light and shadows included) draws a
-//! copy of its meshes carrying that light as vertex colours, unlit, exactly
-//! as lightmapped surfaces show `albedo × light`. Every other prop picks up
-//! the map's ambient light from the irradiance volume.
+//! Models are not lightmapped. Each prop instead draws a copy of its meshes
+//! carrying its light as vertex colours, unlit, exactly as lightmapped
+//! surfaces show `albedo × light`:
+//!
+//! - a static prop compiled with baked per-vertex lighting (`sp_<index>.vhv`)
+//!   uses vrad's colours, direct light and shadows included;
+//! - every other prop is lit as the engine lights dynamic models: the ambient
+//!   cube at its centre plus the world lights that can see it, evaluated per
+//!   vertex normal.
+//!
+//! A prop for which neither is available falls back to the irradiance
+//! volume. Props are static until physics arrives (M4); a moving prop will
+//! need its light re-evaluated.
 
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use rl_assets::vertex_lighting::{colors_by_vertex, vertex_lit_mesh};
+use rl_assets::coords;
+use rl_assets::vertex_lighting::{colors_by_vertex, cube_lit_mesh, vertex_lit_mesh};
 use rl_assets::{MapAsset, ModelAsset, PlacedProp, PropKind, VertexLightingAsset};
+use source_formats::ambient::{AmbientCube, AmbientLighting};
 
 use crate::AppState;
 use crate::world::{MapHandle, MapScoped, MaterialMaps, Placeholder, Surface, VertexLit};
+
+/// Height above a prop's origin at which to light it when its centre is
+/// inside solid space: origins often sit exactly on the floor (8 units).
+const LIGHTING_LIFT: f32 = 8.0 * coords::METERS_PER_UNIT;
 
 /// Spawns and dresses the map's props while in [`AppState::InGame`].
 pub struct PropsPlugin;
@@ -125,30 +139,44 @@ fn transform_of(prop: &PlacedProp) -> Transform {
     }
 }
 
+/// How a prop's meshes are lit.
+enum PropLight {
+    /// vrad's baked colour per model vertex (static props).
+    Baked(Vec<[f32; 3]>),
+    /// The engine's model lighting at the prop: an ambient cube (Source
+    /// space) and the prop's rotation, to turn its normals into the world.
+    Cube(AmbientCube, Quat),
+    /// Nothing usable: the irradiance volume lights the prop.
+    Volume,
+}
+
 /// Gives every waiting prop whose model (and baked lighting, if any) has
 /// loaded one child per model mesh, tagged with the skin's material for the
 /// world's material resolver. Props whose model failed to load stop waiting
-/// (the asset server has already logged why) and stay empty; props whose
-/// lighting failed or does not fit the model fall back to the irradiance
-/// volume.
+/// (the asset server has already logged why) and stay empty.
 fn attach_models(
     mut commands: Commands,
-    waiting: Query<(Entity, &Prop), With<AwaitingModel>>,
+    waiting: Query<(Entity, &Prop, &Transform), With<AwaitingModel>>,
     models: Res<Assets<ModelAsset>>,
     lightings: Res<Assets<VertexLightingAsset>>,
+    map: Option<Res<MapHandle>>,
+    maps: Res<Assets<MapAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
     asset_server: Res<AssetServer>,
     placeholder: Res<Placeholder>,
     mut material_maps: ResMut<MaterialMaps>,
 ) {
-    for (entity, prop) in &waiting {
+    let map_lighting = map
+        .and_then(|map| maps.get(&map.0))
+        .and_then(|map| map.lighting.clone());
+    for (entity, prop, transform) in &waiting {
         let Some(model) = models.get(&prop.model) else {
             if asset_server.load_state(&prop.model).is_failed() {
                 commands.entity(entity).remove::<AwaitingModel>();
             }
             continue;
         };
-        let colors = match &prop.lighting {
+        let baked = match &prop.lighting {
             None => None,
             Some(handle) => match lightings.get(handle) {
                 Some(lighting) => {
@@ -162,15 +190,26 @@ fn attach_models(
                 None => continue,
             },
         };
+        let light = match baked {
+            Some(colors) => PropLight::Baked(colors),
+            None => map_lighting
+                .as_deref()
+                .and_then(|lighting| engine_lighting(lighting, transform, model))
+                .map_or(PropLight::Volume, |cube| {
+                    PropLight::Cube(cube, transform.rotation)
+                }),
+        };
 
         commands
             .entity(entity)
             .remove::<AwaitingModel>()
             .with_children(|parent| {
                 for part in &model.parts {
-                    let lit_mesh = colors
-                        .as_ref()
-                        .and_then(|colors| vertex_lit_mesh(meshes.get(&part.mesh)?, part, colors));
+                    let lit_mesh = meshes.get(&part.mesh).and_then(|base| match &light {
+                        PropLight::Baked(colors) => vertex_lit_mesh(base, part, colors),
+                        PropLight::Cube(cube, rotation) => cube_lit_mesh(base, *rotation, cube),
+                        PropLight::Volume => None,
+                    });
                     let lit = lit_mesh.is_some();
                     let mesh = lit_mesh.map_or_else(|| part.mesh.clone(), |mesh| meshes.add(mesh));
                     let mut child =
@@ -185,6 +224,22 @@ fn attach_models(
                 }
             });
     }
+}
+
+/// The engine's lighting for a model placed at `transform`, sampled at the
+/// centre of its bounds as the engine does. A model whose centre is inside a
+/// wall (or the floor) falls back to points nearer its origin.
+fn engine_lighting(
+    lighting: &AmbientLighting,
+    transform: &Transform,
+    model: &ModelAsset,
+) -> Option<AmbientCube> {
+    let (min, max) = model.bounds;
+    let center = transform.transform_point(min.midpoint(max));
+    let lifted = transform.translation + Vec3::Y * LIGHTING_LIFT;
+    [center, lifted, transform.translation]
+        .into_iter()
+        .find_map(|point| lighting.lighting_at(coords::to_source_position(point)))
 }
 
 #[cfg(test)]

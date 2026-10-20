@@ -19,6 +19,9 @@ use bevy_mesh::{Mesh, PrimitiveTopology};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
 use half::f16;
+use std::sync::Arc;
+
+use source_formats::ambient::AmbientLighting;
 use source_formats::bsp::{self, BspError, MapGeometry, MapSurface};
 use source_formats::lightmap::LightmapAtlas;
 use source_formats::props::{PropKind, PropPlacement};
@@ -101,6 +104,10 @@ pub struct MapAsset {
     pub props: Vec<PlacedProp>,
     /// Ambient light for models; `None` for maps without ambient samples.
     pub irradiance: Option<IrradianceVolumeData>,
+    /// The engine's model lighting (ambient cubes plus visible world
+    /// lights), queryable at any point; `None` for maps without ambient
+    /// samples.
+    pub lighting: Option<Arc<AmbientLighting>>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -116,6 +123,7 @@ impl Default for MapAsset {
             skybox: None,
             props: Vec::new(),
             irradiance: None,
+            lighting: None,
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -230,6 +238,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         skybox: None,
         props: geometry.props.iter().map(placed_prop).collect(),
         irradiance,
+        lighting: geometry.ambient.clone().map(Arc::new),
         center,
         radius: radius.max(1.0),
     }
