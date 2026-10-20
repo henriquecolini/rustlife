@@ -165,6 +165,9 @@ pub struct Server {
     initial: BTreeMap<BodyId, BodyPose>,
     clients: BTreeMap<ClientId, Client>,
     next_local: ClientId,
+    /// Packets for in-process clients, set aside before netcode sends (it
+    /// would take every connection's packets) until the client exchanges.
+    local_outbox: BTreeMap<ClientId, Vec<renet::Bytes>>,
     /// The owner's clock at the last update.
     now: Duration,
     /// Time not yet ticked.
@@ -208,6 +211,7 @@ impl Server {
             },
             clients: BTreeMap::new(),
             next_local: FIRST_LOCAL_ID,
+            local_outbox: BTreeMap::new(),
             now: Duration::ZERO,
             accumulated: Duration::ZERO,
         })
@@ -252,13 +256,43 @@ impl Server {
         let id = self.next_local;
         self.next_local -= 1;
         self.renet.add_connection(id);
+        self.local_outbox.insert(id, Vec::new());
         NetClient::local(id, config)
     }
 
     /// Moves packets between an in-process client and the server; `false`
     /// once the client is gone.
     pub fn exchange(&mut self, client: &mut NetClient) -> bool {
-        client.exchange_local(&mut self.renet)
+        let Some(id) = client.local_id() else {
+            return false;
+        };
+        self.set_local_packets_aside();
+        let packets = self.local_outbox.get_mut(&id).map(std::mem::take);
+        let Some(packets) = packets else {
+            return false;
+        };
+        let Some(to_server) = client.exchange_local(packets) else {
+            self.local_outbox.remove(&id);
+            self.renet.remove_connection(id);
+            return false;
+        };
+        for packet in to_server {
+            if self.renet.process_packet_from(&packet, id).is_err() {
+                self.local_outbox.remove(&id);
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Takes the in-process clients' outgoing packets from renet into
+    /// their outboxes.
+    fn set_local_packets_aside(&mut self) {
+        for (&id, outbox) in &mut self.local_outbox {
+            if let Ok(packets) = self.renet.get_packets_to_send(id) {
+                outbox.extend(packets.into_iter().map(renet::Bytes::from));
+            }
+        }
     }
 
     /// Receives, ticks as time allows, and sends, at `now` (the owner's
@@ -288,6 +322,7 @@ impl Server {
             }
             ticks.push(self.tick());
         }
+        self.set_local_packets_aside();
         if let Some(netcode) = &mut self.netcode {
             netcode.send_packets(&mut self.renet);
         }
@@ -311,6 +346,7 @@ impl Server {
                 }
                 ServerEvent::ClientDisconnected { client_id, reason } => {
                     tracing::info!(client = client_id, %reason, "client disconnected");
+                    self.local_outbox.remove(&client_id);
                     self.forget(client_id);
                 }
             }

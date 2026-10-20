@@ -22,7 +22,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use glam::Vec3;
-use renet::{Bytes, ClientId, RenetClient, RenetServer};
+use renet::{Bytes, ClientId, RenetClient};
 use rl_data::GameData;
 use rl_sim::movement::UserCmd;
 use rl_sim::physics::{BodyId, BodyPose};
@@ -435,12 +435,20 @@ impl NetClient {
         Some(prediction)
     }
 
-    /// For a client of a server in this process: moves packets between it
-    /// and `server`. Returns `false` for UDP clients and once the
-    /// connection is gone.
-    pub fn exchange_local(&mut self, server: &mut RenetServer) -> bool {
+    /// For a client of a server in this process: its id there.
+    #[must_use]
+    pub fn local_id(&self) -> Option<ClientId> {
+        self.transport.local_id()
+    }
+
+    /// For a client of a server in this process: takes the packets the
+    /// server sent it and returns those it sends back, through the
+    /// simulated conditions. `None` for UDP clients and once the client has
+    /// disconnected. The server calls this
+    /// (`rl_server::Server::exchange`).
+    pub fn exchange_local(&mut self, from_server: Vec<Bytes>) -> Option<Vec<Bytes>> {
         self.transport
-            .exchange_local(&mut self.renet, server, self.now)
+            .exchange_local(&mut self.renet, from_server, self.now)
     }
 
     /// Leaves the server.

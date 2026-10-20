@@ -267,6 +267,17 @@ fn prediction_converges_over_a_bad_link() {
     let data = data();
     let mut game = Game::new(data.clone());
     let client = game.join("Alice", "100ms,10ms,2%", local_hash(&data));
+    // Well clear of the crate: a pushed prop moves on the server before
+    // the client hears of it, which prediction cannot foresee.
+    let player = game.player(client).expect("player");
+    game.server
+        .sim_mut()
+        .teleport_player(player, Vec3::new(-1500.0, -1500.0, 1.0));
+    game.run(60, UserCmd::default());
+    let settled = game.clients[client]
+        .session()
+        .expect("session")
+        .corrections();
     // Run, strafe, jump and turn for a few seconds.
     let mut widest = 0.0f32;
     for tick in 0..400u32 {
@@ -298,7 +309,7 @@ fn prediction_converges_over_a_bad_link() {
     let session = game.clients[client].session().expect("session");
     assert_eq!(
         session.corrections(),
-        0,
+        settled,
         "nothing but the player moves them: no mispredictions"
     );
     // Standing still, the client settles exactly where the server has it.
@@ -576,7 +587,7 @@ fn kills_reach_every_client() {
 }
 
 #[test]
-fn a_game_over_udp() {
+fn a_game_over_udp_shared_with_an_in_process_player() {
     let data = data();
     let level = level(&data);
     let mut server = Server::new(
@@ -589,40 +600,41 @@ fn a_game_over_udp() {
     )
     .expect("server");
     let address = server.addresses()[0];
-    let config = ClientConfig {
-        name: "Remote".to_owned(),
+    let config = |name: &str| ClientConfig {
+        name: name.to_owned(),
         data_hash: local_hash(&data),
         conditions: NetConditions::NONE,
     };
-    let mut client = NetClient::connect(address, config).expect("connect");
+    // The host plays in-process while a remote player joins over UDP:
+    // netcode must not take the in-process player's packets.
+    let mut host = server.connect_local(config("Host"));
+    let mut remote = NetClient::connect(address, config("Remote")).expect("connect");
     let start = std::time::Instant::now();
-    let mut entered = false;
-    while start.elapsed() < Duration::from_secs(10) {
-        let now = start.elapsed();
-        server.update(now);
-        for event in client.update(now) {
-            if let ClientEvent::Welcome(welcome) = event {
-                assert!(welcome.data.is_none(), "same data, not resent");
-                assert_eq!(welcome.map.name, "test_arena");
-                assert_eq!(welcome.roster.len(), 0, "dummies are not players");
-                client.enter(level.simulation(&data).simulation, data.clone());
-                entered = true;
-            }
-        }
-        if entered {
-            client.tick(walk(1.0, 0.0, 0.0));
-        }
-        if client
+    let joined = |client: &NetClient| {
+        client
             .session()
             .and_then(rl_net::Session::latest)
-            .is_some_and(|state| state.players.len() == 2)
-        {
-            break;
+            .is_some_and(|state| state.players.len() == 3)
+    };
+    while start.elapsed() < Duration::from_secs(10) && !(joined(&host) && joined(&remote)) {
+        let now = start.elapsed();
+        server.update(now);
+        server.exchange(&mut host);
+        for client in [&mut host, &mut remote] {
+            for event in client.update(now) {
+                if let ClientEvent::Welcome(welcome) = event {
+                    assert!(welcome.data.is_none(), "same data, not resent");
+                    assert_eq!(welcome.map.name, "test_arena");
+                    client.enter(level.simulation(&data).simulation, data.clone());
+                }
+            }
+            client.tick(walk(1.0, 0.0, 0.0));
         }
+        server.exchange(&mut host);
         std::thread::sleep(Duration::from_millis(2));
     }
-    let session = client.session().expect("joined over UDP");
-    let latest = session.latest().expect("snapshots arrive over UDP");
-    assert_eq!(latest.players.len(), 2, "the client and the dummy");
+    assert!(joined(&host), "the in-process host sees everyone");
+    assert!(joined(&remote), "the UDP player sees everyone");
+    assert_eq!(server.players().count(), 2, "the dummy is not a client");
     server.shut_down();
 }

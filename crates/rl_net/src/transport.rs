@@ -15,7 +15,7 @@
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use renet::{Bytes, ClientId, RenetClient, RenetServer};
+use renet::{Bytes, ClientId, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use thiserror::Error;
 
@@ -163,32 +163,36 @@ impl Transport {
         None
     }
 
-    /// Moves packets between an in-process client and `server`; `false`
-    /// for UDP clients, or once the server has dropped the client.
+    /// The client's id at an in-process server; `None` over UDP.
+    pub(crate) fn local_id(&self) -> Option<ClientId> {
+        match self {
+            Self::Local { id, .. } => Some(*id),
+            Self::Udp { .. } => None,
+        }
+    }
+
+    /// For an in-process client: takes the packets the server sent it and
+    /// returns those it sends the server, both through the delay lines;
+    /// `None` for UDP clients, or once the client has disconnected.
     pub(crate) fn exchange_local(
         &mut self,
         renet: &mut RenetClient,
-        server: &mut RenetServer,
+        from_server: Vec<Bytes>,
         now: Duration,
-    ) -> bool {
+    ) -> Option<Vec<Bytes>> {
         let Self::Local {
-            id,
             to_server,
             to_client,
+            ..
         } = self
         else {
-            return false;
+            return None;
         };
         if renet.is_disconnected() {
-            server.remove_connection(*id);
-            return false;
+            return None;
         }
-        let Ok(packets) = server.get_packets_to_send(*id) else {
-            renet.disconnect_due_to_transport();
-            return false;
-        };
-        for packet in packets {
-            to_client.send(now, Bytes::from(packet), Delivery::Unreliable);
+        for packet in from_server {
+            to_client.send(now, packet, Delivery::Unreliable);
         }
         for packet in to_client.receive(now) {
             renet.process_packet(&packet);
@@ -196,13 +200,7 @@ impl Transport {
         for packet in renet.get_packets_to_send() {
             to_server.send(now, Bytes::from(packet), Delivery::Unreliable);
         }
-        for packet in to_server.receive(now) {
-            if server.process_packet_from(&packet, *id).is_err() {
-                renet.disconnect_due_to_transport();
-                return false;
-            }
-        }
-        true
+        Some(to_server.receive(now))
     }
 
     /// Tells the server the client is leaving, where the transport can.
