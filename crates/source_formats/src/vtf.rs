@@ -143,6 +143,33 @@ mod tests {
         assert_eq!(&decoded.rgba8[index..index + 4], &[17, 17, 2, 0xff]);
     }
 
+    /// Decodes a real texture (set `RUSTLIFE_TEST_VTF`) and checks it has real
+    /// detail rather than collapsing to a flat colour, which would indicate a
+    /// wrong mip or format being read.
+    #[test]
+    #[ignore = "requires a VTF file; set RUSTLIFE_TEST_VTF"]
+    fn decodes_a_real_texture_with_detail() {
+        let Ok(path) = std::env::var("RUSTLIFE_TEST_VTF") else {
+            return;
+        };
+        let decoded = decode(&std::fs::read(&path).expect("read vtf")).expect("decode");
+        let luma: Vec<f64> = decoded
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| (f64::from(p[0]) + f64::from(p[1]) + f64::from(p[2])) / 3.0)
+            .collect();
+        let mean = luma.iter().sum::<f64>() / luma.len() as f64;
+        let deviation =
+            (luma.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / luma.len() as f64).sqrt();
+        eprintln!(
+            "{path}: {}x{}, mean luma {mean:.1}, std dev {deviation:.1}",
+            decoded.width, decoded.height
+        );
+        assert!(deviation > 2.0, "texture should have visible detail");
+    }
+
     #[test]
     fn rejects_non_vtf_bytes() {
         let error = decode(b"not a vtf at all").unwrap_err();

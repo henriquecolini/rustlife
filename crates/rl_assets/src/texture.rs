@@ -2,7 +2,7 @@
 
 use bevy_asset::io::Reader;
 use bevy_asset::{AssetLoader, LoadContext, RenderAssetUsages};
-use bevy_image::Image;
+use bevy_image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
 use source_formats::vtf::{self, DecodedTexture, VtfError};
@@ -45,21 +45,33 @@ impl AssetLoader for VtfLoader {
     }
 }
 
-/// Wraps decoded VTF pixels in a GPU-ready [`Image`].
+/// Maximum anisotropic filtering. World textures are viewed at grazing angles
+/// constantly (floors, long corridors), where anisotropy matters most.
+const ANISOTROPY: u16 = 8;
+
+/// Wraps decoded VTF pixels in a GPU-ready [`Image`] with a full mip chain and
+/// a tiling sampler.
 ///
 /// Colour textures are tagged sRGB and normal maps linear, following the VTF
-/// `NORMAL` flag. The material layer may later rebuild a texture with the
-/// opposite colour space when the shader binding demands it.
+/// `NORMAL` flag. Source texture coordinates routinely run far outside `0..1`
+/// (a wall tiles its texture many times), so the sampler must *repeat*: Bevy's
+/// default clamps to the edge, which smears each texture's border pixels across
+/// whole surfaces.
 fn image_from_decoded(texture: DecodedTexture) -> Image {
     let format = if texture.is_normal_map {
         TextureFormat::Rgba8Unorm
     } else {
         TextureFormat::Rgba8UnormSrgb
     };
-    Image::new(
+    let (width, height) = (texture.width, texture.height);
+    let (chain, levels) = mip_chain(width, height, &texture.rgba8);
+
+    // `Image::new` validates the data against a single mip level, so build with
+    // the base level and then swap in the whole chain.
+    let mut image = Image::new(
         Extent3d {
-            width: texture.width,
-            height: texture.height,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -67,7 +79,58 @@ fn image_from_decoded(texture: DecodedTexture) -> Image {
         format,
         // Drop the CPU copy after upload; world textures are not read back.
         RenderAssetUsages::RENDER_WORLD,
-    )
+    );
+    image.data = Some(chain);
+    image.texture_descriptor.mip_level_count = levels;
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        address_mode_w: ImageAddressMode::Repeat,
+        anisotropy_clamp: ANISOTROPY,
+        ..ImageSamplerDescriptor::linear()
+    });
+    image
+}
+
+/// Builds a complete mip chain (base level first) for tightly packed RGBA8
+/// pixels with a 2×2 box filter, returning the concatenated levels and their
+/// count.
+///
+/// VTFs carry their own mips, but the `vtf` crate only exposes the base level,
+/// and regenerating is cheap. The filter averages in the stored (sRGB) space,
+/// which slightly darkens high-contrast detail in distant mips — acceptable for
+/// world textures, and simple to replace with linear-space filtering later.
+fn mip_chain(width: u32, height: u32, base: &[u8]) -> (Vec<u8>, u32) {
+    let mut chain = base.to_vec();
+    let mut levels = 1;
+    let (mut w, mut h) = (width as usize, height as usize);
+    let mut previous = base.to_vec();
+
+    while w > 1 || h > 1 {
+        let (next_w, next_h) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0u8; next_w * next_h * 4];
+        for y in 0..next_h {
+            for x in 0..next_w {
+                // Sample the 2×2 source block, clamping for odd or 1-wide sizes.
+                let xs = [(x * 2).min(w - 1), (x * 2 + 1).min(w - 1)];
+                let ys = [(y * 2).min(h - 1), (y * 2 + 1).min(h - 1)];
+                for channel in 0..4 {
+                    let sum: u32 = ys
+                        .iter()
+                        .flat_map(|&sy| xs.iter().map(move |&sx| (sy * w + sx) * 4 + channel))
+                        .map(|index| u32::from(previous[index]))
+                        .sum();
+                    next[(y * next_w + x) * 4 + channel] = ((sum + 2) / 4) as u8;
+                }
+            }
+        }
+        chain.extend_from_slice(&next);
+        previous = next;
+        w = next_w;
+        h = next_h;
+        levels += 1;
+    }
+    (chain, levels)
 }
 
 #[cfg(test)]
@@ -89,6 +152,47 @@ mod tests {
             image.texture_descriptor.format,
             TextureFormat::Rgba8UnormSrgb
         );
+    }
+
+    #[test]
+    fn mip_chain_halves_down_to_one_pixel() {
+        let base = vec![10u8; 8 * 4 * 4];
+        let (chain, levels) = mip_chain(8, 4, &base);
+        // 8x4, 4x2, 2x1, 1x1
+        assert_eq!(levels, 4);
+        assert_eq!(chain.len(), (8 * 4 + 4 * 2 + 2 + 1) * 4);
+        assert!(
+            chain.iter().all(|&v| v == 10),
+            "uniform input stays uniform"
+        );
+    }
+
+    #[test]
+    fn mip_chain_box_filters_each_block() {
+        // 2x2 checker of 0 and 200 averages to 100 at the 1x1 level.
+        let base = [
+            0, 0, 0, 255, 200, 200, 200, 255, 200, 200, 200, 255, 0, 0, 0, 255,
+        ];
+        let (chain, levels) = mip_chain(2, 2, &base);
+        assert_eq!(levels, 2);
+        assert_eq!(&chain[16..], &[100, 100, 100, 255]);
+    }
+
+    #[test]
+    fn images_tile_and_carry_their_mips() {
+        let decoded = DecodedTexture {
+            width: 4,
+            height: 4,
+            rgba8: vec![0u8; 4 * 4 * 4],
+            is_normal_map: false,
+        };
+        let image = image_from_decoded(decoded);
+        assert_eq!(image.texture_descriptor.mip_level_count, 3);
+        let ImageSampler::Descriptor(sampler) = &image.sampler else {
+            panic!("expected an explicit sampler");
+        };
+        assert_eq!(sampler.address_mode_u, ImageAddressMode::Repeat);
+        assert_eq!(sampler.address_mode_v, ImageAddressMode::Repeat);
     }
 
     #[test]
