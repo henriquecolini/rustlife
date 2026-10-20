@@ -139,7 +139,7 @@ where
 fn describe(material: &Material) -> MaterialDesc {
     MaterialDesc {
         kind: kind_of(material),
-        base_texture: material.base_texture().map(str::to_owned),
+        base_texture: base_texture(material).map(str::to_owned),
         base_texture2: match material {
             Material::WorldVertexTransition(blend) => Some(blend.base_texture2.clone()),
             _ => None,
@@ -150,6 +150,23 @@ fn describe(material: &Material) -> MaterialDesc {
         alpha_test: material.alpha_test(),
         no_cull: material.no_cull(),
     }
+}
+
+/// `$basetexture` for any shader. `vmt-parser`'s own `base_texture()` returns
+/// `None` for several shaders that do have one — notably `sky`, which would
+/// otherwise make a skybox fall back to its compressed-HDR texture and render
+/// as garbage — so those are filled in here.
+fn base_texture(material: &Material) -> Option<&str> {
+    material.base_texture().or(match material {
+        Material::Sky(sky) => Some(&sky.base_texture),
+        Material::Modulate(modulate) | Material::DecalModulate(modulate) => {
+            Some(&modulate.base_texture)
+        }
+        Material::Cable(cable) => Some(&cable.base_texture),
+        Material::Refract(refract) => refract.base_texture.as_deref(),
+        Material::SpriteCard(sprite) => sprite.base_texture.as_deref(),
+        _ => None,
+    })
 }
 
 /// Maps a `vmt-parser` shader variant to our coarser [`MaterialKind`].
@@ -230,6 +247,33 @@ mod tests {
         assert_eq!(desc.kind, MaterialKind::WorldVertexTransition);
         assert_eq!(desc.base_texture.as_deref(), Some("nature/grass01"));
         assert_eq!(desc.base_texture2.as_deref(), Some("nature/dirt01"));
+    }
+
+    #[test]
+    fn sky_materials_report_their_ldr_base_texture() {
+        // HL2's HDR skies carry both an encoded HDR texture and a plain LDR
+        // one; the base texture must be the LDR one.
+        let desc = parse(
+            r#"
+            "sky"
+            {
+                "$hdrcompressedTexture" "skybox/sky_day03_04_hdrrt"
+                "$basetexture" "skybox/sky_day03_04rt"
+            }
+            "#,
+        )
+        .expect("parse");
+        assert_eq!(desc.kind, MaterialKind::Sky);
+        assert_eq!(desc.base_texture.as_deref(), Some("skybox/sky_day03_04rt"));
+    }
+
+    #[test]
+    fn modulate_and_cable_materials_report_their_base_texture() {
+        for shader in ["Modulate", "DecalModulate", "Cable"] {
+            let desc =
+                parse(&format!(r#""{shader}" {{ "$basetexture" "decals/x" }}"#)).expect("parse");
+            assert_eq!(desc.base_texture.as_deref(), Some("decals/x"), "{shader}");
+        }
     }
 
     #[test]
