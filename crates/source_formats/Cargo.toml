@@ -9,6 +9,10 @@ authors.workspace = true
 publish.workspace = true
 description = "Typed wrappers and gap-fills over the Source engine format parsers rustlife uses."
 
+[features]
+# Builders for synthetic files, for other crates' tests.
+testing = []
+
 [dependencies]
 source_fs.workspace = true
 thiserror.workspace = true
