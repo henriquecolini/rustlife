@@ -1,0 +1,28 @@
+[package]
+name = "rl_server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "The rustlife server: runs a map's simulation authoritatively for its clients."
+
+[dependencies]
+glam.workspace = true
+renet.workspace = true
+renet_netcode.workspace = true
+rl_data.workspace = true
+rl_level.workspace = true
+rl_net.workspace = true
+rl_sim.workspace = true
+source_fs.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+source_formats.workspace = true
+
+[lints]
+workspace = true

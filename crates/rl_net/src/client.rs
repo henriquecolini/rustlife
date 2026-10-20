@@ -45,6 +45,8 @@ const STATES_KEPT: usize = 96;
 /// A correction bigger than this is a teleport, not an error to smooth
 /// away, units.
 const MAX_SMOOTHED_ERROR: f32 = 64.0;
+/// Corrections smaller than this are rounding, not mispredictions, units.
+const CORRECTION_EPSILON: f32 = 0.01;
 /// Seconds over which a prediction error fades to a third.
 const ERROR_FADE_SECS: f32 = 0.1;
 /// Commands the client tries to keep waiting at the server, to ride out
@@ -93,6 +95,8 @@ pub struct Session {
     queued: f32,
     /// How far the drawn view is from the predicted one, fading away.
     error: Vec3,
+    /// Snapshots that moved the predicted player.
+    corrections: u32,
 }
 
 impl Session {
@@ -108,6 +112,7 @@ impl Session {
             view_tick: None,
             queued: TARGET_QUEUE,
             error: Vec3::ZERO,
+            corrections: 0,
         }
     }
 
@@ -135,6 +140,13 @@ impl Session {
     #[must_use]
     pub fn prediction_error(&self) -> Vec3 {
         self.error
+    }
+
+    /// How many snapshots found the prediction wrong and moved the local
+    /// player: a measure of how well prediction works.
+    #[must_use]
+    pub fn corrections(&self) -> u32 {
+        self.corrections
     }
 
     /// The newest world state received.
@@ -213,6 +225,9 @@ impl Session {
         }
         if let (Some(before), Some(after)) = (before, eye(&self.sim, player)) {
             let correction = before - after;
+            if correction.length_squared() > CORRECTION_EPSILON * CORRECTION_EPSILON {
+                self.corrections += 1;
+            }
             self.error = if (self.error + correction).length() < MAX_SMOOTHED_ERROR {
                 self.error + correction
             } else {

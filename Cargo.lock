@@ -5630,6 +5630,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl_server"
+version = "0.1.0"
+dependencies = [
+ "glam 0.33.12",
+ "renet",
+ "renet_netcode",
+ "rl_data",
+ "rl_level",
+ "rl_net",
+ "rl_sim",
+ "source_formats",
+ "source_fs",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "rl_sim"
 version = "0.1.0"
 dependencies = [
@@ -5754,6 +5771,21 @@ dependencies = [
  "anyhow",
  "clap",
  "rl_config",
+ "source_fs",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "rustlife-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rl_config",
+ "rl_data",
+ "rl_level",
+ "rl_server",
  "source_fs",
  "tracing",
  "tracing-subscriber",

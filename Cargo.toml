@@ -19,6 +19,7 @@ rl_config = { path = "crates/rl_config" }
 rl_data = { path = "crates/rl_data" }
 rl_level = { path = "crates/rl_level" }
 rl_net = { path = "crates/rl_net" }
+rl_server = { path = "crates/rl_server" }
 rl_sim = { path = "crates/rl_sim" }
 source_formats = { path = "crates/source_formats" }
 source_fs = { path = "crates/source_fs" }
