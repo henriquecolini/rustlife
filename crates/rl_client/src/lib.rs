@@ -1,8 +1,8 @@
 //! The rustlife client: a Bevy app that mounts the player's game content and
 //! renders a map.
 //!
-//! In M1 this is a world viewer — it loads a BSP through the `source://` asset
-//! source and flies a free camera around it. Later milestones add the player
+//! For now this is a world viewer — it loads a BSP and its props through the
+//! `source://` asset source and flies a free camera around it. Later milestones add the player
 //! simulation, networking, HUD and audio on top of the same app.
 
 #![forbid(unsafe_code)]
@@ -16,11 +16,13 @@ use source_fs::Vfs;
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
+use crate::props::PropsPlugin;
 use crate::world::WorldPlugin;
 
 pub mod browser;
 pub mod camera;
 pub mod capture;
+pub mod props;
 pub mod world;
 
 /// Top-level client state.
@@ -74,7 +76,7 @@ pub fn run(vfs: Arc<Vfs>, map: Option<String>, spawn: usize, capture: Option<Cap
     app.insert_state(start);
     app.insert_resource(CursorGrab(capture.is_none()));
     app.add_plugins(FlyCamPlugin);
-    app.add_plugins((WorldPlugin { spawn }, BrowserPlugin));
+    app.add_plugins((WorldPlugin { spawn }, PropsPlugin, BrowserPlugin));
     if let Some(capture) = capture {
         app.add_plugins(CapturePlugin(capture));
     }

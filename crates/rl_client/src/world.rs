@@ -3,12 +3,16 @@
 //! The map's pakfile is mounted, its geometry spawned as one entity per
 //! material, and each surface's `StandardMaterial` is built from the resolved
 //! VMT ([`rl_assets::SourceMaterial`]) as it streams in. World surfaces are lit
-//! by the map's baked lightmap; dynamic lights only touch unlit content.
+//! by the map's baked lightmap; models (see [`crate::props`]) by its ambient
+//! cubes, through an irradiance volume that leaves lightmapped surfaces alone.
+//!
+//! Every root entity a map creates carries `MapScoped`, so leaving the map
+//! tears all of it down in one place.
 
 use std::collections::HashMap;
 
 use bevy::camera::Exposure;
-use bevy::light::Skybox;
+use bevy::light::{IrradianceVolume, Skybox};
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use rl_assets::{MapAsset, SOURCE, SourceMaterial};
@@ -19,7 +23,12 @@ use crate::{AppState, CurrentMap, GameVfs};
 
 /// Handle to the map currently being loaded.
 #[derive(Resource)]
-struct MapHandle(Handle<MapAsset>);
+pub(crate) struct MapHandle(pub(crate) Handle<MapAsset>);
+
+/// Marks a root entity that belongs to the loaded map and is despawned (with
+/// its children) when the map is left.
+#[derive(Component)]
+pub(crate) struct MapScoped;
 
 /// Whether the loaded map's meshes have been spawned yet (one-shot guard).
 #[derive(Resource)]
@@ -28,9 +37,20 @@ struct MapSpawned(bool);
 /// Per-material handles: the `SourceMaterial` being loaded for each material
 /// name, and the materials built from it once ready.
 #[derive(Resource, Default)]
-struct MaterialMaps {
+pub(crate) struct MaterialMaps {
     source: HashMap<String, Handle<SourceMaterial>>,
     resolved: HashMap<String, Resolved>,
+}
+
+impl MaterialMaps {
+    /// Starts loading material `name` (relative to `materials/`, without
+    /// extension) unless it is already loading.
+    pub(crate) fn request(&mut self, name: &str, asset_server: &AssetServer) {
+        if !self.source.contains_key(name) {
+            let handle = asset_server.load(format!("{SOURCE}://materials/{name}.vmt"));
+            self.source.insert(name.to_owned(), handle);
+        }
+    }
 }
 
 /// The Bevy materials built for one Source material.
@@ -38,9 +58,17 @@ struct MaterialMaps {
 struct Resolved {
     /// The surface's own (base) material.
     base: Handle<StandardMaterial>,
+    /// The same material drawn unlit, for meshes whose vertex colours carry
+    /// baked light ([`VertexLit`]).
+    vertex_lit: Handle<StandardMaterial>,
     /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
     blend: Option<Handle<StandardMaterial>>,
 }
+
+/// Marks a [`Surface`] whose vertex colours are its baked lighting: it is
+/// drawn unlit, as `albedo × vertex colour`, like a lightmapped surface.
+#[derive(Component)]
+pub(crate) struct VertexLit;
 
 /// Marks a surface whose blend layer has already been spawned.
 #[derive(Component)]
@@ -48,11 +76,12 @@ struct BlendLayered;
 
 /// The neutral material a surface shows until its real material is ready.
 #[derive(Resource)]
-struct Placeholder(Handle<StandardMaterial>);
+pub(crate) struct Placeholder(pub(crate) Handle<StandardMaterial>);
 
-/// Tags a mesh entity with the material name it is waiting to resolve.
+/// Tags a mesh entity (world surface or model part) with the material name
+/// whose `StandardMaterial` it should be drawn with once resolved.
 #[derive(Component)]
-struct Surface(String);
+pub(crate) struct Surface(pub(crate) String);
 
 /// Which spawn point the camera starts at (wrapped to the map's spawn count).
 #[derive(Resource)]
@@ -72,7 +101,7 @@ impl Plugin for WorldPlugin {
             .insert_resource(MapSpawned(false))
             .init_resource::<MaterialMaps>()
             .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.12)))
-            .add_systems(Startup, setup_lighting)
+            .add_systems(Startup, setup_placeholder)
             .add_systems(OnEnter(AppState::InGame), start_load)
             .add_systems(OnExit(AppState::InGame), unload_map)
             .add_systems(
@@ -90,38 +119,30 @@ impl Plugin for WorldPlugin {
 /// term is zero too, so lightmapped surfaces show `albedo × lightmap` alone.
 const WORLD_REFLECTANCE: f32 = 0.0;
 
-/// Scale applied to lightmap texels so a decoded luxel of `1.0` — Source's
-/// nominal full brightness — renders as the unmodified texture colour.
+/// Scale applied to baked light (lightmap texels, ambient cubes, sky texels)
+/// so a value of `1.0` — Source's nominal full brightness — renders as the
+/// unmodified texture colour.
 ///
-/// Bevy treats lightmap values as scene radiance and then applies the camera's
+/// Bevy treats baked light as scene radiance and then applies the camera's
 /// exposure; dividing that exposure back out makes the final colour
-/// `albedo × luxel`, which is what Source's `LightmappedGeneric` produces.
-fn lightmap_exposure() -> f32 {
+/// `albedo × light`, which is what Source's shaders produce.
+pub(crate) fn baked_light_scale() -> f32 {
     1.0 / Exposure::default().exposure()
 }
 
-fn setup_lighting(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+/// Creates the placeholder material. There are deliberately no real-time
+/// lights: the world is lit by its lightmaps and models by the ambient cubes,
+/// both baked by `vrad`.
+fn setup_placeholder(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(Placeholder(materials.add(StandardMaterial {
         base_color: Color::srgb(0.6, 0.6, 0.62),
         perceptual_roughness: 0.9,
         reflectance: WORLD_REFLECTANCE,
         cull_mode: None,
         double_sided: true,
-        lightmap_exposure: lightmap_exposure(),
+        lightmap_exposure: baked_light_scale(),
         ..default()
     })));
-
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 8_000.0,
-            shadow_maps_enabled: false,
-            // Baked lighting already includes the sun; adding it again would
-            // double-light the world.
-            affects_lightmapped_mesh_diffuse: false,
-            ..default()
-        },
-        Transform::from_xyz(1.0, 3.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
 }
 
 fn start_load(
@@ -175,20 +196,20 @@ fn mount_pakfile(vfs: &Vfs, map: &str) {
     }
 }
 
-/// Tears down everything [`start_load`] and [`spawn_when_loaded`] created: the
-/// surface entities, the camera's skybox, the material cache, the map handle
-/// (letting its assets unload) and the map's pakfile mount.
+/// Tears down everything the map created: the [`MapScoped`] entities, the
+/// camera's skybox, the material cache, the map handle (letting its assets
+/// unload) and the map's pakfile mount.
 fn unload_map(
     mut commands: Commands,
-    surfaces: Query<Entity, With<Surface>>,
+    scoped: Query<Entity, With<MapScoped>>,
     cameras: Query<Entity, With<FlyCam>>,
     mut material_maps: ResMut<MaterialMaps>,
     mut spawned: ResMut<MapSpawned>,
     map_name: Res<CurrentMap>,
     vfs: Res<GameVfs>,
 ) {
-    for surface in &surfaces {
-        commands.entity(surface).despawn();
+    for entity in &scoped {
+        commands.entity(entity).despawn();
     }
     for camera in &cameras {
         commands.entity(camera).remove::<Skybox>();
@@ -233,16 +254,12 @@ fn spawn_when_loaded(
     // Spawn each surface with the placeholder material and start loading its
     // VMT. `resolve_materials` swaps in the real material once it is ready.
     for mesh in &map.meshes {
-        material_maps
-            .source
-            .entry(mesh.material.clone())
-            .or_insert_with(|| {
-                asset_server.load(format!("{SOURCE}://materials/{}.vmt", mesh.material))
-            });
+        material_maps.request(&mesh.material, &asset_server);
         let mut surface = commands.spawn((
             Mesh3d(mesh.mesh.clone()),
             MeshMaterial3d(placeholder.0.clone()),
             Surface(mesh.material.clone()),
+            MapScoped,
         ));
         // Every surface shares the map's single atlas; its UV_1 coordinates
         // already address its own blocks, so the rect is the whole image.
@@ -255,6 +272,20 @@ fn spawn_when_loaded(
         }
     }
 
+    // Models are lit from the ambient cubes; lightmapped surfaces already
+    // include that light and must not receive it twice.
+    if let Some(volume) = &map.irradiance {
+        commands.spawn((
+            IrradianceVolume {
+                voxels: volume.voxels.clone(),
+                intensity: baked_light_scale(),
+                affects_lightmapped_meshes: false,
+            },
+            Transform::from_translation(volume.placement.center).with_scale(volume.placement.size),
+            MapScoped,
+        ));
+    }
+
     // Drop the camera into the middle of the level and scale its speed to the
     // map so flying across it takes a sensible number of seconds.
     if let Ok((entity, mut transform, mut cam)) = camera.single_mut() {
@@ -264,7 +295,7 @@ fn spawn_when_loaded(
                 image: Some(sky.clone()),
                 // Like the lightmap, undo the camera exposure so sky texels
                 // render at their authored brightness.
-                brightness: lightmap_exposure(),
+                brightness: baked_light_scale(),
                 rotation: Quat::IDENTITY,
             });
         }
@@ -301,6 +332,7 @@ type SurfaceItems = (
     Option<&'static Lightmap>,
     &'static mut MeshMaterial3d<StandardMaterial>,
     Has<BlendLayered>,
+    Has<VertexLit>,
 );
 
 /// Swaps each surface's placeholder material for the real one as soon as its
@@ -315,7 +347,7 @@ fn resolve_materials(
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, surface, mesh, lightmap, mut material, layered) in &mut surfaces {
+    for (entity, surface, mesh, lightmap, mut material, layered, vertex_lit) in &mut surfaces {
         let name = &surface.0;
 
         let resolved = if let Some(resolved) = material_maps.resolved.get(name) {
@@ -327,8 +359,13 @@ fn resolve_materials(
             let Some(source) = source_materials.get(&source_handle) else {
                 continue;
             };
+            let base = standard_from(source);
             let resolved = Resolved {
-                base: standard_materials.add(standard_from(source)),
+                vertex_lit: standard_materials.add(StandardMaterial {
+                    unlit: true,
+                    ..base.clone()
+                }),
+                base: standard_materials.add(base),
                 blend: source
                     .base_color2
                     .clone()
@@ -340,8 +377,13 @@ fn resolve_materials(
             resolved
         };
 
-        if material.0 != resolved.base {
-            material.0 = resolved.base.clone();
+        let wanted = if vertex_lit {
+            &resolved.vertex_lit
+        } else {
+            &resolved.base
+        };
+        if material.0 != *wanted {
+            material.0 = wanted.clone();
         }
         if let (Some(blend), false) = (resolved.blend, layered) {
             let mut layer = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(blend)));
@@ -372,7 +414,7 @@ fn blend_layer(texture: Handle<Image>) -> StandardMaterial {
         // Coplanar with the base layer: nudge it towards the camera so the
         // depth test never rejects it.
         depth_bias: 1.0,
-        lightmap_exposure: lightmap_exposure(),
+        lightmap_exposure: baked_light_scale(),
         ..default()
     }
 }
@@ -396,7 +438,7 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         cull_mode: None,
         double_sided: true,
         alpha_mode,
-        lightmap_exposure: lightmap_exposure(),
+        lightmap_exposure: baked_light_scale(),
         ..default()
     }
 }
