@@ -94,3 +94,44 @@ follows Quake's naming in its Z-up frame: `rt` +X, `lf` −X, `bk` +Y, `ft` −Y
 turns clockwise and `dn` one. Those rotations were found by scoring all
 4⁶ combinations on seam continuity over three stock skies, and an ignored test
 re-checks them.
+
+## Static props
+
+The `sprp` game lump holds a model-name dictionary, a leaf list, and one
+record per prop: origin, angles (`pitch yaw roll`, degrees), dictionary index,
+solidity, skin, fade distances, a lighting origin and flags. `vbsp` reads
+versions 4–7, 9 and 10 (stock HL2DM maps use 6 and 7). Props flagged
+`NO_DRAW` (0x4) are skipped; `USE_LIGHTING_ORIGIN` (0x2) means the stored
+lighting origin replaces the model's centre as the point it is lit from.
+`vbsp`'s `model()` accessor indexes the dictionary unchecked, so rustlife
+indexes it itself.
+
+Model entities (`prop_dynamic*`, `prop_physics*`, `prop_ragdoll`,
+`prop_door_rotating`) come from the entity lump with `model`, `origin`,
+`angles`, `skin` and `modelscale`; `rendermode 10` hides one.
+
+Source angles compose as `R = Rz(yaw) · Ry(pitch) · Rx(roll)` (`AngleMatrix`),
+with positive pitch looking down.
+
+`vrad` also bakes per-vertex lighting for each static prop into the pakfile as
+`sp_<index>.vhv` (`sp_hdr_<index>.vhv` for HDR). rustlife does not read these
+yet; props are lit from the ambient cubes below.
+
+## Ambient lighting
+
+Models are lit from *ambient cubes*: six colours, one per axis direction in
+the order `+X −X +Y −Y +Z −Z`, combined by `Σ nᵢ² · cube[side]` for a normal
+`n`. In version 20 maps each leaf has an entry in lump 52 (HDR: 51) of
+`u16 sample_count, u16 first_sample` pointing into lump 56 (HDR: 55), whose
+28-byte samples are six `ColorRGBExp32` colours followed by the sample's
+position as three `u8` fractions of the leaf's bounding box. Version 19 maps
+instead embed one cube in each 56-byte leaf at offset 30.
+
+Ambient colours are decoded like luxels **times 255** (the engine's
+`ColorRGBExp32ToVector` carries that factor), which puts them on the same
+scale as lightmaps. At a point, the engine blends the containing leaf's
+samples with weights `1 / (distance² + 1)`.
+
+`vbsp` sorts leaves by cluster after reading them, so its leaf indices no
+longer match the node tree's children or the ambient index; rustlife reads the
+leaf lump and walks the tree itself.

@@ -20,7 +20,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 use vbsp::Bsp;
 
+use crate::ambient::{self, AmbientLighting};
 use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, Placement, decode_luxel};
+use crate::props::{self, PropPlacement};
 
 /// BSP lump index of the low-dynamic-range lighting data the face lump's
 /// `light_offset`s point into.
@@ -84,6 +86,11 @@ pub struct MapGeometry {
     /// The worldspawn `skyname` (e.g. `sky_day02_09`), naming the 2D skybox
     /// textures under `materials/skybox/`.
     pub sky_name: Option<String>,
+    /// Static props and prop entities placed in the map.
+    pub props: Vec<PropPlacement>,
+    /// The baked ambient light models are lit by, or `None` if the map has
+    /// none.
+    pub ambient: Option<AmbientLighting>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -193,6 +200,8 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         spawns: spawn_points(&bsp),
         lightmap: lightmaps.map(|packed| packed.atlas),
         sky_name: sky_name(&bsp),
+        props: props::props(&bsp),
+        ambient: ambient::load(&bsp, bytes),
     })
 }
 
@@ -340,21 +349,30 @@ fn face_luxels(face: &vbsp::Face, lighting: &[u8]) -> Option<(usize, usize, Vec<
 
 /// Returns the bytes of lump `index`, or `None` if the header is invalid or the
 /// lump lies outside the file. Reads only the lump directory.
-fn lump(bytes: &[u8], index: usize) -> Option<&[u8]> {
-    if bytes.get(0..4)? != b"VBSP" {
-        return None;
-    }
-    let entry = LUMP_DIRECTORY_OFFSET + index * LUMP_ENTRY_SIZE;
-    let read_i32 = |at: usize| -> Option<i32> {
-        Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
-    };
-    let start = usize::try_from(read_i32(entry)?).ok()?;
-    let length = usize::try_from(read_i32(entry + 4)?).ok()?;
+pub(crate) fn lump(bytes: &[u8], index: usize) -> Option<&[u8]> {
+    let start = usize::try_from(lump_field(bytes, index, 0)?).ok()?;
+    let length = usize::try_from(lump_field(bytes, index, 1)?).ok()?;
     bytes.get(start..start.checked_add(length)?)
 }
 
+/// Returns the format version of lump `index` from the lump directory, or
+/// `None` if the header is invalid.
+pub(crate) fn lump_version(bytes: &[u8], index: usize) -> Option<i32> {
+    lump_field(bytes, index, 2)
+}
+
+/// Reads field `field` (0 = offset, 1 = length, 2 = version) of lump `index`'s
+/// directory entry.
+fn lump_field(bytes: &[u8], index: usize, field: usize) -> Option<i32> {
+    if bytes.get(0..4)? != b"VBSP" {
+        return None;
+    }
+    let at = LUMP_DIRECTORY_OFFSET + index * LUMP_ENTRY_SIZE + field * 4;
+    Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+}
+
 /// Parses a KeyValues vector such as `"-1024 512 64"`.
-fn parse_vector(text: &str) -> Option<[f32; 3]> {
+pub(crate) fn parse_vector(text: &str) -> Option<[f32; 3]> {
     let mut parts = text.split_whitespace().map(str::parse::<f32>);
     let vector = [
         parts.next()?.ok()?,
@@ -477,5 +495,12 @@ mod tests {
         let pak = pakfile_bytes(&bytes).expect("map has a pakfile");
         assert_eq!(&pak[0..2], b"PK", "pakfile is a zip archive");
         eprintln!("pakfile: {} bytes", pak.len());
+
+        eprintln!("props: {}", geometry.props.len());
+        assert!(!geometry.props.is_empty(), "a stock map places props");
+        assert!(
+            geometry.ambient.is_some(),
+            "a stock map bakes ambient light"
+        );
     }
 }
