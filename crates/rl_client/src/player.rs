@@ -28,7 +28,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rl_assets::coords;
 use rl_data::{GameData, MovementConfig};
 use rl_sim::movement::PlayerState;
-use rl_sim::simulation::{PlayerId, Prediction, Simulation, Spawn, TickEvents};
+use rl_sim::simulation::{MapEvent, PlayerId, Prediction, Simulation, Spawn, TickEvents};
 
 use crate::AppState;
 use crate::camera::{FlyCam, MOUSE_SENSITIVITY};
@@ -208,7 +208,8 @@ fn view_only_without_a_game(
     }
 }
 
-/// Turns the view to where the local player respawned.
+/// Turns the view to where the local player respawned, or the way a
+/// teleport's destination faces (keeping the pitch).
 fn face_respawns(
     mut ticks: MessageReader<Ticked>,
     local: Option<Res<LocalPlayer>>,
@@ -228,6 +229,13 @@ fn face_respawns(
                 pitch: 0.0,
                 yaw: respawn.spawn.yaw,
             };
+        }
+        let teleported = events.map.iter().find_map(|event| match *event {
+            MapEvent::Teleported { player, spawn } if player == local.id => Some(spawn.yaw),
+            _ => None,
+        });
+        if let Some(yaw) = teleported {
+            angles.yaw = yaw;
         }
     }
 }

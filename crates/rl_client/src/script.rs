@@ -14,7 +14,9 @@
 //! - **fire**: press primary fire once (throwing whatever is held);
 //! - **shoot**: go to the living player nearest the local one — a short
 //!   way off, facing them — and hold primary fire at them for a while;
-//! - **visit**: go and look at the pickup nearest the player.
+//! - **visit**: go and look at the pickup nearest the player;
+//! - **use**: go to the nearest of the map's movers of a class (a button,
+//!   a door), look at it and press use once.
 //!
 //! Only walking and pressing fire are plain input; the other steps move
 //! the player or hand them a weapon, which only a game this client hosts
@@ -35,6 +37,11 @@ const GRAB_STAND_OFF: f32 = 110.0;
 const SHOOT_STAND_OFF: f32 = 320.0;
 /// How far from a pickup the visit step places the player, units.
 const VISIT_STAND_OFF: f32 = 90.0;
+/// How far from a mover's centre the use step places the player, units:
+/// within use range of a wall button's face.
+const USE_STAND_OFF: f32 = 56.0;
+/// Seconds the use step faces the mover before pressing use.
+const USE_DELAY: f32 = 0.25;
 /// Rounds of the scripted weapon's ammo given with it.
 const SCRIPT_AMMO: u32 = 1000;
 /// Directions tried around a target when looking for somewhere to stand.
@@ -57,6 +64,8 @@ pub struct InputScript {
     pub shoot: Option<(f32, f32)>,
     /// From this time, look at the nearest pickup.
     pub visit_at: Option<f32>,
+    /// From `.0`, go to the nearest mover of class `.1` and use it.
+    pub use_mover: Option<(f32, String)>,
     progress: Progress,
 }
 
@@ -86,6 +95,14 @@ impl InputScript {
         self
     }
 
+    /// This script, also using the nearest mover of a class (`.1`) at
+    /// `.0`.
+    #[must_use]
+    pub fn with_use(mut self, use_mover: Option<(f32, String)>) -> Self {
+        self.use_mover = use_mover;
+        self
+    }
+
     /// This script, also shooting the nearest player from `start` for
     /// `duration` seconds.
     #[must_use]
@@ -111,6 +128,11 @@ struct Progress {
     /// Once the visit step has looked for one: the view angles aimed at
     /// the nearest pickup.
     sight: Search<(f32, f32)>,
+    /// Once the use step has looked for one: the view angles aimed at the
+    /// mover.
+    lever: Search<(f32, f32)>,
+    /// Whether use was pressed.
+    used: bool,
 }
 
 /// A one-time search for something a step acts on.
@@ -182,6 +204,58 @@ pub(crate) fn apply(
         cmd.pitch = pitch;
         cmd.yaw = yaw;
     }
+    if let Some((at, class)) = &script.use_mover
+        && now >= *at
+        && let Some((pitch, yaw)) = script
+            .progress
+            .lever
+            .find_once(|| go_to_nearest_mover(player, sim, class))
+    {
+        cmd.pitch = pitch;
+        cmd.yaw = yaw;
+        // Face it first: press use once the turn has reached the server.
+        if !script.progress.used && now >= at + USE_DELAY {
+            script.progress.used = true;
+            cmd.buttons = cmd.buttons | Buttons::USE;
+        }
+    }
+}
+
+/// Moves the player in front of the nearest mover of class `class` and
+/// returns the view angles looking at its centre.
+fn go_to_nearest_mover(player: PlayerId, sim: &mut Simulation, class: &str) -> Option<(f32, f32)> {
+    let origin = sim.player(player)?.state.origin;
+    let entities = sim
+        .logic()
+        .movers()
+        .iter()
+        .map(|mover| mover.model)
+        .collect::<Vec<_>>();
+    let center = entities
+        .into_iter()
+        .filter(|&model| sim.logic().mover_class_name(model) == Some(class))
+        .filter_map(|model| {
+            let (mins, maxs) = sim.world().mover_bounds(model)?;
+            Some((mins + maxs) * 0.5)
+        })
+        .min_by(|a, b| {
+            a.distance_squared(origin)
+                .total_cmp(&b.distance_squared(origin))
+        })?;
+    // Stand on the floor below the mover's centre.
+    let floor = sim
+        .world()
+        .trace_ray(center, center - Vec3::Z * 256.0, MASK_PLAYER_SOLID)
+        .end;
+    let stood = [USE_STAND_OFF, USE_STAND_OFF * 1.5, USE_STAND_OFF * 2.0]
+        .into_iter()
+        .any(|distance| stand_near(player, sim, origin, floor, distance, center));
+    if !stood {
+        warn!("script: no room to stand by the {class} at {center}");
+        return None;
+    }
+    info!("script: using the {class} at {center}");
+    Some(angles_to(sim.eye_position(player)?, center))
 }
 
 /// Moves the player a short way off the pickup nearest them and returns

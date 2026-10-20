@@ -65,9 +65,14 @@ struct Resolved {
     blend: Option<Handle<StandardMaterial>>,
 }
 
-/// The root of a brush entity (door, breakable, ...), named by its class.
+/// The root of a brush entity (door, breakable, ...).
 #[derive(Component, Debug)]
-pub struct BrushEntity(pub String);
+pub struct BrushEntity {
+    /// Its class, e.g. `func_door`.
+    pub classname: String,
+    /// Its BSP model, which map logic knows it by (see `movers`).
+    pub model: usize,
+}
 
 /// Marks a [`Surface`] whose vertex colours are its baked lighting: it is
 /// drawn unlit, as `albedo × vertex colour`, like a lightmapped surface.
@@ -267,9 +272,16 @@ fn spawn_when_loaded(
     for entity in &map.brush_entities {
         let root = commands
             .spawn((
-                BrushEntity(entity.classname.clone()),
+                BrushEntity {
+                    classname: entity.classname.clone(),
+                    model: entity.model,
+                },
                 Transform::from_translation(entity.translation).with_rotation(entity.rotation),
-                Visibility::default(),
+                if entity.start_disabled {
+                    Visibility::Hidden
+                } else {
+                    Visibility::default()
+                },
                 MapScoped,
             ))
             .id();

@@ -70,6 +70,10 @@ pub struct Spawn {
 pub struct MapBrushEntity {
     /// The entity class, e.g. `func_door`.
     pub classname: String,
+    /// Its BSP model: what map logic knows it by.
+    pub model: usize,
+    /// Whether it starts hidden (disabled until map logic shows it).
+    pub start_disabled: bool,
     /// Position of the entity's origin, in metres.
     pub translation: Vec3,
     /// Orientation (see [`coords::rotation`]).
@@ -313,6 +317,8 @@ fn brush_entity(
 ) -> MapBrushEntity {
     MapBrushEntity {
         classname: entity.classname.clone(),
+        model: entity.model,
+        start_disabled: entity.start_disabled,
         translation: coords::position(entity.origin),
         rotation: coords::rotation(entity.angles),
         meshes: add_meshes(load_context, &format!("brush{index}_"), &entity.surfaces),

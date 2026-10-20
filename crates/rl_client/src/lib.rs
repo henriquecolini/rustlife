@@ -24,6 +24,7 @@ use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::effects::EffectsPlugin;
 use crate::hud::HudPlugin;
+use crate::movers::MoversPlugin;
 use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
@@ -37,6 +38,7 @@ pub mod capture;
 pub mod effects;
 pub mod hud;
 pub mod input;
+pub mod movers;
 pub mod net;
 pub mod player;
 pub mod props;
@@ -127,6 +129,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         ActorsPlugin,
         HudPlugin,
         EffectsPlugin,
+        MoversPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);

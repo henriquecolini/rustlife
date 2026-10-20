@@ -5628,6 +5628,7 @@ dependencies = [
  "rl_data",
  "rl_sim",
  "serde",
+ "source_formats",
  "thiserror 2.0.21",
  "tracing",
 ]

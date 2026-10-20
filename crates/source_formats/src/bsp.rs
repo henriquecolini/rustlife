@@ -82,6 +82,10 @@ pub struct SpawnPoint {
 pub struct BrushEntity {
     /// The entity class, e.g. `func_door`.
     pub classname: String,
+    /// Its BSP model (never 0, the world): what map logic knows it by.
+    pub model: usize,
+    /// Whether it starts disabled (hidden until map logic shows it).
+    pub start_disabled: bool,
     /// Entity origin, Source space.
     pub origin: [f32; 3],
     /// Entity orientation, `[pitch, yaw, roll]` in degrees.
@@ -302,8 +306,8 @@ fn build_surfaces(
 
 /// Every drawable brush entity (an entity whose `model` is `*<n>`, n ≥ 1)
 /// with the index of its BSP model; surfaces are filled in by the caller.
-/// Entities that start disabled or render nothing (`rendermode 10`) are
-/// skipped, as are references to missing models.
+/// Entities that render nothing (`rendermode 10`) are skipped, as are
+/// references to missing models.
 fn brush_entities(bsp: &Bsp) -> Vec<(usize, BrushEntity)> {
     bsp.entities
         .iter()
@@ -312,14 +316,15 @@ fn brush_entities(bsp: &Bsp) -> Vec<(usize, BrushEntity)> {
             if model == 0 || model >= bsp.models.len() {
                 return None;
             }
-            if entity.prop("rendermode") == Some("10") || entity.prop("StartDisabled") == Some("1")
-            {
+            if entity.prop("rendermode") == Some("10") {
                 return None;
             }
             Some((
                 model,
                 BrushEntity {
                     classname: entity.prop("classname").unwrap_or_default().to_owned(),
+                    model,
+                    start_disabled: entity.prop("StartDisabled") == Some("1"),
                     origin: entity
                         .prop("origin")
                         .and_then(parse_vector)

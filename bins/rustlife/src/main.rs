@@ -108,6 +108,18 @@ struct Cli {
     #[arg(long)]
     visit_pickup: bool,
 
+    /// Once the map has had time to load, go to the nearest of the map's
+    /// doors, buttons or other movers of this class (e.g. `func_button`)
+    /// and press use on it (for scripted captures); the shot is taken
+    /// `--wait` seconds later.
+    #[arg(long, value_name = "CLASS")]
+    use_mover: Option<String>,
+
+    /// Seconds to wait before a scripted capture's shot, after whatever
+    /// else it does (e.g. for a door to open).
+    #[arg(long, value_name = "SECS", default_value_t = 0.0)]
+    wait: f32,
+
     /// Render non-interactively, save one screenshot to this PNG path, and exit.
     #[arg(long, value_name = "PNG")]
     screenshot: Option<PathBuf>,
@@ -134,26 +146,30 @@ fn main() -> Result<()> {
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
     let shoot = cli.shoot_for.map(|secs| (LOAD_SECS, secs));
     let visit = cli.visit_pickup.then_some(LOAD_SECS);
+    let use_mover = cli.use_mover.map(|class| (LOAD_SECS, class));
     let scripted = walk.is_some()
         || grab_at.is_some()
         || shoot.is_some()
         || visit.is_some()
+        || use_mover.is_some()
         || cli.weapon.is_some();
     let script = scripted.then(|| {
         InputScript::new(walk, grab_at, fire_at)
             .with_weapon(cli.weapon)
             .with_shooting(shoot)
             .with_visit(visit)
+            .with_use(use_mover.clone())
     });
     let shot_secs = match (fire_at, grab_at, shoot) {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,
         (None, Some(grab), _) => grab + GRAB_SECS,
         (None, None, Some((start, secs))) => start + secs,
         (None, None, None) if visit.is_some() => LOAD_SECS + VISIT_SECS,
+        (None, None, None) if use_mover.is_some() => LOAD_SECS + VISIT_SECS,
         (None, None, None) => {
             LOAD_SECS + cli.walk_forward.map_or(0.0, |secs| (secs - 0.2).max(0.0))
         }
-    };
+    } + cli.wait;
     let capture = cli.screenshot.map(|path| Capture {
         path,
         warmup_secs: shot_secs,
