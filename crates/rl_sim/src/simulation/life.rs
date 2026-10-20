@@ -26,7 +26,11 @@ impl Simulation {
         if !self.game.playing() {
             return;
         }
-        let Some(player) = self.players.get_mut(victim.index()) else {
+        let Some(player) = self
+            .players
+            .get_mut(victim.index())
+            .and_then(Option::as_mut)
+        else {
             return;
         };
         if !player.alive() || damage.amount <= 0.0 {
@@ -49,7 +53,11 @@ impl Simulation {
     /// A player dies: they drop what they hold, leave the physics world
     /// and the match scores it.
     fn kill(&mut self, victim: PlayerId, damage: &Damage, events: &mut TickEvents) {
-        let Some(player) = self.players.get_mut(victim.index()) else {
+        let Some(player) = self
+            .players
+            .get_mut(victim.index())
+            .and_then(Option::as_mut)
+        else {
             return;
         };
         player.life = Life::Dead {
@@ -82,7 +90,7 @@ impl Simulation {
         let respawn = self.data.rules.respawn;
         for index in 0..self.players.len() {
             let id = PlayerId::from_index(index);
-            let Life::Dead { since, .. } = self.players[index].life else {
+            let Some(Life::Dead { since, .. }) = self.player(id).map(|player| player.life) else {
                 continue;
             };
             let dead_for = self.tick.saturating_sub(since) as f32 * self.dt;
@@ -100,14 +108,14 @@ impl Simulation {
     /// Puts a player back in the game at a spawn point, with fresh health
     /// and the loadout.
     pub(super) fn respawn(&mut self, id: PlayerId, events: &mut TickEvents) {
-        let home = self.players.get(id.index()).map(|player| player.spawn);
+        let home = self.player(id).map(|player| player.spawn);
         let Some(spawn) = self.choose_spawn(Some(id)).or(home) else {
             return;
         };
         let origin = self.free_position(spawn.origin).unwrap_or(spawn.origin);
         let spawn = Spawn { origin, ..spawn };
         let arsenal = Arc::clone(&self.arsenal);
-        let Some(player) = self.players.get_mut(id.index()) else {
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };
         player.manipulator.drop_held(&mut self.physics);
@@ -191,9 +199,9 @@ impl Simulation {
         }
         let arsenal = Arc::clone(&self.arsenal);
         for (index, player) in self.players.iter_mut().enumerate() {
-            if !player.alive() {
+            let Some(player) = player.as_mut().filter(|player| player.alive()) else {
                 continue;
-            }
+            };
             let hull = player.state.hull(&self.data.movement);
             let (mins, maxs) = (
                 player.state.origin + hull.mins,
@@ -264,8 +272,9 @@ impl Simulation {
         for pickup in &mut self.pickups {
             pickup.away = 0.0;
         }
-        for index in 0..self.players.len() {
-            self.respawn(PlayerId::from_index(index), events);
+        let ids: Vec<PlayerId> = self.players().map(|(id, _)| id).collect();
+        for id in ids {
+            self.respawn(id, events);
         }
     }
 }

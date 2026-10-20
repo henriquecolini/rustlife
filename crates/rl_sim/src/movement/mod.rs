@@ -27,6 +27,7 @@
 
 use glam::Vec3;
 use rl_data::MovementConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::collision::{CollisionQuery, CollisionWorld, Hull, Ladder};
 use crate::physics::BodyId;
@@ -40,7 +41,7 @@ mod slide;
 mod water;
 
 /// Buttons held during a tick.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Buttons(u16);
 
 impl Buttons {
@@ -105,7 +106,7 @@ impl std::ops::BitOr for Buttons {
 }
 
 /// One tick of player input.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserCmd {
     /// Forward (+) / backward (−) movement, `-1..=1`.
     pub forward: f32,
@@ -119,10 +120,23 @@ pub struct UserCmd {
     pub buttons: Buttons,
     /// A weapon to take in hand this tick, if the player chose one.
     pub select: Option<WeaponId>,
+    /// The command's number: each player numbers their commands in order.
+    /// It seeds the randomness of what the command fires (bullet spread),
+    /// so a client predicting its own shots draws the numbers the server
+    /// does.
+    pub number: u32,
+    /// The server tick, with its fraction, of the world the player was
+    /// looking at when they gave the command: what they aimed at. Hitscan
+    /// shots and swings see other players as they were then (lag
+    /// compensation, within `net.ron`'s `max_rewind`). `None` (local play,
+    /// bots) means now.
+    pub view_tick: Option<f64>,
 }
 
 /// How deep in water a player is.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub enum WaterLevel {
     /// Dry.
     #[default]
@@ -136,7 +150,7 @@ pub enum WaterLevel {
 }
 
 /// Everything about a player that movement reads and writes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PlayerState {
     /// Position of the player's feet.
     pub origin: Vec3,

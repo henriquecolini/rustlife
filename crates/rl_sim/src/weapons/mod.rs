@@ -22,6 +22,7 @@
 use rl_data::{
     AmmoType, FireAmmo, FireConfig, GameData, LoadoutConfig, Reload, Shot, WeaponConfig,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::movement::{Buttons, UserCmd};
 use crate::tools::manipulator::Intervals;
@@ -29,7 +30,7 @@ use crate::tools::manipulator::Intervals;
 pub mod projectile;
 
 /// A weapon of the [`Arsenal`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct WeaponId(u16);
 
 impl WeaponId {
@@ -47,7 +48,7 @@ impl WeaponId {
 }
 
 /// An ammo type of the [`Arsenal`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AmmoId(u16);
 
 impl AmmoId {
@@ -59,7 +60,7 @@ impl AmmoId {
 }
 
 /// Primary or secondary fire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mode {
     /// Primary fire.
     Primary,
@@ -181,7 +182,7 @@ pub enum Choice {
 }
 
 /// What the weapon in hand is doing.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Phase {
     /// Ready to fire (once the fire interval has passed).
     Ready,
@@ -193,7 +194,7 @@ pub enum Phase {
 }
 
 /// A carried weapon and its clip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Carried {
     weapon: WeaponId,
     clip: u32,
@@ -212,7 +213,7 @@ pub struct WeaponTick {
 }
 
 /// One player's weapons and ammo.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inventory {
     /// Carried weapons, in arsenal order.
     weapons: Vec<Carried>,

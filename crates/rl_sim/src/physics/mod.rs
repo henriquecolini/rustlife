@@ -35,6 +35,7 @@ use rapier3d::prelude::{
     SharedShape,
 };
 use rl_data::PhysicsConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::collision::clip::ClipPlane;
 use crate::collision::{CollisionWorld, ConvexHull, Hull};
@@ -61,7 +62,7 @@ const GROUP_PLAYER: Group = Group::GROUP_4;
 const MOVED_EPSILON: f32 = 1e-8;
 
 /// A body in the [`PhysicsWorld`]: a prop or a player's box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BodyId(u32);
 
 impl BodyId {
@@ -80,7 +81,7 @@ impl BodyId {
 }
 
 /// A prop's position and orientation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct BodyPose {
     /// The prop's origin (its model's origin), Source space.
     pub position: Vec3,
@@ -398,6 +399,25 @@ impl PhysicsWorld {
             .enumerate()
             .filter(|(_, body)| matches!(body.kind, BodyKind::Prop(_)))
             .map(|(index, _)| BodyId(index as u32))
+    }
+
+    /// Places a prop at `pose` at once, without simulating the move: how a
+    /// client's replica follows the poses the server sends. Collision
+    /// queries see the new pose after [`PhysicsWorld::refresh`].
+    pub fn set_pose(&mut self, body: BodyId, pose: BodyPose) {
+        if self.prop(body).is_none() {
+            return;
+        }
+        if let Some(rigid) = self.rigid_mut(body) {
+            rigid.set_position(Pose::from_parts(pose.position, pose.rotation), false);
+        }
+    }
+
+    /// Brings collision queries up to date after props were placed with
+    /// [`PhysicsWorld::set_pose`], without advancing time.
+    pub fn refresh(&mut self) {
+        self.rapier.detect_collisions(&(), &());
+        self.refresh_planes();
     }
 
     /// Sets a dynamic body's velocities (angular in radians/s), waking it.

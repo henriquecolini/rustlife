@@ -295,6 +295,8 @@ fn tick(
         return;
     };
     let mut cmd = user_cmd(&keys, mouse.as_deref(), latched.buttons, *angles);
+    // Commands are numbered by tick: the number seeds bullet spread.
+    cmd.number = (sim.0.tick_count() + 1) as u32;
     if let (Some(choice), Some(local)) = (latched.choice, sim.0.player(player.id)) {
         cmd.select = local.inventory.choose(sim.0.arsenal(), choice);
     }

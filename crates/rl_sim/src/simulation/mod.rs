@@ -21,9 +21,19 @@
 //!
 //! Every tick reports what happened in [`TickEvents`], for sounds, effects,
 //! the kill feed and the HUD. This is the loop the server runs
-//! authoritatively; clients will run step 1 for their own player to predict
-//! it (M6).
+//! authoritatively.
+//!
+//! A tick may carry several commands from one player — a server catching up
+//! on commands that arrived together — and the player then moves once per
+//! command; a player without a command that tick stands still. Hitscan
+//! weapons and swings see other players where the shooter saw them when
+//! they gave the command ([`UserCmd::view_tick`], `lag`).
+//!
+//! Clients do not run the tick. They keep a replica that the server's
+//! snapshots overwrite (`replica`) and run only their own player's
+//! movement and weapon ahead of the server ([`Simulation::predict`]).
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use glam::Vec3;
@@ -44,10 +54,15 @@ use crate::weapons::projectile::Projectile;
 use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
 
 mod fire;
+mod lag;
 mod life;
+mod replica;
+
+pub use lag::History;
+pub use replica::Prediction;
 
 /// A player of a [`Simulation`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PlayerId(u32);
 
 impl PlayerId {
@@ -65,7 +80,7 @@ impl PlayerId {
 }
 
 /// A place players spawn: a point on the floor and the way to face.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Spawn {
     /// Where the feet go, Source space.
     pub origin: Vec3,
@@ -74,7 +89,7 @@ pub struct Spawn {
 }
 
 /// Whether a player is in the game.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Life {
     /// Alive.
     Alive,
@@ -119,7 +134,7 @@ impl Player {
 }
 
 /// A bullet or swing, for tracers and impact effects.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShotEvent {
     /// Who fired.
     pub player: PlayerId,
@@ -132,7 +147,7 @@ pub struct ShotEvent {
 }
 
 /// An explosion, for effects.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ExplosionEvent {
     /// Its centre.
     pub position: Vec3,
@@ -143,7 +158,7 @@ pub struct ExplosionEvent {
 }
 
 /// Damage a player took.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DamageEvent {
     /// Who took it.
     pub victim: PlayerId,
@@ -154,7 +169,7 @@ pub struct DamageEvent {
 }
 
 /// A death.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Kill {
     /// Who died.
     pub victim: PlayerId,
@@ -165,7 +180,7 @@ pub struct Kill {
 }
 
 /// A player came (back) into the game.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RespawnEvent {
     /// Who.
     pub player: PlayerId,
@@ -208,7 +223,13 @@ pub struct TickEvents {
 pub struct Simulation {
     world: Arc<CollisionWorld>,
     physics: PhysicsWorld,
-    players: Vec<Player>,
+    /// Players by id; `None` where a player left and nobody has joined in
+    /// their place yet.
+    players: Vec<Option<Player>>,
+    /// Bodies of players who left, for the next to join.
+    spare_bodies: Vec<BodyId>,
+    /// Where everyone's box was on recent ticks, for lag compensation.
+    history: History,
     data: Arc<GameData>,
     arsenal: Arc<Arsenal>,
     dt: f32,
@@ -238,6 +259,8 @@ impl Simulation {
             world,
             physics,
             players: Vec::new(),
+            spare_bodies: Vec::new(),
+            history: History::new(data.net.max_rewind, dt),
             arsenal: Arc::new(Arsenal::new(data)),
             data: Arc::new(data.clone()),
             dt,
@@ -313,9 +336,16 @@ impl Simulation {
         &self.projectiles
     }
 
-    /// Adds a prop.
+    /// Adds a prop. Players and shots collide with it from the next tick
+    /// (or [`Simulation::refresh_props`]) on.
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
         self.physics.add_prop(desc)
+    }
+
+    /// Brings collision up to date with props just added, without
+    /// advancing time: for a replica, which never ticks.
+    pub fn refresh_props(&mut self) {
+        self.physics.refresh();
     }
 
     /// Sets where players spawn.
@@ -364,45 +394,93 @@ impl Simulation {
     }
 
     fn add_player(&mut self, spawn: Spawn) -> PlayerId {
-        let id = PlayerId::from_index(self.players.len());
+        let id = PlayerId::from_index(
+            self.players
+                .iter()
+                .position(Option::is_none)
+                .unwrap_or(self.players.len()),
+        );
         let origin = self.free_position(spawn.origin).unwrap_or(spawn.origin);
-        let state = PlayerState::at(origin);
-        let body = self
-            .physics
-            .add_player(state.origin, &state.hull(&self.data.movement));
-        self.players.push(Player {
+        let player = self.new_player(Spawn { origin, ..spawn });
+        self.put_player(id, player);
+        id
+    }
+
+    /// A player standing at `spawn` with a fresh body, health and the
+    /// loadout.
+    fn new_player(&mut self, spawn: Spawn) -> Player {
+        let state = PlayerState::at(spawn.origin);
+        let hull = state.hull(&self.data.movement);
+        let body = match self.spare_bodies.pop() {
+            Some(body) => {
+                self.physics.set_player_enabled(body, true);
+                self.physics
+                    .set_player(body, state.origin, Vec3::ZERO, &hull);
+                body
+            }
+            None => self.physics.add_player(state.origin, &hull),
+        };
+        Player {
             state,
             body,
             manipulator: Manipulator::default(),
             vitals: Vitals::spawn(&self.data.player),
             inventory: Inventory::loadout(&self.arsenal, &self.data.rules.loadout),
             life: Life::Alive,
-            spawn: Spawn { origin, ..spawn },
+            spawn,
             look: (0.0, spawn.yaw),
-        });
-        self.game.add_player();
-        id
+        }
+    }
+
+    /// Puts `player` in slot `id`, growing the list as needed, with a fresh
+    /// score.
+    fn put_player(&mut self, id: PlayerId, player: Player) {
+        self.store_player(id, player);
+        self.game.add_player(id);
+    }
+
+    /// Puts `player` in slot `id`, growing the list as needed.
+    fn store_player(&mut self, id: PlayerId, player: Player) -> &mut Player {
+        if self.players.len() <= id.index() {
+            self.players.resize_with(id.index() + 1, || None);
+        }
+        self.players[id.index()].insert(player)
+    }
+
+    /// Takes a player out of the game: what they hold drops, their box
+    /// leaves the physics world and their score is forgotten. Their id is
+    /// given to the next player to join. Returns whether they were there.
+    pub fn leave(&mut self, id: PlayerId) -> bool {
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::take) else {
+            return false;
+        };
+        let mut manipulator = player.manipulator;
+        manipulator.drop_held(&mut self.physics);
+        self.physics.set_player_enabled(player.body, false);
+        self.spare_bodies.push(player.body);
+        self.game.remove_player(id);
+        true
     }
 
     /// A player.
     #[must_use]
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
-        self.players.get(id.index())
+        self.players.get(id.index()).and_then(Option::as_ref)
     }
 
     /// A player, to change: give them weapons or ammo, set their health.
     /// Their box in the physics world follows their state on the next
     /// tick.
     pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
-        self.players.get_mut(id.index())
+        self.players.get_mut(id.index()).and_then(Option::as_mut)
     }
 
-    /// Every player, in joining order.
+    /// Every player, by id.
     pub fn players(&self) -> impl Iterator<Item = (PlayerId, &Player)> {
         self.players
             .iter()
             .enumerate()
-            .map(|(index, player)| (PlayerId::from_index(index), player))
+            .filter_map(|(index, player)| Some((PlayerId::from_index(index), player.as_ref()?)))
     }
 
     /// Where a player's eyes are.
@@ -418,7 +496,7 @@ impl Simulation {
         let Some(origin) = self.free_position(origin) else {
             return false;
         };
-        let Some(player) = self.players.get_mut(id.index()) else {
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return false;
         };
         player.state = PlayerState::at(origin);
@@ -429,7 +507,8 @@ impl Simulation {
     }
 
     /// Advances the simulation by one tick. Players without a command in
-    /// `commands` stand still.
+    /// `commands` stand still; a player with several moves once for each,
+    /// in order.
     pub fn tick(&mut self, commands: &[(PlayerId, UserCmd)]) -> TickEvents {
         self.tick += 1;
         let mut events = TickEvents::default();
@@ -440,7 +519,7 @@ impl Simulation {
         }
         self.respawn_waiting(commands, &mut events);
 
-        for player in &self.players {
+        for player in self.players.iter().flatten() {
             let hull = player.state.hull(&self.data.movement);
             self.physics.set_player(
                 player.body,
@@ -459,12 +538,14 @@ impl Simulation {
         if let Some(event) = self.game.tick(self.dt, &self.data.rules) {
             self.on_match_event(event, &mut events);
         }
+        let targets = self.targets();
+        self.history.record(self.tick, targets);
         events
     }
 
     /// Moves one living player and runs their weapon.
     fn run_player(&mut self, id: PlayerId, cmd: &UserCmd, events: &mut TickEvents) {
-        let Some(player) = self.players.get_mut(id.index()) else {
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };
         if !player.alive() {
@@ -510,6 +591,15 @@ impl Simulation {
                 }
             })
             .collect()
+    }
+
+    /// Every living player's box as a shooter saw it: at `view_tick` if
+    /// given and recent enough to be remembered (lag compensation), else
+    /// now.
+    fn targets_seen(&self, view_tick: Option<f64>) -> Vec<Target> {
+        view_tick
+            .and_then(|tick| self.history.at(tick))
+            .unwrap_or_else(|| self.targets())
     }
 
     fn free_position(&self, origin: Vec3) -> Option<Vec3> {

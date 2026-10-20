@@ -20,6 +20,7 @@
 
 use glam::{Quat, Vec3};
 use rl_data::ManipulatorConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::collision::contents::{MOVEABLE, SOLID, WINDOW};
 use crate::collision::{CollisionWorld, Hull};
@@ -31,7 +32,7 @@ use crate::scene::Scene;
 const AIM_MASK: u32 = SOLID | WINDOW | MOVEABLE;
 
 /// Something the Manipulator did this tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToolEvent {
     /// Picked a prop up.
     Grabbed(BodyId),
@@ -81,7 +82,7 @@ impl Aim {
 }
 
 /// A held prop.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct Held {
     body: BodyId,
     /// The prop's orientation relative to the view's yaw when grabbed.
@@ -91,7 +92,7 @@ struct Held {
 }
 
 /// One player's Manipulator.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Manipulator {
     held: Option<Held>,
     /// Seconds until primary fire is ready.

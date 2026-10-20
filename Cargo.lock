@@ -5416,6 +5416,7 @@ dependencies = [
  "proptest",
  "rapier3d",
  "rl_data",
+ "serde",
  "source_formats",
  "tracing",
 ]

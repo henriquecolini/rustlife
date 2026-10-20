@@ -8,12 +8,13 @@
 
 use glam::Vec3;
 use rl_data::RulesConfig;
+use serde::{Deserialize, Serialize};
 
 use crate::rng::Rng;
 use crate::simulation::PlayerId;
 
 /// One player's score.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Score {
     /// Kills, less suicides.
     pub frags: i32,
@@ -22,7 +23,7 @@ pub struct Score {
 }
 
 /// Where the match is.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum MatchState {
     /// Under way.
     Playing,
@@ -36,7 +37,7 @@ pub enum MatchState {
 }
 
 /// A change in the match's state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchEvent {
     /// The match ended, won by this player (`None` for a tie).
     Ended(Option<PlayerId>),
@@ -45,13 +46,13 @@ pub enum MatchEvent {
 }
 
 /// The score and clock of a match.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Match {
     state: MatchState,
     /// Seconds played.
     elapsed: f32,
-    /// Scores by player index.
-    scores: Vec<Score>,
+    /// Scores by player index; `None` for ids nobody holds.
+    scores: Vec<Option<Score>>,
 }
 
 impl Default for Match {
@@ -71,9 +72,19 @@ impl Match {
         }
     }
 
-    /// Makes room for a newly joined player's score.
-    pub fn add_player(&mut self) {
-        self.scores.push(Score::default());
+    /// Starts a newly joined player's score at nothing.
+    pub fn add_player(&mut self, player: PlayerId) {
+        if self.scores.len() <= player.index() {
+            self.scores.resize(player.index() + 1, None);
+        }
+        self.scores[player.index()] = Some(Score::default());
+    }
+
+    /// Forgets the score of a player who left.
+    pub fn remove_player(&mut self, player: PlayerId) {
+        if let Some(score) = self.scores.get_mut(player.index()) {
+            *score = None;
+        }
     }
 
     /// Where the match is.
@@ -103,13 +114,19 @@ impl Match {
     /// A player's score.
     #[must_use]
     pub fn score(&self, player: PlayerId) -> Score {
-        self.scores.get(player.index()).copied().unwrap_or_default()
+        self.scores
+            .get(player.index())
+            .copied()
+            .flatten()
+            .unwrap_or_default()
     }
 
-    /// Every score, by player index.
-    #[must_use]
-    pub fn scores(&self) -> &[Score] {
-        &self.scores
+    /// Every player's score.
+    pub fn scores(&self) -> impl Iterator<Item = (PlayerId, Score)> + '_ {
+        self.scores
+            .iter()
+            .enumerate()
+            .filter_map(|(index, score)| Some((PlayerId::from_index(index), (*score)?)))
     }
 
     /// Scores a death: a frag for the killer, or the suicide penalty when
@@ -124,16 +141,16 @@ impl Match {
         if !self.playing() {
             return None;
         }
-        if let Some(score) = self.scores.get_mut(victim.index()) {
+        if let Some(score) = self.score_mut(victim) {
             score.deaths += 1;
         }
         let Some(killer) = killer.filter(|&killer| killer != victim) else {
-            if let Some(score) = self.scores.get_mut(victim.index()) {
+            if let Some(score) = self.score_mut(victim) {
                 score.frags -= i32::try_from(rules.suicide_penalty).unwrap_or(i32::MAX);
             }
             return None;
         };
-        let score = self.scores.get_mut(killer.index())?;
+        let score = self.score_mut(killer)?;
         score.frags += 1;
         let limit = i64::from(rules.frag_limit);
         (limit > 0 && i64::from(score.frags) >= limit).then(|| self.end(rules))
@@ -158,22 +175,26 @@ impl Match {
                 }
                 self.state = MatchState::Playing;
                 self.elapsed = 0.0;
-                self.scores.fill(Score::default());
+                for score in self.scores.iter_mut().flatten() {
+                    *score = Score::default();
+                }
                 Some(MatchEvent::Restarted)
             }
         }
     }
 
+    fn score_mut(&mut self, player: PlayerId) -> Option<&mut Score> {
+        self.scores.get_mut(player.index())?.as_mut()
+    }
+
     fn end(&mut self, rules: &RulesConfig) -> MatchEvent {
-        let best = self.scores.iter().map(|score| score.frags).max();
-        let mut leaders = self
-            .scores
-            .iter()
-            .enumerate()
-            .filter(|(_, score)| Some(score.frags) == best);
-        let winner = match (leaders.next(), leaders.next()) {
-            (Some((index, _)), None) => Some(PlayerId::from_index(index)),
-            _ => None,
+        let best = self.scores().map(|(_, score)| score.frags).max();
+        let winner = {
+            let mut leaders = self.scores().filter(|(_, score)| Some(score.frags) == best);
+            match (leaders.next(), leaders.next()) {
+                (Some((player, _)), None) => Some(player),
+                _ => None,
+            }
         };
         self.state = MatchState::Intermission {
             winner,
@@ -228,8 +249,8 @@ mod tests {
     fn kills_score_frags_and_suicides_cost_one() {
         let rules = rules();
         let mut game = Match::new();
-        game.add_player();
-        game.add_player();
+        game.add_player(player(0));
+        game.add_player(player(1));
         game.record_death(player(1), Some(player(0)), &rules);
         game.record_death(player(0), Some(player(0)), &rules);
         game.record_death(player(1), None, &rules);
@@ -256,8 +277,8 @@ mod tests {
             ..rules()
         };
         let mut game = Match::new();
-        game.add_player();
-        game.add_player();
+        game.add_player(player(0));
+        game.add_player(player(1));
         assert_eq!(game.record_death(player(1), Some(player(0)), &rules), None);
         assert_eq!(
             game.record_death(player(1), Some(player(0)), &rules),
@@ -285,13 +306,40 @@ mod tests {
             ..rules()
         };
         let mut game = Match::new();
-        game.add_player();
-        game.add_player();
+        game.add_player(player(0));
+        game.add_player(player(1));
         let events: Vec<_> = (0..70)
             .filter_map(|_| game.tick(1.0 / 66.0, &rules))
             .collect();
         assert_eq!(events, [MatchEvent::Ended(None)]);
         assert_eq!(game.time_left(&rules), Some(0.0));
+    }
+
+    #[test]
+    fn players_who_left_neither_score_nor_win() {
+        let rules = RulesConfig {
+            frag_limit: 1,
+            ..rules()
+        };
+        let mut game = Match::new();
+        game.add_player(player(0));
+        game.add_player(player(2));
+        game.remove_player(player(0));
+        assert_eq!(
+            game.record_death(player(0), Some(player(2)), &rules),
+            Some(MatchEvent::Ended(Some(player(2))))
+        );
+        let scores: Vec<_> = game.scores().collect();
+        assert_eq!(
+            scores,
+            [(
+                player(2),
+                Score {
+                    frags: 1,
+                    deaths: 0
+                }
+            )]
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! same pattern the server does.
 
 use glam::Vec3;
+use serde::{Deserialize, Serialize};
 
 use super::Target;
 use crate::collision::contents::MASK_SHOT;
@@ -17,7 +18,7 @@ use crate::scene::Scene;
 use crate::simulation::PlayerId;
 
 /// What a shot stopped at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Struck {
     /// Nothing within range.
     Nothing,
@@ -30,7 +31,7 @@ pub enum Struck {
 }
 
 /// Where a shot went.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ShotTrace {
     /// Where it stopped (the end of its range if it hit nothing).
     pub end: Vec3,

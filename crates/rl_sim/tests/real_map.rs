@@ -103,7 +103,7 @@ fn players_walk_out_of_every_spawn_without_leaving_the_world() {
                     30..=40 => Buttons::DUCK,
                     _ => Buttons::NONE,
                 },
-                select: None,
+                ..UserCmd::default()
             };
             state = simulate(&state, &cmd, &config, dt, &world).0;
             let stuck = world

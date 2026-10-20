@@ -531,7 +531,7 @@ fn identical_inputs_give_bit_identical_results() {
             20..=30 => Buttons::DUCK,
             _ => Buttons::NONE,
         },
-        select: None,
+        ..UserCmd::default()
     };
     let run = || {
         let mut sim = Sim::new(world.clone(), Vec3::new(0.0, 0.0, 50.0));
@@ -557,7 +557,7 @@ fn bad_inputs_never_produce_non_finite_states() {
             pitch: f32::INFINITY,
             yaw: f32::NAN,
             buttons: Buttons::from_bits(u16::MAX),
-            select: None,
+            ..UserCmd::default()
         },
     );
     assert!(sim.state.origin.is_finite(), "{:?}", sim.state);

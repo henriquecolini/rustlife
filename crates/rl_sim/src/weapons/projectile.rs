@@ -16,6 +16,7 @@
 
 use glam::Vec3;
 use rl_data::ProjectileConfig;
+use serde::{Deserialize, Serialize};
 
 use super::{Mode, WeaponId};
 use crate::collision::contents::MASK_PROJECTILE;
@@ -36,7 +37,7 @@ const FLOOR_NORMAL_Z: f32 = 0.7;
 const SURFACE_GAP: f32 = 0.25;
 
 /// A projectile in flight.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Projectile {
     /// Unique among a simulation's projectiles, for clients to follow it.
     pub id: u32,

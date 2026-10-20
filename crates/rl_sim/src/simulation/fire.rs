@@ -8,7 +8,7 @@ use rl_data::{ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, Sho
 
 use super::{ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEvents};
 use crate::collision::Hull;
-use crate::combat::hitscan::{self, Struck};
+use crate::combat::hitscan::{self, ShotTrace, Struck};
 use crate::combat::{Cause, Damage, blast};
 use crate::movement::{UserCmd, view_direction};
 use crate::rng::Rng;
@@ -17,6 +17,17 @@ use crate::tools::manipulator::{Aim, ToolEvent};
 use crate::weapons::projectile::{Flight, Projectile};
 use crate::weapons::{Mode, WeaponId};
 
+/// One bullet of a hitscan shot.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Bullet {
+    /// The way it flew.
+    pub(super) direction: Vec3,
+    /// Where it went.
+    pub(super) trace: ShotTrace,
+    /// The damage it deals, after falloff.
+    pub(super) damage: f32,
+}
+
 impl Simulation {
     /// Runs the weapon in hand of a living player for the tick: the
     /// inventory decides whether the trigger is pulled, the shot goes off;
@@ -24,7 +35,7 @@ impl Simulation {
     pub(super) fn run_weapon(&mut self, id: PlayerId, cmd: &UserCmd, events: &mut TickEvents) {
         let arsenal = Arc::clone(&self.arsenal);
         let movement_eye = self.eye_position(id);
-        let Some(player) = self.players.get_mut(id.index()) else {
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };
         let pulled = player.inventory.tick(&arsenal, cmd, self.dt);
@@ -70,9 +81,9 @@ impl Simulation {
             };
             match &fire.shot {
                 Shot::Hitscan(bullets) => {
-                    self.fire_bullets(id, weapon, mode, bullets, &aim, events);
+                    self.fire_bullets(id, weapon, mode, bullets, &aim, cmd, events);
                 }
-                Shot::Melee(swing) => self.swing(id, weapon, swing, &aim, events),
+                Shot::Melee(swing) => self.swing(id, weapon, swing, &aim, cmd, events),
                 Shot::Projectile(projectile) => {
                     self.launch(id, weapon, mode, projectile, &aim);
                 }
@@ -89,39 +100,64 @@ impl Simulation {
         mode: Mode,
         bullets: &HitscanConfig,
         aim: &Aim,
+        cmd: &UserCmd,
         events: &mut TickEvents,
     ) {
-        let targets = self.targets();
-        let forward = view_direction(aim.pitch, aim.yaw);
-        let mut rng = Rng::seeded(&[self.tick, id.index() as u64, mode as u64]);
-        for _ in 0..bullets.pellets {
-            let direction = hitscan::spread(forward, bullets.spread, &mut rng);
-            let end = aim.eye + direction * bullets.range;
-            let scene = Scene {
-                world: &self.world,
-                physics: &self.physics,
-                ignore: None,
-            };
-            let trace = hitscan::trace(&scene, &targets, id, aim.eye, end, &Hull::POINT);
-            let falloff = bullets
-                .falloff
-                .map_or(1.0, |falloff| falloff.scale(aim.eye.distance(trace.end)));
+        for bullet in self.bullets(id, mode, bullets, aim, cmd) {
             self.strike(
                 id,
                 weapon,
-                trace.struck,
-                bullets.damage * falloff,
-                direction * bullets.force,
-                trace.end,
+                bullet.trace.struck,
+                bullet.damage,
+                bullet.direction * bullets.force,
+                bullet.trace.end,
                 events,
             );
             events.shots.push(ShotEvent {
                 player: id,
                 weapon,
                 start: aim.eye,
-                trace,
+                trace: bullet.trace,
             });
         }
+    }
+
+    /// Where a hitscan shot's bullets go, each with its own spread, and the
+    /// damage each deals after falloff. The spread is drawn from the
+    /// command's number, so a client predicting its own shot sees the same
+    /// bullets the server fires; other players are where the shooter saw
+    /// them.
+    pub(super) fn bullets(
+        &self,
+        id: PlayerId,
+        mode: Mode,
+        bullets: &HitscanConfig,
+        aim: &Aim,
+        cmd: &UserCmd,
+    ) -> Vec<Bullet> {
+        let targets = self.targets_seen(cmd.view_tick);
+        let forward = view_direction(aim.pitch, aim.yaw);
+        let mut rng = Rng::seeded(&[u64::from(cmd.number), id.index() as u64, mode as u64]);
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+        };
+        (0..bullets.pellets)
+            .map(|_| {
+                let direction = hitscan::spread(forward, bullets.spread, &mut rng);
+                let end = aim.eye + direction * bullets.range;
+                let trace = hitscan::trace(&scene, &targets, id, aim.eye, end, &Hull::POINT);
+                let falloff = bullets
+                    .falloff
+                    .map_or(1.0, |falloff| falloff.scale(aim.eye.distance(trace.end)));
+                Bullet {
+                    direction,
+                    trace,
+                    damage: bullets.damage * falloff,
+                }
+            })
+            .collect()
     }
 
     /// Swings a melee weapon: a small box swept along the view.
@@ -131,18 +167,11 @@ impl Simulation {
         weapon: WeaponId,
         swing: &MeleeConfig,
         aim: &Aim,
+        cmd: &UserCmd,
         events: &mut TickEvents,
     ) {
-        let targets = self.targets();
         let forward = view_direction(aim.pitch, aim.yaw);
-        let hull = Hull::new(Vec3::splat(-swing.size), Vec3::splat(swing.size));
-        let scene = Scene {
-            world: &self.world,
-            physics: &self.physics,
-            ignore: None,
-        };
-        let end = aim.eye + forward * swing.range;
-        let trace = hitscan::trace(&scene, &targets, id, aim.eye, end, &hull);
+        let trace = self.swing_trace(id, swing, aim, cmd);
         self.strike(
             id,
             weapon,
@@ -158,6 +187,27 @@ impl Simulation {
             start: aim.eye,
             trace,
         });
+    }
+
+    /// Where a swing goes: a small box swept along the view, against other
+    /// players where the swinger saw them.
+    pub(super) fn swing_trace(
+        &self,
+        id: PlayerId,
+        swing: &MeleeConfig,
+        aim: &Aim,
+        cmd: &UserCmd,
+    ) -> ShotTrace {
+        let targets = self.targets_seen(cmd.view_tick);
+        let forward = view_direction(aim.pitch, aim.yaw);
+        let hull = Hull::new(Vec3::splat(-swing.size), Vec3::splat(swing.size));
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+        };
+        let end = aim.eye + forward * swing.range;
+        hitscan::trace(&scene, &targets, id, aim.eye, end, &hull)
     }
 
     /// A bullet or swing landing: hurts a player, or shoves a prop with
@@ -307,7 +357,7 @@ impl Simulation {
         }
         let targets = self.targets();
         for reach in blast::players(center, explosion, &targets, &self.world) {
-            if let Some(player) = self.players.get_mut(reach.player.index()) {
+            if let Some(player) = self.player_mut(reach.player) {
                 player.state.velocity += reach.direction * explosion.knockback * reach.scale;
             }
             let damage = Damage {

@@ -13,6 +13,7 @@
 
 use glam::Vec3;
 use rl_data::{ArmorConfig, PlayerConfig};
+use serde::{Deserialize, Serialize};
 
 use crate::simulation::PlayerId;
 use crate::weapons::WeaponId;
@@ -21,7 +22,7 @@ pub mod blast;
 pub mod hitscan;
 
 /// A player's health and armor.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vitals {
     /// Health; the player is dead at zero or below.
     pub health: f32,
@@ -76,7 +77,7 @@ fn raise(value: &mut f32, amount: f32, max: f32) -> bool {
 }
 
 /// What dealt some damage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Cause {
     /// A weapon's shot, swing, projectile or blast.
     Weapon(WeaponId),
@@ -89,7 +90,7 @@ pub enum Cause {
 }
 
 /// One instance of harm to a player.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Damage {
     /// How much, before armor.
     pub amount: f32,

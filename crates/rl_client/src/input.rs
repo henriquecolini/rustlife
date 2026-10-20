@@ -101,8 +101,8 @@ pub(crate) fn latch_input(
 }
 
 /// The command for a tick from the keys and mouse buttons held now plus
-/// latched presses. The weapon choice is resolved by the caller, which
-/// knows the inventory.
+/// latched presses. The weapon choice and the command's number are the
+/// caller's to fill in.
 pub(crate) fn user_cmd(
     keys: &ButtonInput<KeyCode>,
     mouse: Option<&ButtonInput<MouseButton>>,
@@ -129,7 +129,7 @@ pub(crate) fn user_cmd(
         pitch: angles.pitch,
         yaw: angles.yaw,
         buttons,
-        select: None,
+        ..UserCmd::default()
     }
 }
 
