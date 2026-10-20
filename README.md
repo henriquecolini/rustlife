@@ -111,7 +111,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 |-----------|-------|-------|
 | M0 | Workspace, CI, content discovery, VPK/VFS, inspect CLI | done |
 | M1 | World viewer: BSP, textures, lightmaps, displacements, sky, map browser | done |
-| M2 | Static props and models | |
+| M2 | Props and models: static props, prop entities, brush entities, baked model lighting | done |
 | M3 | Source-style movement | |
 | M4 | Physics props and the Manipulator | |
 | M5 | Data-driven weapons, items and rules | |

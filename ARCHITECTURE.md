@@ -30,7 +30,7 @@ and nothing below `rl_client` depends on rendering.
 | `rl_net` | Protocol, transport, prediction, interpolation, lag compensation. |
 | `rl_client` / `rl_server` | App composition for each side. |
 
-Crates are introduced by the milestone that needs them. As of M1 the workspace
+Crates are introduced by the milestone that needs them. As of M2 the workspace
 has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_client`, the
 `rustlife` and `rustlife-inspect` binaries, and `xtask`.
 
@@ -74,6 +74,38 @@ has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_client`, the
 
 The client is a two-state app (`AppState::Browser` / `InGame`); everything a
 map creates is torn down on leaving it, so maps can be switched freely.
+
+## Props, brush entities and model lighting (M2)
+
+1. **Placements.** `load_geometry` also returns every static prop (`sprp`
+   game lump) and `prop_*` entity as a `PropPlacement`, and splits geometry
+   by BSP model: model 0 is the world, each `*N` model of a brush entity
+   becomes a `BrushEntity`. Brush-entity faces are stored relative to the
+   entity's origin, so the client spawns each as a root entity placed by its
+   origin and angles, with lightmapped surfaces as children.
+2. **Models.** `MdlLoader` reads a `.mdl` with its `.vvd` and `.vtx` into a
+   `ModelAsset`: one mesh per model mesh and, per skin, the first existing
+   VMT of each material slot (material names share the world's cache). The
+   client spawns each prop as a root entity with one child per mesh.
+3. **Lighting.** Models carry no lightmaps. Like the world, every prop is
+   drawn unlit as `albedo × baked light`, with the light in its vertex
+   colours (per instance):
+   - **Static props** use `vrad`'s per-vertex bake, `sp_<index>.vhv` in the
+     pakfile: direct light and shadows included. Colours are stored per
+     LOD0 strip-group vertex and mapped to model vertices.
+   - **Other props** are lit as the engine lights dynamic models: the BSP
+     leaf's ambient cube at the model's centre, plus every world light
+     (`worldlights` lump: point, spot, sun) with a clear line of sight,
+     folded into the cube by direction. Line of sight is a segment trace
+     through the BSP tree; the sun counts only where the trace ends in a sky
+     brush. Each vertex then receives `Σ nᵢ² · cube[side]`.
+   - As a fallback, the ambient cubes are also uploaded as a Bevy irradiance
+     volume (the same ambient-cube representation) that lights any
+     non-lightmapped mesh without its own light, and leaves lightmapped
+     surfaces alone.
+
+   There are no real-time lights: all light comes from `vrad`'s bake, so
+   nothing is counted twice.
 
 Format notes live in [`docs/formats/`](docs/formats/).
 

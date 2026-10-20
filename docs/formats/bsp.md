@@ -113,9 +113,40 @@ Model entities (`prop_dynamic*`, `prop_physics*`, `prop_ragdoll`,
 Source angles compose as `R = Rz(yaw) · Ry(pitch) · Rx(roll)` (`AngleMatrix`),
 with positive pitch looking down.
 
-`vrad` also bakes per-vertex lighting for each static prop into the pakfile as
-`sp_<index>.vhv` (`sp_hdr_<index>.vhv` for HDR). rustlife does not read these
-yet; props are lit from the ambient cubes below.
+`vrad` also bakes per-vertex lighting for each static prop (unless flagged
+`NO_PER_VERTEX_LIGHTING`, 0x40) into the pakfile as `sp_<index>.vhv`
+(`sp_hdr_<index>.vhv` for HDR). The file is a 40-byte header (version 2, the
+model's checksum — the same as the `.vtx` header's — vertex flags, vertex
+size 4, vertex count, mesh count), 28-byte mesh headers (`lod`, vertex
+count, byte offset) and BGRA colours storing `(linear / 2)^(1/2.2)`. There is
+one mesh header per LOD per strip group; within it, colours follow the strip
+group's vertices, each naming a model vertex as
+`model.vertex_offset + mesh.vertex_offset + origMeshVertID`. Validated
+against the ambient cubes: the median ratio of baked to ambient light is
+about 1.1 across stock maps.
+
+## Brush entities
+
+Each brush entity's `model` key names a BSP model `*N`; model 0 is the
+world. Model `N`'s faces are `first_face .. first_face + face_count` and are
+stored relative to the entity's `origin` (and turned by its `angles`), so
+they must be placed by them. Hammer writes an origin for most brush
+entities, not only those with an origin brush.
+
+## World lights
+
+Lump 15 (HDR: 54) lists the lights `vrad` baked, which the engine reuses to
+light dynamic models. Version 0 records are 88 bytes: origin, intensity,
+normal (each three floats), then `cluster`, `type`, `style` (ints),
+`stopdot`, `stopdot2`, `exponent`, `radius`, constant / linear / quadratic
+attenuation (floats) and `flags`, `texinfo`, `owner` (ints). Version 1 adds
+a 12-byte vector after the normal (100 bytes). Types: 0 surface, 1 point,
+2 spot, 3 sun (`light_environment`; the normal is the light's direction),
+4 Quake light, 5 sky ambient. A point or spot light arrives with
+`intensity / (c + l·d + q·d² + 0.0001)`, zero beyond a non-zero `radius`; a
+spot light is zero outside `stopdot2` (cosine), ramps linearly up to
+`stopdot`, and is multiplied by `cos^exponent` when the exponent is neither
+0 nor 1. Intensities are in the same units as the decoded ambient cubes.
 
 ## Ambient lighting
 
