@@ -49,6 +49,7 @@ tempfile = "3"
 thiserror = "2"
 # Source-engine format parsers (wrapped and gap-filled by `source_formats`).
 vbsp = "0.9"
+vmdl = "0.2"
 vmt-parser = "0.2"
 vtf = "0.4"
 tracing = "0.1"
