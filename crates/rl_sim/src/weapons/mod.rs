@@ -166,6 +166,20 @@ fn is_tool(config: &WeaponConfig) -> bool {
         .any(|fire| matches!(fire.shot, Shot::Manipulator))
 }
 
+/// A player's request for another weapon, from a key press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    /// The weapons of a slot (a number key): the first, or the next after
+    /// the one in hand if it is in that slot.
+    Slot(u8),
+    /// The next usable weapon after the one in hand, by slot and position.
+    Next,
+    /// The usable weapon before the one in hand.
+    Previous,
+    /// The weapon in hand before this one.
+    Last,
+}
+
 /// What the weapon in hand is doing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Phase {
@@ -341,6 +355,73 @@ impl Inventory {
     #[must_use]
     pub fn last(&self) -> Option<WeaponId> {
         self.last.filter(|&weapon| self.has(weapon))
+    }
+
+    /// The weapon `choice` asks for, if any differs from the one in hand.
+    #[must_use]
+    pub fn choose(&self, arsenal: &Arsenal, choice: Choice) -> Option<WeaponId> {
+        let order = |weapon: &WeaponId| {
+            arsenal
+                .weapon(*weapon)
+                .map_or((u8::MAX, u8::MAX), |config| (config.slot, config.position))
+        };
+        let mut carried: Vec<WeaponId> = self.weapons().collect();
+        carried.sort_by_key(order);
+        let chosen = match choice {
+            Choice::Last => self.last(),
+            Choice::Slot(slot) => {
+                let in_slot: Vec<WeaponId> = carried
+                    .iter()
+                    .copied()
+                    .filter(|weapon| order(weapon).0 == slot)
+                    .collect();
+                let at = self
+                    .active
+                    .and_then(|active| in_slot.iter().position(|&weapon| weapon == active));
+                at.map_or(in_slot.first(), |at| in_slot.get((at + 1) % in_slot.len()))
+                    .copied()
+            }
+            Choice::Next | Choice::Previous => {
+                let usable: Vec<WeaponId> = carried
+                    .iter()
+                    .copied()
+                    .filter(|&weapon| self.usable(arsenal, weapon) || Some(weapon) == self.active)
+                    .collect();
+                let at = self
+                    .active
+                    .and_then(|active| usable.iter().position(|&weapon| weapon == active));
+                let len = usable.len().max(1);
+                let index = match (choice, at) {
+                    (Choice::Next, Some(at)) => (at + 1) % len,
+                    (_, Some(at)) => (at + len - 1) % len,
+                    (_, None) => 0,
+                };
+                usable.get(index).copied()
+            }
+        };
+        chosen.filter(|&weapon| Some(weapon) != self.active)
+    }
+
+    /// Whether `weapon` has something to fire: a mode that needs no ammo,
+    /// rounds in its clip, or carried rounds for it.
+    #[must_use]
+    pub fn usable(&self, arsenal: &Arsenal, weapon: WeaponId) -> bool {
+        let Some(config) = arsenal.weapon(weapon) else {
+            return false;
+        };
+        let clip = self.clip(weapon).unwrap_or(0);
+        config.fire_modes().any(|fire| match &fire.ammo {
+            FireAmmo::Unlimited => true,
+            FireAmmo::Clip(count) => {
+                clip >= *count
+                    || arsenal
+                        .clip_ammo(weapon)
+                        .is_some_and(|ammo| self.ammo(ammo) > 0)
+            }
+            FireAmmo::Reserve { ammo, count } => arsenal
+                .find_ammo(ammo)
+                .is_some_and(|ammo| self.ammo(ammo) >= *count),
+        })
     }
 
     /// When the weapon in hand is a tool (the Manipulator) and deployed:

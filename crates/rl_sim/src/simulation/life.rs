@@ -119,6 +119,7 @@ impl Simulation {
             inventory: Inventory::loadout(&arsenal, &self.data.rules.loadout),
             life: Life::Alive,
             spawn,
+            look: (0.0, spawn.yaw),
         };
         let hull = player.state.hull(&self.data.movement);
         self.physics.set_player_enabled(player.body, true);

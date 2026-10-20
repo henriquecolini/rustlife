@@ -105,6 +105,9 @@ pub struct Player {
     pub life: Life,
     /// Where the player last spawned.
     pub spawn: Spawn,
+    /// Where the player looked on their last command: `(pitch, yaw)`,
+    /// degrees.
+    pub look: (f32, f32),
 }
 
 impl Player {
@@ -375,6 +378,7 @@ impl Simulation {
             inventory: Inventory::loadout(&self.arsenal, &self.data.rules.loadout),
             life: Life::Alive,
             spawn: Spawn { origin, ..spawn },
+            look: (0.0, spawn.yaw),
         });
         self.game.add_player();
         id
@@ -473,6 +477,7 @@ impl Simulation {
         };
         let (state, moved) = simulate(&player.state, cmd, &self.data.movement, self.dt, &scene);
         player.state = state;
+        player.look = (cmd.pitch, cmd.yaw);
         for touch in moved.touches() {
             self.physics.push(touch.body, touch.normal, touch.speed);
         }

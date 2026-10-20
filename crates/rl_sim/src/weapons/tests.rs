@@ -223,3 +223,59 @@ fn new_weapons_come_loaded_but_only_once() {
     assert_eq!(inventory.active(), Some(rifle), "taken in hand");
     assert_eq!(inventory.clip(rifle), Some(30));
 }
+
+#[test]
+fn number_keys_cycle_through_a_slot() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    let mut inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    let (manipulator, bar) = (id(&arsenal, "manipulator"), id(&arsenal, "bar"));
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::Slot(1)),
+        Some(manipulator)
+    );
+    inventory.select(&arsenal, manipulator);
+    assert_eq!(inventory.choose(&arsenal, Choice::Slot(1)), Some(bar));
+    inventory.select(&arsenal, bar);
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::Slot(1)),
+        Some(manipulator)
+    );
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::Slot(9)),
+        None,
+        "empty slot"
+    );
+    assert_eq!(inventory.choose(&arsenal, Choice::Last), Some(manipulator));
+}
+
+#[test]
+fn next_and_previous_skip_weapons_without_ammo() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    let mut inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    // The loadout: Manipulator, bar (1), sidearm (2), SMG (3, in hand),
+    // frag (5).
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::Next),
+        Some(id(&arsenal, "frag"))
+    );
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::Previous),
+        Some(id(&arsenal, "sidearm"))
+    );
+    // Without frags, next wraps round to the Manipulator.
+    let frags = ammo(&arsenal, "frag");
+    let mut empty = Inventory::empty(&arsenal);
+    for weapon in inventory.weapons() {
+        empty.give_weapon(&arsenal, weapon);
+    }
+    empty.select(&arsenal, id(&arsenal, "smg"));
+    assert_eq!(empty.ammo(frags), 0);
+    assert_eq!(
+        empty.choose(&arsenal, Choice::Next),
+        Some(id(&arsenal, "manipulator"))
+    );
+    inventory.select(&arsenal, id(&arsenal, "frag"));
+    assert!(inventory.usable(&arsenal, id(&arsenal, "frag")));
+}
