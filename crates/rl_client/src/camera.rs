@@ -1,9 +1,10 @@
 //! A free-flying "noclip" camera for inspecting maps.
 //!
-//! This is the M1 viewer camera: mouse to look, WASD to move, space/control to
-//! rise and fall, shift to move faster. The cursor is grabbed on entering a
-//! map, released in the map browser, and toggled with `Escape`. Later milestones replace this with the predicted
-//! player view, but the fly camera stays useful for debugging.
+//! Mouse to look, WASD to move, space/control to rise and fall, shift to move
+//! faster. The cursor is grabbed on entering a map, released in the map
+//! browser, and toggled with `Escape`. The same camera is the player's view
+//! while walking ([`crate::player`] places it); it flies freely only in
+//! noclip ([`ViewMode::Noclip`]).
 
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -11,6 +12,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::AppState;
+use crate::player::ViewMode;
 
 /// Whether the fly camera grabs the cursor on startup. Inserted by
 /// [`crate::run`]; disabled for non-interactive screenshot captures so a
@@ -49,13 +51,19 @@ impl Plugin for FlyCamPlugin {
             .add_systems(OnEnter(AppState::Browser), release_cursor)
             .add_systems(
                 Update,
-                (toggle_grab, look, movement).run_if(in_state(AppState::InGame)),
+                (toggle_grab, (look, movement).run_if(flying)).run_if(in_state(AppState::InGame)),
             );
     }
 }
 
+/// Whether the camera flies freely: in noclip, or always when there is no
+/// player simulation (as in tests that only view maps).
+fn flying(mode: Option<Res<ViewMode>>) -> bool {
+    mode.is_none_or(|mode| *mode == ViewMode::Noclip)
+}
+
 /// How far (radians) one pixel of mouse motion turns the view.
-const MOUSE_SENSITIVITY: f32 = 0.003;
+pub(crate) const MOUSE_SENSITIVITY: f32 = 0.003;
 /// Pitch limit, just under 90 degrees, to avoid gimbal flip at the poles.
 const PITCH_LIMIT: f32 = 1.54;
 

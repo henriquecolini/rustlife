@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 
 /// Where and when to capture.
-#[derive(Resource, Clone)]
+#[derive(Resource, Debug, Clone)]
 pub struct Capture {
     /// Output PNG path.
     pub path: PathBuf,

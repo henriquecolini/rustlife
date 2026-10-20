@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 rl_client.workspace = true
 rl_config.workspace = true
+rl_data.workspace = true
 source_fs.workspace = true
 anyhow.workspace = true
 clap.workspace = true

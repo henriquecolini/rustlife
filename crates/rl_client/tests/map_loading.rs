@@ -67,6 +67,17 @@ fn loads_a_real_map_through_bevy() {
     let map: MapAsset = load(&mut app, "source://maps/dm_lockdown.bsp").expect("map loads");
 
     assert!(!map.meshes.is_empty(), "dm_lockdown has surfaces");
+    let collision = map
+        .collision
+        .as_ref()
+        .expect("dm_lockdown has a collision model");
+    assert!(!collision.brushes.is_empty());
+    assert!(
+        map.spawns
+            .iter()
+            .all(|spawn| spawn.position == rl_assets::coords::position(spawn.source.origin)),
+        "each spawn carries its Source-space origin"
+    );
     let statics = map
         .props
         .iter()

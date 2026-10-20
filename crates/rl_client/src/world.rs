@@ -89,7 +89,7 @@ pub(crate) struct Surface(pub(crate) String);
 
 /// Which spawn point the camera starts at (wrapped to the map's spawn count).
 #[derive(Resource)]
-struct StartSpawn(usize);
+pub(crate) struct StartSpawn(pub(crate) usize);
 
 /// Loads the [`CurrentMap`] on entering [`AppState::InGame`], renders it, and
 /// unloads it again on leaving (`M` returns to the map browser).

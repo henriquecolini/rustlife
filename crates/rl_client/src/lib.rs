@@ -1,9 +1,10 @@
 //! The rustlife client: a Bevy app that mounts the player's game content and
 //! renders a map.
 //!
-//! For now this is a world viewer — it loads a BSP and its props through the
-//! `source://` asset source and flies a free camera around it. Later milestones add the player
-//! simulation, networking, HUD and audio on top of the same app.
+//! It loads a BSP and its props through the `source://` asset source and lets
+//! the player walk it with rustlife's movement ([`player`]), or fly it in
+//! noclip. Later milestones add physics, combat, networking and audio on top
+//! of the same app.
 
 #![forbid(unsafe_code)]
 
@@ -11,17 +12,20 @@ use std::sync::Arc;
 
 use bevy::prelude::*;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
+use rl_data::GameData;
 use source_fs::Vfs;
 
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
+use crate::player::{PlayerPlugin, ScriptedForward};
 use crate::props::PropsPlugin;
 use crate::world::WorldPlugin;
 
 pub mod browser;
 pub mod camera;
 pub mod capture;
+pub mod player;
 pub mod props;
 pub mod world;
 
@@ -44,19 +48,32 @@ pub struct CurrentMap(pub String);
 #[derive(Resource, Clone)]
 pub struct GameVfs(pub Arc<Vfs>);
 
+/// How the client should start.
+#[derive(Debug, Clone)]
+pub struct ClientOptions {
+    /// Map to load straight away (without path or extension); `None` opens
+    /// the map browser.
+    pub map: Option<String>,
+    /// Index of the spawn point to start at; wraps around the map's spawns.
+    pub spawn: usize,
+    /// Run non-interactively and save one screenshot (see [`capture`]).
+    pub capture: Option<Capture>,
+    /// Scripted forward movement, for captures of the player moving.
+    pub scripted_forward: Option<ScriptedForward>,
+    /// The gameplay data to play with.
+    pub data: GameData,
+}
+
 /// Builds and runs the client over the content mounted in `vfs`.
 ///
-/// With `map` set, the client goes straight into that map; otherwise it opens
-/// the map browser. The camera starts at spawn point `spawn`.
-///
-/// When `capture` is `Some`, the client runs non-interactively: it does not
-/// grab the cursor, saves one screenshot after a warmup, and exits (see
-/// [`capture`]). Otherwise it runs as the normal interactive viewer.
+/// With a map set, the client goes straight into it; otherwise it opens the
+/// map browser. When capturing, the client runs non-interactively: it does
+/// not grab the cursor, saves one screenshot after a warmup, and exits.
 ///
 /// The `source://` asset source is registered before `DefaultPlugins` (as Bevy
 /// requires for custom sources) and the loaders after it.
-pub fn run(vfs: Arc<Vfs>, map: Option<String>, spawn: usize, capture: Option<Capture>) -> AppExit {
-    let start = if map.is_some() {
+pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
+    let start = if options.map.is_some() {
         AppState::InGame
     } else {
         AppState::Browser
@@ -72,12 +89,22 @@ pub fn run(vfs: Arc<Vfs>, map: Option<String>, spawn: usize, capture: Option<Cap
         ..default()
     }));
     app.add_plugins(SourceLoadersPlugin);
-    app.insert_resource(CurrentMap(map.unwrap_or_default()));
+    app.insert_resource(CurrentMap(options.map.unwrap_or_default()));
     app.insert_state(start);
-    app.insert_resource(CursorGrab(capture.is_none()));
+    app.insert_resource(CursorGrab(options.capture.is_none()));
     app.add_plugins(FlyCamPlugin);
-    app.add_plugins((WorldPlugin { spawn }, PropsPlugin, BrowserPlugin));
-    if let Some(capture) = capture {
+    app.add_plugins((
+        WorldPlugin {
+            spawn: options.spawn,
+        },
+        PropsPlugin,
+        BrowserPlugin,
+        PlayerPlugin { data: options.data },
+    ));
+    if let Some(script) = options.scripted_forward {
+        app.insert_resource(script);
+    }
+    if let Some(capture) = options.capture {
         app.add_plugins(CapturePlugin(capture));
     }
     app.run()

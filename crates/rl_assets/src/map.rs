@@ -9,7 +9,9 @@
 //! The baked lighting becomes one `Rgba16Float` atlas image (a labeled
 //! sub-asset too), addressed by each mesh's second UV set. The ambient cubes
 //! models are lit by become an irradiance-volume image ([`crate::irradiance`]),
-//! and every prop placement a [`PlacedProp`] naming the model to load.
+//! and every prop placement a [`PlacedProp`] naming the model to load. The
+//! map's collision model ([`source_formats::collision`]) is read alongside,
+//! in Source space, for the simulation.
 
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, RenderAssetUsages};
@@ -22,7 +24,8 @@ use half::f16;
 use std::sync::Arc;
 
 use source_formats::ambient::AmbientLighting;
-use source_formats::bsp::{self, BrushEntity, BspError, MapGeometry, MapSurface};
+use source_formats::bsp::{self, BrushEntity, BspError, MapGeometry, MapSurface, SpawnPoint};
+use source_formats::collision::{self, MapCollision};
 use source_formats::lightmap::LightmapAtlas;
 use source_formats::props::{PropKind, PropPlacement};
 use source_formats::skybox::{self, Cubemap};
@@ -47,13 +50,16 @@ pub struct MapMesh {
     pub mesh: Handle<Mesh>,
 }
 
-/// A player spawn point in Bevy space.
+/// A player spawn point, in Bevy space for rendering and in Source space for
+/// the simulation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Spawn {
     /// Position at the player's feet, in metres.
     pub position: Vec3,
     /// Facing as a Bevy yaw in radians (see [`coords::yaw`]).
     pub yaw: f32,
+    /// The same spawn point in Source space (units, degrees).
+    pub source: SpawnPoint,
 }
 
 /// A brush entity (door, breakable, `func_brush`, ...) in Bevy space: its
@@ -125,6 +131,9 @@ pub struct MapAsset {
     /// lights), queryable at any point; `None` for maps without ambient
     /// samples.
     pub lighting: Option<Arc<AmbientLighting>>,
+    /// What players collide with, in Source space; `None` if it could not be
+    /// read (the map is then only viewable, not playable).
+    pub collision: Option<Arc<MapCollision>>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -142,6 +151,7 @@ impl Default for MapAsset {
             props: Vec::new(),
             irradiance: None,
             lighting: None,
+            collision: None,
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -178,6 +188,13 @@ impl AssetLoader for BspLoader {
         AsyncReadExt::read_to_end(reader, &mut bytes).await?;
         let geometry = bsp::load_geometry(&bytes)?;
         let mut map = build_map(&geometry, load_context);
+        map.collision = match collision::load(&bytes) {
+            Ok(collision) => Some(Arc::new(collision)),
+            Err(error) => {
+                tracing::warn!(%error, "no collision model; the map is view-only");
+                None
+            }
+        };
         if let Some(sky) = &geometry.sky_name {
             if let Some(cube) = load_sky(load_context, sky).await {
                 map.skybox = Some(load_context.add_labeled_asset("skybox", cubemap_image(&cube)));
@@ -228,6 +245,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         .map(|spawn| Spawn {
             position: coords::position(spawn.origin),
             yaw: coords::yaw(spawn.yaw),
+            source: *spawn,
         })
         .collect();
 
@@ -255,6 +273,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         props: geometry.props.iter().map(placed_prop).collect(),
         irradiance,
         lighting: geometry.ambient.clone().map(Arc::new),
+        collision: None,
         center,
         radius: radius.max(1.0),
     }

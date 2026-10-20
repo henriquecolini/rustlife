@@ -5195,6 +5195,8 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "rl_assets",
+ "rl_data",
+ "rl_sim",
  "source_formats",
  "source_fs",
  "tempfile",
@@ -5319,6 +5321,7 @@ dependencies = [
  "clap",
  "rl_client",
  "rl_config",
+ "rl_data",
  "source_fs",
 ]
 
