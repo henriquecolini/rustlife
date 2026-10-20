@@ -200,8 +200,9 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
 struct PackedLightmaps {
     atlas: LightmapAtlas,
     placements: Vec<Placement>,
-    /// Atlas block of each lit face, by face index.
-    face_blocks: HashMap<usize, usize>,
+    /// Atlas block of each lit face and the block's size in luxels, by face
+    /// index.
+    face_blocks: HashMap<usize, (usize, [usize; 2])>,
     /// A 1×1 full-bright block for faces without baked light (e.g. unlit
     /// materials), which Source draws at full brightness.
     full_bright: usize,
@@ -211,7 +212,9 @@ impl PackedLightmaps {
     /// Atlas UV of a vertex of face `index`: the vertex projected onto the
     /// face's lightmap axes, relative to the face's luxel origin. Displaced
     /// vertices project too; their offsets lie mostly along the normal, which
-    /// the projection discards.
+    /// the projection discards, but can stray slightly past the face's extent,
+    /// so the coordinate is clamped to the block (and its border) to never
+    /// sample a neighbouring face.
     fn uv(
         &self,
         index: usize,
@@ -219,14 +222,16 @@ impl PackedLightmaps {
         texture: &vbsp::TextureInfo,
         position: [f32; 3],
     ) -> [f32; 2] {
-        let Some(&block) = self.face_blocks.get(&index) else {
+        let Some(&(block, size)) = self.face_blocks.get(&index) else {
             return self.placements[self.full_bright].uv(&self.atlas, 0.0, 0.0);
         };
         let [s, t] = [texture.light_map_scale, texture.light_map_transform].map(|axis| {
             axis[0] * position[0] + axis[1] * position[1] + axis[2] * position[2] + axis[3]
         });
         let mins = face.light_map_texture_min;
-        self.placements[block].uv(&self.atlas, s - mins[0] as f32, t - mins[1] as f32)
+        let [s, t] = [(s, mins[0], size[0]), (t, mins[1], size[1])]
+            .map(|(coord, min, size)| (coord - min as f32).clamp(-0.5, size as f32 - 0.5));
+        self.placements[block].uv(&self.atlas, s, t)
     }
 }
 
@@ -242,7 +247,7 @@ fn pack_lightmaps(bsp: &Bsp, bytes: &[u8], visible: &[usize]) -> Option<PackedLi
             .face(index)
             .and_then(|face| face_luxels(&face, lighting))
         {
-            face_blocks.insert(index, builder.add(width, height, luxels));
+            face_blocks.insert(index, (builder.add(width, height, luxels), [width, height]));
         }
     }
     if face_blocks.is_empty() {
