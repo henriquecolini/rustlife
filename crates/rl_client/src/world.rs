@@ -15,7 +15,7 @@ use bevy::camera::Exposure;
 use bevy::light::{IrradianceVolume, Skybox};
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
-use rl_assets::{MapAsset, SOURCE, SourceMaterial};
+use rl_assets::{MapAsset, MapMesh, SOURCE, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
 
 use crate::camera::FlyCam;
@@ -64,6 +64,10 @@ struct Resolved {
     /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
     blend: Option<Handle<StandardMaterial>>,
 }
+
+/// The root of a brush entity (door, breakable, ...), named by its class.
+#[derive(Component, Debug)]
+pub struct BrushEntity(pub String);
 
 /// Marks a [`Surface`] whose vertex colours are its baked lighting: it is
 /// drawn unlit, as `albedo × vertex colour`, like a lightmapped surface.
@@ -255,20 +259,23 @@ fn spawn_when_loaded(
     // VMT. `resolve_materials` swaps in the real material once it is ready.
     for mesh in &map.meshes {
         material_maps.request(&mesh.material, &asset_server);
-        let mut surface = commands.spawn((
-            Mesh3d(mesh.mesh.clone()),
-            MeshMaterial3d(placeholder.0.clone()),
-            Surface(mesh.material.clone()),
-            MapScoped,
-        ));
-        // Every surface shares the map's single atlas; its UV_1 coordinates
-        // already address its own blocks, so the rect is the whole image.
-        if let Some(lightmap) = &map.lightmap {
-            surface.insert(Lightmap {
-                image: lightmap.clone(),
-                uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
-                bicubic_sampling: false,
-            });
+        let surface = spawn_surface(&mut commands, mesh, map, &placeholder);
+        commands.entity(surface).insert(MapScoped);
+    }
+    // Brush entities: a placed root per entity, its surfaces as children.
+    for entity in &map.brush_entities {
+        let root = commands
+            .spawn((
+                BrushEntity(entity.classname.clone()),
+                Transform::from_translation(entity.translation).with_rotation(entity.rotation),
+                Visibility::default(),
+                MapScoped,
+            ))
+            .id();
+        for mesh in &entity.meshes {
+            material_maps.request(&mesh.material, &asset_server);
+            let surface = spawn_surface(&mut commands, mesh, map, &placeholder);
+            commands.entity(root).add_child(surface);
         }
     }
 
@@ -315,11 +322,36 @@ fn spawn_when_loaded(
     }
 
     info!(
-        "spawned {} surfaces (radius {:.1} m)",
+        "spawned {} surfaces and {} brush entities (radius {:.1} m)",
         map.meshes.len(),
+        map.brush_entities.len(),
         map.radius
     );
     spawned.0 = true;
+}
+
+/// Spawns one lightmapped surface with the placeholder material.
+fn spawn_surface(
+    commands: &mut Commands,
+    mesh: &MapMesh,
+    map: &MapAsset,
+    placeholder: &Placeholder,
+) -> Entity {
+    let mut surface = commands.spawn((
+        Mesh3d(mesh.mesh.clone()),
+        MeshMaterial3d(placeholder.0.clone()),
+        Surface(mesh.material.clone()),
+    ));
+    // Every surface shares the map's single atlas; its UV_1 coordinates
+    // already address its own blocks, so the rect is the whole image.
+    if let Some(lightmap) = &map.lightmap {
+        surface.insert(Lightmap {
+            image: lightmap.clone(),
+            uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+            bicubic_sampling: false,
+        });
+    }
+    surface.id()
 }
 
 /// What [`resolve_materials`] needs from each map surface: its mesh and

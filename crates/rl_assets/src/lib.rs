@@ -28,7 +28,8 @@ pub mod texture;
 pub mod vertex_lighting;
 
 pub use map::{
-    BspLoader, IrradianceVolumeData, MapAsset, MapLoadError, MapMesh, PlacedProp, Spawn,
+    BspLoader, IrradianceVolumeData, MapAsset, MapBrushEntity, MapLoadError, MapMesh, PlacedProp,
+    Spawn,
 };
 pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
 pub use model::{MdlLoader, ModelAsset, ModelLoadError, ModelPart};

@@ -72,12 +72,33 @@ pub struct SpawnPoint {
     pub yaw: f32,
 }
 
-/// All visible world geometry of a map, grouped by material, plus its spawn
-/// points.
+/// A brush entity (door, breakable, `func_brush`, ...): its own BSP model,
+/// placed by the entity's origin and angles.
+///
+/// `vbsp` stores a brush entity's faces relative to the entity's origin, so
+/// they must be moved by it (and turned by its angles) to appear in place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrushEntity {
+    /// The entity class, e.g. `func_door`.
+    pub classname: String,
+    /// Entity origin, Source space.
+    pub origin: [f32; 3],
+    /// Entity orientation, `[pitch, yaw, roll]` in degrees.
+    pub angles: [f32; 3],
+    /// The model's visible geometry, one entry per material, in the
+    /// entity's own frame.
+    pub surfaces: Vec<MapSurface>,
+}
+
+/// All visible geometry of a map, grouped by material, plus its spawn
+/// points, props and lighting.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MapGeometry {
-    /// One entry per distinct material referenced by a visible face.
+    /// The world (BSP model 0): one entry per distinct material referenced
+    /// by a visible face.
     pub surfaces: Vec<MapSurface>,
+    /// Brush entities with visible geometry.
+    pub brush_entities: Vec<BrushEntity>,
     /// Player spawn points parsed from the map's entities.
     pub spawns: Vec<SpawnPoint>,
     /// The map's baked lighting, or `None` if it has none (unlit or
@@ -137,10 +158,52 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
     // Pass 1: pack every lit face's lightmap into one atlas.
     let lightmaps = pack_lightmaps(&bsp, bytes, &visible);
 
-    // Pass 2: emit triangles grouped by material.
+    // Pass 2: emit triangles grouped by material, for the world (model 0)
+    // and for each brush entity's model.
+    let mut is_visible = vec![false; bsp.faces.len()];
+    for &index in &visible {
+        is_visible[index] = true;
+    }
+    let model_faces = |model: usize| -> Vec<usize> {
+        bsp.models.get(model).map_or_else(Vec::new, |model| {
+            let first = usize::try_from(model.first_face).unwrap_or(0);
+            let count = usize::try_from(model.face_count).unwrap_or(0);
+            (first..first.saturating_add(count))
+                .filter(|&face| is_visible.get(face).copied().unwrap_or(false))
+                .collect()
+        })
+    };
+    let surfaces = build_surfaces(&bsp, &model_faces(0), lightmaps.as_ref());
+    let brush_entities = brush_entities(&bsp)
+        .into_iter()
+        .map(|(model, mut entity)| {
+            entity.surfaces = build_surfaces(&bsp, &model_faces(model), lightmaps.as_ref());
+            entity
+        })
+        .filter(|entity| !entity.surfaces.is_empty())
+        .collect();
+
+    Ok(MapGeometry {
+        surfaces,
+        brush_entities,
+        spawns: spawn_points(&bsp),
+        lightmap: lightmaps.map(|packed| packed.atlas),
+        sky_name: sky_name(&bsp),
+        props: props::props(&bsp),
+        ambient: ambient::load(&bsp, bytes),
+    })
+}
+
+/// Triangulates `faces` into one [`MapSurface`] per material, with texture
+/// UVs, lightmap UVs (when the map is lit) and displacement blend alphas.
+fn build_surfaces(
+    bsp: &Bsp,
+    faces: &[usize],
+    lightmaps: Option<&PackedLightmaps>,
+) -> Vec<MapSurface> {
     let mut by_material: HashMap<String, usize> = HashMap::new();
     let mut surfaces: Vec<MapSurface> = Vec::new();
-    for &index in &visible {
+    for &index in faces {
         let Some(face) = bsp.face(index) else {
             continue;
         };
@@ -187,22 +250,49 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
                 y: position[1],
                 z: position[2],
             }));
-            if let Some(lightmaps) = &lightmaps {
+            if let Some(lightmaps) = lightmaps {
                 surface
                     .lightmap_uvs
                     .push(lightmaps.uv(index, &face, &texture, position));
             }
         }
     }
+    surfaces
+}
 
-    Ok(MapGeometry {
-        surfaces,
-        spawns: spawn_points(&bsp),
-        lightmap: lightmaps.map(|packed| packed.atlas),
-        sky_name: sky_name(&bsp),
-        props: props::props(&bsp),
-        ambient: ambient::load(&bsp, bytes),
-    })
+/// Every drawable brush entity (an entity whose `model` is `*<n>`, n ≥ 1)
+/// with the index of its BSP model; surfaces are filled in by the caller.
+/// Entities that start disabled or render nothing (`rendermode 10`) are
+/// skipped, as are references to missing models.
+fn brush_entities(bsp: &Bsp) -> Vec<(usize, BrushEntity)> {
+    bsp.entities
+        .iter()
+        .filter_map(|entity| {
+            let model: usize = entity.prop("model")?.strip_prefix('*')?.parse().ok()?;
+            if model == 0 || model >= bsp.models.len() {
+                return None;
+            }
+            if entity.prop("rendermode") == Some("10") || entity.prop("StartDisabled") == Some("1")
+            {
+                return None;
+            }
+            Some((
+                model,
+                BrushEntity {
+                    classname: entity.prop("classname").unwrap_or_default().to_owned(),
+                    origin: entity
+                        .prop("origin")
+                        .and_then(parse_vector)
+                        .unwrap_or_default(),
+                    angles: entity
+                        .prop("angles")
+                        .and_then(parse_vector)
+                        .unwrap_or_default(),
+                    surfaces: Vec::new(),
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Every lit face's lightmap, packed into one atlas.
@@ -478,7 +568,9 @@ mod tests {
             .filter(|s| s.blend.iter().any(|&b| b > 0.0))
             .count();
         eprintln!("surfaces with painted blend: {blended}");
-        for surface in &geometry.surfaces {
+        eprintln!("brush entities: {}", geometry.brush_entities.len());
+        let entity_surfaces = geometry.brush_entities.iter().flat_map(|e| &e.surfaces);
+        for surface in geometry.surfaces.iter().chain(entity_surfaces) {
             assert_eq!(surface.blend.len(), surface.positions.len());
             assert_eq!(surface.lightmap_uvs.len(), surface.positions.len());
             assert!(

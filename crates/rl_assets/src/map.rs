@@ -22,7 +22,7 @@ use half::f16;
 use std::sync::Arc;
 
 use source_formats::ambient::AmbientLighting;
-use source_formats::bsp::{self, BspError, MapGeometry, MapSurface};
+use source_formats::bsp::{self, BrushEntity, BspError, MapGeometry, MapSurface};
 use source_formats::lightmap::LightmapAtlas;
 use source_formats::props::{PropKind, PropPlacement};
 use source_formats::skybox::{self, Cubemap};
@@ -54,6 +54,21 @@ pub struct Spawn {
     pub position: Vec3,
     /// Facing as a Bevy yaw in radians (see [`coords::yaw`]).
     pub yaw: f32,
+}
+
+/// A brush entity (door, breakable, `func_brush`, ...) in Bevy space: its
+/// meshes are in the entity's own frame, placed by `translation` and
+/// `rotation`.
+#[derive(Debug, Clone)]
+pub struct MapBrushEntity {
+    /// The entity class, e.g. `func_door`.
+    pub classname: String,
+    /// Position of the entity's origin, in metres.
+    pub translation: Vec3,
+    /// Orientation (see [`coords::rotation`]).
+    pub rotation: Quat,
+    /// One mesh per material, lightmapped like the world.
+    pub meshes: Vec<MapMesh>,
 }
 
 /// A model placed in the map, in Bevy space.
@@ -90,8 +105,10 @@ pub struct IrradianceVolumeData {
 /// map has no spawns.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct MapAsset {
-    /// One entry per distinct material in the map.
+    /// The world: one entry per distinct material.
     pub meshes: Vec<MapMesh>,
+    /// Brush entities, each with its own meshes and placement.
+    pub brush_entities: Vec<MapBrushEntity>,
     /// Player spawn points, in entity-lump order.
     pub spawns: Vec<Spawn>,
     /// The baked-lighting atlas, sampled with each mesh's `UV_1`; `None` for
@@ -118,6 +135,7 @@ impl Default for MapAsset {
     fn default() -> Self {
         Self {
             meshes: Vec::new(),
+            brush_entities: Vec::new(),
             spawns: Vec::new(),
             lightmap: None,
             skybox: None,
@@ -181,22 +199,19 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
 
-    let meshes = geometry
-        .surfaces
+    for surface in &geometry.surfaces {
+        for &position in &surface.positions {
+            let p = coords::position(position);
+            min = min.min(p);
+            max = max.max(p);
+        }
+    }
+    let meshes = add_meshes(load_context, "mesh", &geometry.surfaces);
+    let brush_entities = geometry
+        .brush_entities
         .iter()
         .enumerate()
-        .map(|(index, surface)| {
-            for &position in &surface.positions {
-                let p = coords::position(position);
-                min = min.min(p);
-                max = max.max(p);
-            }
-            let handle = load_context.add_labeled_asset(format!("mesh{index}"), mesh_of(surface));
-            MapMesh {
-                material: surface.material.clone(),
-                mesh: handle,
-            }
-        })
+        .map(|(index, entity)| brush_entity(load_context, index, entity))
         .collect();
 
     // Guard against an empty or degenerate map so the camera still gets sane
@@ -233,6 +248,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
 
     MapAsset {
         meshes,
+        brush_entities,
         spawns,
         lightmap,
         skybox: None,
@@ -241,6 +257,38 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         lighting: geometry.ambient.clone().map(Arc::new),
         center,
         radius: radius.max(1.0),
+    }
+}
+
+/// Adds one labeled mesh per surface (`<prefix><index>`), paired with its
+/// material.
+fn add_meshes(
+    load_context: &mut LoadContext,
+    prefix: &str,
+    surfaces: &[MapSurface],
+) -> Vec<MapMesh> {
+    surfaces
+        .iter()
+        .enumerate()
+        .map(|(index, surface)| MapMesh {
+            material: surface.material.clone(),
+            mesh: load_context.add_labeled_asset(format!("{prefix}{index}"), mesh_of(surface)),
+        })
+        .collect()
+}
+
+/// Converts brush entity number `index` to Bevy space, adding its meshes as
+/// `brush<index>_<n>` sub-assets.
+fn brush_entity(
+    load_context: &mut LoadContext,
+    index: usize,
+    entity: &BrushEntity,
+) -> MapBrushEntity {
+    MapBrushEntity {
+        classname: entity.classname.clone(),
+        translation: coords::position(entity.origin),
+        rotation: coords::rotation(entity.angles),
+        meshes: add_meshes(load_context, &format!("brush{index}_"), &entity.surfaces),
     }
 }
 
