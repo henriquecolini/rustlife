@@ -17,6 +17,7 @@ rl_assets = { path = "crates/rl_assets" }
 rl_client = { path = "crates/rl_client" }
 rl_config = { path = "crates/rl_config" }
 rl_data = { path = "crates/rl_data" }
+rl_level = { path = "crates/rl_level" }
 rl_sim = { path = "crates/rl_sim" }
 source_formats = { path = "crates/source_formats" }
 source_fs = { path = "crates/source_fs" }

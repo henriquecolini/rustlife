@@ -1,0 +1,26 @@
+[package]
+name = "rl_level"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Loads a map's simulation — collision, spawns, entities, prop bodies — from mounted content, without rendering."
+
+[dependencies]
+crc32fast.workspace = true
+glam.workspace = true
+rl_data.workspace = true
+rl_sim.workspace = true
+source_formats.workspace = true
+source_fs.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+source_formats = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

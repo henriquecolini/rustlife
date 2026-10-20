@@ -84,6 +84,38 @@ impl ModelGeometry {
     }
 }
 
+/// What the simulation needs of a model, all in its `.mdl`: no meshes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelHeader {
+    /// Axis-aligned bounds `(min, max)`, Source space, model frame.
+    pub bounds: ([f32; 3], [f32; 3]),
+    /// The model's `$surfaceprop`, as written.
+    pub surface_prop: String,
+}
+
+/// Reads a model's bounds and surface property from its `.mdl` alone,
+/// without the `.vvd` and `.vtx` that [`load_model`] needs: what a
+/// dedicated server builds prop collision from.
+///
+/// # Errors
+///
+/// Returns [`ModelError::Parse`] on a malformed `.mdl`; never panics.
+pub fn read_header(mdl: &[u8]) -> Result<ModelHeader, ModelError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mdl = Mdl::read(mdl).map_err(|error| ModelError::Parse(error.to_string()))?;
+        let [min, max] = mdl.header.bounding_box;
+        Ok(ModelHeader {
+            bounds: ([min.x, min.y, min.z], [max.x, max.y, max.z]),
+            surface_prop: mdl.surface_prop,
+        })
+    }))
+    .unwrap_or_else(|_| {
+        Err(ModelError::Parse(
+            "model header parser panicked on malformed data".to_owned(),
+        ))
+    })
+}
+
 /// Errors from [`load_model`].
 #[derive(Debug, Error)]
 pub enum ModelError {
@@ -243,6 +275,8 @@ mod tests {
     fn garbage_errors_without_panicking() {
         assert!(load_model(b"not", b"a", b"model").is_err());
         assert!(load_model(&[], &[], &[]).is_err());
+        assert!(read_header(b"not a model").is_err());
+        assert!(read_header(&[]).is_err());
     }
 
     #[test]
@@ -313,5 +347,8 @@ mod tests {
             "every triangle vertex is a strip-group vertex"
         );
         assert!(!geometry.material_candidates(0, 0).is_empty());
+        let header = read_header(&read("mdl")).expect("read header");
+        assert_eq!(header.bounds, geometry.bounds);
+        assert_eq!(header.surface_prop, geometry.surface_prop);
     }
 }

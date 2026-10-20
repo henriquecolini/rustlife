@@ -152,6 +152,42 @@ pub fn load_geometry(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         })
 }
 
+/// What a map places for the simulation — spawn points, props and every
+/// entity — without its visible geometry or lighting: what a dedicated
+/// server, which draws nothing, reads.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MapContents {
+    /// Player spawn points.
+    pub spawns: Vec<SpawnPoint>,
+    /// Static props and prop entities, in the same order as
+    /// [`MapGeometry::props`].
+    pub props: Vec<PropPlacement>,
+    /// Every entity of the map.
+    pub entities: Vec<MapEntity>,
+}
+
+/// Reads a BSP's spawn points, props and entities, skipping the costly
+/// geometry and lighting [`load_geometry`] extracts.
+///
+/// # Errors
+///
+/// Returns [`BspError::Parse`] if the data is not a valid BSP; never panics.
+pub fn load_contents(bytes: &[u8]) -> Result<MapContents, BspError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let bsp = Bsp::read(bytes).map_err(|error| BspError::Parse(error.to_string()))?;
+        Ok(MapContents {
+            spawns: spawn_points(&bsp),
+            props: props::props(&bsp),
+            entities: entities::entities(&bsp),
+        })
+    }))
+    .unwrap_or_else(|_| {
+        Err(BspError::Parse(
+            "BSP contents extraction panicked on malformed data".to_owned(),
+        ))
+    })
+}
+
 fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
     let bsp = Bsp::read(bytes).map_err(|error| BspError::Parse(error.to_string()))?;
     let visible: Vec<usize> = (0..bsp.faces.len())
@@ -501,6 +537,8 @@ mod tests {
     fn non_bsp_bytes_error_without_panicking() {
         assert!(load_geometry(b"not a bsp").is_err());
         assert!(load_geometry(&[]).is_err());
+        assert!(load_contents(b"not a bsp").is_err());
+        assert!(load_contents(&[]).is_err());
     }
 
     #[test]
@@ -555,6 +593,10 @@ mod tests {
         eprintln!("sky: {:?}", geometry.sky_name);
         assert!(geometry.sky_name.is_some(), "worldspawn names a sky");
         assert!(!geometry.spawns.is_empty(), "a DM map has spawn points");
+        let contents = load_contents(&bytes).expect("extract contents");
+        assert_eq!(contents.spawns, geometry.spawns);
+        assert_eq!(contents.props, geometry.props, "props in the same order");
+        assert_eq!(contents.entities, geometry.entities);
         assert!(
             geometry
                 .entities

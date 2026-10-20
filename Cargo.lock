@@ -5408,6 +5408,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl_level"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "glam 0.33.12",
+ "rl_data",
+ "rl_sim",
+ "source_formats",
+ "source_fs",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "rl_sim"
 version = "0.1.0"
 dependencies = [
