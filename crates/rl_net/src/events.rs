@@ -31,6 +31,20 @@ pub enum Event {
         /// Which fire mode.
         mode: Mode,
     },
+    /// A player began reloading a weapon.
+    Reload {
+        /// Who.
+        player: PlayerId,
+        /// Which weapon.
+        weapon: WeaponId,
+    },
+    /// A player took a weapon in hand.
+    Deploy {
+        /// Who.
+        player: PlayerId,
+        /// Which weapon.
+        weapon: WeaponId,
+    },
     /// A bullet or swing.
     Shot(ShotEvent),
     /// An explosion.
@@ -84,6 +98,20 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
                 weapon,
                 mode,
             }),
+    );
+    out.extend(
+        events
+            .reloads
+            .iter()
+            .filter(|(player, _)| !mine(*player))
+            .map(|&(player, weapon)| Event::Reload { player, weapon }),
+    );
+    out.extend(
+        events
+            .deploys
+            .iter()
+            .filter(|(player, _)| !mine(*player))
+            .map(|&(player, weapon)| Event::Deploy { player, weapon }),
     );
     out.extend(
         events
@@ -143,6 +171,8 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
                 weapon,
                 mode,
             } => tick.fired.push((player, weapon, mode)),
+            Event::Reload { player, weapon } => tick.reloads.push((player, weapon)),
+            Event::Deploy { player, weapon } => tick.deploys.push((player, weapon)),
             Event::Shot(shot) => tick.shots.push(shot),
             Event::Explosion(blast) => tick.explosions.push(blast),
             Event::Damage(damage) => tick.damage.push(damage),

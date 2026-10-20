@@ -209,6 +209,10 @@ pub struct TickEvents {
     pub tools: Vec<(PlayerId, ToolEvent)>,
     /// Trigger pulls: who fired which weapon's fire mode.
     pub fired: Vec<(PlayerId, WeaponId, Mode)>,
+    /// Reloads begun: who began reloading which weapon.
+    pub reloads: Vec<(PlayerId, WeaponId)>,
+    /// Weapons brought up: who took which in hand.
+    pub deploys: Vec<(PlayerId, WeaponId)>,
     /// Bullets and swings.
     pub shots: Vec<ShotEvent>,
     /// Explosions.

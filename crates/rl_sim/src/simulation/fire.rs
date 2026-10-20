@@ -39,6 +39,14 @@ impl Simulation {
             return;
         };
         let pulled = player.inventory.tick(&arsenal, cmd, self.dt);
+        if let Some(weapon) = player.inventory.active() {
+            if pulled.switched {
+                events.deploys.push((id, weapon));
+            }
+            if pulled.reloading {
+                events.reloads.push((id, weapon));
+            }
+        }
         let aim = Aim {
             eye: movement_eye.unwrap_or(player.state.origin),
             pitch: cmd.pitch,
