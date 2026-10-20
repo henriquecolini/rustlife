@@ -1,5 +1,6 @@
-//! Trace throughput. Run with `cargo bench -p rl_sim`; set `RUSTLIFE_TEST_BSP`
-//! to a map to also measure traces through a real BSP tree.
+//! Trace, movement and simulation throughput. Run with `cargo bench -p
+//! rl_sim`; set `RUSTLIFE_TEST_BSP` to a map to also measure traces through a
+//! real BSP tree.
 
 #![allow(missing_docs)]
 
@@ -143,5 +144,68 @@ fn bench_movement(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_room, bench_real_map, bench_movement);
+/// A whole simulation tick: one player running into a field of 64 tumbling
+/// crates, with pushing and physics.
+fn bench_simulation(c: &mut Criterion) {
+    use std::sync::Arc;
+
+    use glam::Quat;
+    use rl_sim::collision::ConvexHull;
+    use rl_sim::movement::UserCmd;
+    use rl_sim::physics::{Motion, PropDesc};
+    use rl_sim::simulation::Simulation;
+
+    let Ok(data) = rl_data::GameData::builtin() else {
+        return;
+    };
+    let fresh = || {
+        let mut sim = Simulation::new(Arc::new(room()), &data);
+        let player = sim.spawn_player(Vec3::new(-600.0, -600.0, 1.0));
+        for i in 0..64 {
+            let (x, y) = ((i % 8) as f32 * 40.0, (i / 8) as f32 * 40.0);
+            sim.add_prop(&PropDesc {
+                pieces: vec![ConvexHull::from_box(Vec3::splat(-8.0), Vec3::splat(8.0))],
+                origin: Vec3::new(x - 400.0, y - 400.0, 8.0 + (i % 3) as f32 * 20.0),
+                rotation: Quat::IDENTITY,
+                motion: Motion::Dynamic,
+                mass: 10.0,
+                material: *data.physics.materials.get("wood"),
+                linear_damping: 0.0,
+                angular_damping: 0.0,
+                debris: false,
+                start_asleep: false,
+                grabbable: true,
+                free_on_grab: false,
+            });
+        }
+        (sim, player)
+    };
+    let (mut sim, mut player) = fresh();
+    let cmd = UserCmd {
+        forward: 1.0,
+        yaw: 45.0,
+        ..UserCmd::default()
+    };
+    let mut ticks = 0;
+    c.bench_function("simulation: one tick with 64 crates", |b| {
+        b.iter(|| {
+            black_box(sim.tick(&[(player, cmd)]));
+            ticks += 1;
+            // Start over before everything has been shoved into a corner
+            // and gone to sleep.
+            if ticks == 300 {
+                (sim, player) = fresh();
+                ticks = 0;
+            }
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_room,
+    bench_real_map,
+    bench_movement,
+    bench_simulation
+);
 criterion_main!(benches);
