@@ -5,6 +5,9 @@
 //! Source, the damage comes in two doses a second rather than a trickle
 //! every tick, so a hazard reads as a few clear hits.
 //!
+//! Hazards that start disabled wait for map logic to switch them on
+//! (`rl_sim::logic`): the traps of `dm_runoff` and `dm_steamlab`.
+//!
 //! A hazard's volume is its brush model's bounding box. Hurt triggers are
 //! nearly always boxes, and a box needs no clipping against the model's
 //! (often missing) trigger brushes.
@@ -27,6 +30,8 @@ pub struct Hazard {
     pub maxs: Vec3,
     /// Damage per second.
     pub damage: f32,
+    /// Whether it hurts now; map logic switches it.
+    pub enabled: bool,
 }
 
 impl Hazard {
@@ -43,14 +48,16 @@ impl Hazard {
     }
 }
 
-/// The enabled, harmful `trigger_hurt` entities of a map.
+/// The harmful `trigger_hurt` entities of a map, with each one's index in
+/// `entities`. Those that start disabled are included, switched off: map
+/// logic switches them on.
 #[must_use]
-pub fn from_entities(entities: &[MapEntity], world: &CollisionWorld) -> Vec<Hazard> {
+pub fn from_entities(entities: &[MapEntity], world: &CollisionWorld) -> Vec<(usize, Hazard)> {
     entities
         .iter()
-        .filter(|entity| entity.classname == "trigger_hurt")
-        .filter(|entity| entity.property("StartDisabled") != Some("1"))
-        .filter_map(|entity| {
+        .enumerate()
+        .filter(|(_, entity)| entity.classname == "trigger_hurt")
+        .filter_map(|(index, entity)| {
             let damage = entity.number("damage")?;
             if damage <= 0.0 {
                 // Negative damage heals in Source; rustlife has no healing
@@ -62,7 +69,16 @@ pub fn from_entities(entities: &[MapEntity], world: &CollisionWorld) -> Vec<Haza
                 Vec3::from(entity.origin),
                 entity.angles,
             )?;
-            Some(Hazard { mins, maxs, damage })
+            let enabled = entity.property("StartDisabled") != Some("1");
+            Some((
+                index,
+                Hazard {
+                    mins,
+                    maxs,
+                    damage,
+                    enabled,
+                },
+            ))
         })
         .collect()
 }
@@ -77,6 +93,7 @@ mod tests {
             mins: Vec3::new(0.0, 0.0, -100.0),
             maxs: Vec3::new(100.0, 100.0, 0.0),
             damage: 1000.0,
+            enabled: true,
         };
         let player = |z: f32| (Vec3::new(40.0, 40.0, z), Vec3::new(72.0, 72.0, z + 72.0));
         let (mins, maxs) = player(-50.0);

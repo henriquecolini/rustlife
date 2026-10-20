@@ -11,13 +11,17 @@
 //!    reloading, firing — or the Manipulator (`fire`).
 //! 2. **Respawns**: the dead come back once they press fire or jump after
 //!    the respawn delay, or anyway after the forced delay (`life`).
-//! 3. **Physics**: the players' boxes move to their new positions and the
-//!    physics world steps; props that hit players hurt them.
-//! 4. **Projectiles** fly, strike and burst.
-//! 5. **Pickups** are taken by players touching them, and come back.
-//! 6. **Hazards** hurt whoever is inside.
-//! 7. **The match** clock runs; it ends at the time limit and restarts after
-//!    the intermission.
+//! 3. **Map logic** (`logic`): uses, touches, damage and triggers set the
+//!    map's wiring off; doors and buttons move, pushing players in their
+//!    way or crushing them; teleports, pushes and the map's explosions act.
+//! 4. **Physics**: the players' boxes and the movers move to their new
+//!    places and the physics world steps; props that hit players hurt
+//!    them.
+//! 5. **Projectiles** fly, strike and burst.
+//! 6. **Pickups** are taken by players touching them, and come back.
+//! 7. **Hazards** that are on hurt whoever is inside.
+//! 8. **The match** clock runs; it ends at the time limit and restarts after
+//!    the intermission, with the map's logic as the map placed it.
 //!
 //! Every tick reports what happened in [`TickEvents`], for sounds, effects,
 //! the kill feed and the HUD. This is the loop the server runs
@@ -44,7 +48,8 @@ use crate::collision::{CollisionWorld, Hull, find_free_position};
 use crate::combat::hitscan::ShotTrace;
 use crate::combat::{Cause, Damage, Target, Vitals};
 use crate::hazards::{self, Hazard};
-use crate::movement::{MoveEvents, PlayerState, UserCmd, simulate};
+use crate::logic::{LogicState, MapLogic};
+use crate::movement::{Buttons, MoveEvents, PlayerState, UserCmd, simulate};
 use crate::physics::{BodyId, Impact, PhysicsWorld, PropDesc};
 use crate::pickups::{self, Pickup};
 use crate::rules::{Match, MatchEvent};
@@ -56,7 +61,10 @@ use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
 mod fire;
 mod lag;
 mod life;
+mod map;
 mod replica;
+
+pub use map::MapEvent;
 
 pub use lag::History;
 pub use replica::Prediction;
@@ -153,8 +161,9 @@ pub struct ExplosionEvent {
     pub position: Vec3,
     /// Its reach, units.
     pub radius: f32,
-    /// The weapon whose projectile burst.
-    pub weapon: WeaponId,
+    /// The weapon whose projectile burst; `None` for the map's own
+    /// explosions.
+    pub weapon: Option<WeaponId>,
 }
 
 /// Damage a player took.
@@ -215,13 +224,17 @@ pub struct TickEvents {
     pub respawns: Vec<RespawnEvent>,
     /// The match ended or restarted.
     pub match_event: Option<MatchEvent>,
+    /// What the map's logic did that players see or hear: doors moving,
+    /// buttons pressed, glass breaking, players teleported.
+    pub map: Vec<MapEvent>,
 }
 
 /// A map's simulation: collision, physics, players, weapons, pickups and
 /// the match.
 #[derive(Debug)]
 pub struct Simulation {
-    world: Arc<CollisionWorld>,
+    /// The map's collision, with its movers where they are now.
+    world: CollisionWorld,
     physics: PhysicsWorld,
     /// Players by id; `None` where a player left and nobody has joined in
     /// their place yet.
@@ -238,6 +251,15 @@ pub struct Simulation {
     spawns: Vec<Spawn>,
     pickups: Vec<Pickup>,
     hazards: Vec<Hazard>,
+    /// The map's wiring: doors, buttons, triggers, traps.
+    logic: MapLogic,
+    /// Players who pressed use this tick.
+    users: Vec<PlayerId>,
+    /// Damage dealt to movers this tick: `(attacker, BSP model, amount)`.
+    brush_damage: Vec<(Option<PlayerId>, usize, f32)>,
+    /// Each mover's pose as last given to collision and physics, and
+    /// whether it was moving.
+    mover_poses: Vec<map::MoverPose>,
     /// Seconds since hazards last dealt a dose.
     hazard_clock: f32,
     projectiles: Vec<Projectile>,
@@ -255,8 +277,9 @@ impl Simulation {
     pub fn new(world: Arc<CollisionWorld>, data: &GameData) -> Self {
         let dt = data.simulation.tick_interval();
         let physics = PhysicsWorld::new(&world, &data.physics, dt);
+        let logic = MapLogic::new(&[], &world, &[], &data.map_logic, dt);
         Self {
-            world,
+            world: (*world).clone(),
             physics,
             players: Vec::new(),
             spare_bodies: Vec::new(),
@@ -268,6 +291,10 @@ impl Simulation {
             spawns: Vec::new(),
             pickups: Vec::new(),
             hazards: Vec::new(),
+            logic,
+            users: Vec::new(),
+            brush_damage: Vec::new(),
+            mover_poses: Vec::new(),
             hazard_clock: 0.0,
             projectiles: Vec::new(),
             next_projectile: 0,
@@ -300,10 +327,22 @@ impl Simulation {
         &self.arsenal
     }
 
-    /// The map's static collision.
+    /// The map's collision, with its movers where they are now.
     #[must_use]
     pub fn world(&self) -> &CollisionWorld {
         &self.world
+    }
+
+    /// The map's logic: its movers, triggers and sounds.
+    #[must_use]
+    pub fn logic(&self) -> &MapLogic {
+        &self.logic
+    }
+
+    /// What players see of the map's logic now.
+    #[must_use]
+    pub fn logic_state(&self) -> LogicState {
+        self.logic.state()
     }
 
     /// The physics world, for reading prop poses.
@@ -359,13 +398,28 @@ impl Simulation {
         self.spawns = spawns;
     }
 
-    /// Adds the pickups and hazards of the map's `entities` (see
-    /// `entity_map.ron`).
+    /// Adds the pickups, hazards and logic of the map's `entities` (see
+    /// `entity_map.ron` and `logic`). The logic replaces any added before.
     pub fn add_entities(&mut self, entities: &[MapEntity]) {
         self.pickups
             .extend(pickups::from_entities(entities, &self.data, &self.arsenal));
-        self.hazards
-            .extend(hazards::from_entities(entities, &self.world));
+        let first_hazard = self.hazards.len();
+        let mut hazard_entities = Vec::new();
+        for (offset, (entity, hazard)) in hazards::from_entities(entities, &self.world)
+            .into_iter()
+            .enumerate()
+        {
+            hazard_entities.push((entity, first_hazard + offset));
+            self.hazards.push(hazard);
+        }
+        self.logic = MapLogic::new(
+            entities,
+            &self.world,
+            &hazard_entities,
+            &self.data.map_logic,
+            self.dt,
+        );
+        self.sync_movers();
         tracing::info!(
             pickups = self.pickups.len(),
             hazards = self.hazards.len(),
@@ -524,6 +578,7 @@ impl Simulation {
             }
         }
         self.respawn_waiting(commands, &mut events);
+        self.run_logic(&mut events);
 
         for player in self.players.iter().flatten() {
             let hull = player.state.hull(&self.data.movement);
@@ -556,6 +611,9 @@ impl Simulation {
         };
         if !player.alive() {
             return;
+        }
+        if cmd.buttons.contains(Buttons::USE) && !player.state.old_buttons.contains(Buttons::USE) {
+            self.users.push(id);
         }
         let scene = Scene {
             world: &self.world,

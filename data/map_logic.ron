@@ -1,0 +1,20 @@
+// How the map's own logic plays (doors, buttons, triggers, traps), read by
+// `rl_sim::logic`. What each entity does comes from the map; these are the
+// numbers it cannot give.
+MapLogic(
+    // Players press buttons and open doors with use (E) within this many
+    // units of their eyes.
+    use_range: 80.0,
+    // Explosions the map sets off (env_explosion). Damage and reach are the
+    // map's; an explosion without a reach of its own reaches 2.5 units per
+    // point of damage, as in Source. Players and props are thrown about as
+    // hard as by a rocket of the same damage.
+    explosion: (
+        radius_per_damage: 2.5,
+        knockback_per_damage: 7.0,
+        force_per_damage: 700.0,
+    ),
+    // A tick fires at most this many outputs, so relays that trigger each
+    // other in a loop cannot hang the server.
+    max_events_per_tick: 1024,
+)

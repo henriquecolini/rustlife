@@ -1,6 +1,8 @@
 //! The collision world of a loaded map and its traces.
 
-use glam::{Mat3, Vec3};
+use std::sync::Arc;
+
+use glam::{Mat3, Quat, Vec3};
 use source_formats::collision::{BrushEntityCollision, MapCollision};
 
 use super::clip::{ClipPlane, Hit, Sweep, clip_convex};
@@ -44,6 +46,17 @@ const SOLID_BRUSH_CLASSES: [&str; 22] = [
     "func_wall",
 ];
 
+/// Brush entity classes that change of their own accord or at players'
+/// hands: they open, close, are pressed or break.
+const CHANGING_BRUSH_CLASSES: [&str; 6] = [
+    "func_breakable",
+    "func_breakable_surf",
+    "func_button",
+    "func_door",
+    "func_door_rotating",
+    "func_movelinear",
+];
+
 /// `func_brush` `Solidity` values.
 const SOLIDITY_NEVER: i32 = 1;
 const SOLIDITY_ALWAYS: i32 = 2;
@@ -62,31 +75,67 @@ struct PlacedModel {
     maxs: Vec3,
 }
 
+/// A brush entity that map logic may move, hide or make passable: a door,
+/// a button, or any solid brush entity with a name (or a parent).
+#[derive(Debug, Clone, Copy)]
+struct Mover {
+    /// Its BSP model.
+    model: usize,
+    /// Where it is now.
+    placed: PlacedModel,
+    /// Bounds of the model in its own frame.
+    local_mins: Vec3,
+    local_maxs: Vec3,
+    /// Whether it blocks anything now.
+    solid: bool,
+}
+
 /// Everything a map's players collide with, in Source space: the world's
-/// brushes and displacements and its solid brush entities (at their initial
-/// placement), plus the map's ladders.
+/// brushes and displacements and its solid brush entities, plus the map's
+/// ladders.
 ///
 /// Built once per map from the BSP's [`MapCollision`]. Queries take `&self`
 /// and allocate nothing, so one world can serve every player's movement.
+///
+/// Brush entities that map logic can change — doors, buttons, named or
+/// parented brushes — are *movers*: each can be placed anew and made solid
+/// or passable ([`CollisionWorld::set_mover`]). The rest stay where the map
+/// put them. Cloning is cheap: the map's brushes and tree are shared.
 #[derive(Debug, Clone)]
 pub struct CollisionWorld {
-    map: MapCollision,
+    map: Arc<MapCollision>,
     entities: Vec<PlacedModel>,
+    movers: Vec<Mover>,
     ladders: Vec<Ladder>,
     dismounts: Vec<Vec3>,
 }
 
 impl CollisionWorld {
     /// Builds the world from a map's collision model. Brush entities of
-    /// non-solid classes, `func_brush`es that are never solid or start
-    /// disabled, and disabled ladders are left out.
+    /// non-solid classes, `func_brush`es that are never solid, unnamed ones
+    /// that start disabled, and disabled ladders are left out.
     #[must_use]
     pub fn new(map: MapCollision) -> Self {
         let entities = map
             .brush_entities
             .iter()
-            .filter(|entity| is_solid(entity))
+            .filter(|entity| !is_mover(entity) && is_solid(entity))
             .filter_map(|entity| place(&map, entity))
+            .collect();
+        let movers = map
+            .brush_entities
+            .iter()
+            .filter(|entity| is_mover(entity))
+            .filter_map(|entity| {
+                let model = map.models.get(entity.model)?;
+                Some(Mover {
+                    model: entity.model,
+                    placed: place(&map, entity)?,
+                    local_mins: Vec3::from(model.mins),
+                    local_maxs: Vec3::from(model.maxs),
+                    solid: is_solid(entity),
+                })
+            })
             .collect();
         let ladders = map
             .ladders
@@ -104,11 +153,113 @@ impl CollisionWorld {
             .map(Vec3::from)
             .collect();
         Self {
-            map,
+            map: Arc::new(map),
             entities,
+            movers,
             ladders,
             dismounts,
         }
+    }
+
+    /// The BSP models of the map's movers, in entity order.
+    pub fn movers(&self) -> impl Iterator<Item = usize> + '_ {
+        self.movers.iter().map(|mover| mover.model)
+    }
+
+    /// Whether BSP model `model` is a mover's.
+    #[must_use]
+    pub fn is_mover(&self, model: usize) -> bool {
+        self.mover(model).is_some()
+    }
+
+    /// Places the mover of BSP model `model` at `origin` turned by
+    /// `rotation`, solid or passable; `false` (and nothing changes) if no
+    /// mover has that model.
+    pub fn set_mover(&mut self, model: usize, origin: Vec3, rotation: Quat, solid: bool) -> bool {
+        let Some(mover) = self.movers.iter_mut().find(|mover| mover.model == model) else {
+            return false;
+        };
+        // Unrotated movers (most of them) are traced without a transform.
+        let rotation =
+            (!rotation.abs_diff_eq(Quat::IDENTITY, 1e-6)).then(|| Mat3::from_quat(rotation));
+        let (mins, maxs) = placed_bounds(mover.local_mins, mover.local_maxs, origin, rotation);
+        mover.placed = PlacedModel {
+            origin,
+            rotation,
+            mins,
+            maxs,
+            ..mover.placed
+        };
+        mover.solid = solid;
+        true
+    }
+
+    /// Whether `hull` standing at `origin` overlaps what players collide
+    /// with of the mover of BSP model `model` where it is now, solid or
+    /// not; `false` for a model that is not a mover's.
+    #[must_use]
+    pub fn mover_overlaps(&self, model: usize, origin: Vec3, hull: &Hull) -> bool {
+        let Some(mover) = self.mover(model) else {
+            return false;
+        };
+        let center = origin + hull.center();
+        let sweep = Sweep::new(center, center, hull.extents(), contents::MASK_PLAYER_SOLID);
+        let (mins, maxs) = sweep.bounds(0.0);
+        overlaps(mins, maxs, mover.placed.mins, mover.placed.maxs)
+            && self.trace_entity(&mover.placed, &sweep).start_solid
+    }
+
+    /// The corners of every brush of BSP model `model` whose contents are
+    /// in `mask`, in the model's own frame, one list per brush: the shape
+    /// of a mover's physics body.
+    #[must_use]
+    pub fn model_solids(&self, model: usize, mask: u32) -> Vec<Vec<Vec3>> {
+        let Some(root) = self.map.models.get(model).map(|model| model.root) else {
+            return Vec::new();
+        };
+        let mut solids = Vec::new();
+        self.collect_solids(root, mask, &|point| point, &mut solids);
+        solids
+    }
+
+    /// The first mover a ray from `start` to `end` meets, solid or not, and
+    /// how far along the ray: what a player looking that way could use.
+    #[must_use]
+    pub fn trace_movers(&self, start: Vec3, end: Vec3) -> Option<(f32, usize)> {
+        let sweep = Sweep::new(start, end, Vec3::ZERO, contents::MASK_PLAYER_SOLID);
+        let (mins, maxs) = sweep.bounds(CULL_MARGIN);
+        self.movers
+            .iter()
+            .filter(|mover| overlaps(mins, maxs, mover.placed.mins, mover.placed.maxs))
+            .filter_map(|mover| {
+                let hit = self.trace_entity(&mover.placed, &sweep);
+                (hit.fraction < 1.0).then_some((hit.fraction, mover.model))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
+    /// The world-space bounds of the mover of BSP model `model` where it is
+    /// now.
+    #[must_use]
+    pub fn mover_bounds(&self, model: usize) -> Option<(Vec3, Vec3)> {
+        self.mover(model)
+            .map(|mover| (mover.placed.mins, mover.placed.maxs))
+    }
+
+    /// Where the mover of BSP model `model` is now — origin and rotation —
+    /// and whether it is solid.
+    #[must_use]
+    pub fn mover_pose(&self, model: usize) -> Option<(Vec3, Quat, bool)> {
+        let mover = self.mover(model)?;
+        let rotation = mover
+            .placed
+            .rotation
+            .map_or(Quat::IDENTITY, |rotation| Quat::from_mat3(&rotation));
+        Some((mover.placed.origin, rotation, mover.solid))
+    }
+
+    fn mover(&self, model: usize) -> Option<&Mover> {
+        self.movers.iter().find(|mover| mover.model == model)
     }
 
     /// Sweeps `hull`, placed at `start`, to `end`, stopping at the first
@@ -117,8 +268,10 @@ impl CollisionWorld {
     pub fn trace_hull(&self, start: Vec3, end: Vec3, hull: &Hull, mask: u32) -> Trace {
         let offset = hull.center();
         let sweep = Sweep::new(start + offset, end + offset, hull.extents(), mask);
-        let hit = self.sweep(&sweep);
-        Trace::from_hit(start, end, hit)
+        let (hit, model) = self.sweep(&sweep);
+        let mut trace = Trace::from_hit(start, end, hit);
+        trace.model = model.filter(|_| trace.hit() || trace.start_solid);
+        trace
     }
 
     /// Traces a ray (a zero-size hull) from `start` to `end`.
@@ -170,10 +323,7 @@ impl CollisionWorld {
             return None;
         }
         let model = self.map.models.get(model)?;
-        let rotation = angles
-            .iter()
-            .any(|&angle| angle != 0.0)
-            .then(|| rotation_from_angles(angles));
+        let rotation = rotation_of(angles);
         Some(placed_bounds(
             Vec3::from(model.mins),
             Vec3::from(model.maxs),
@@ -195,38 +345,54 @@ impl CollisionWorld {
     }
 
     /// The corners of every brush whose contents are in `mask` — the
-    /// world's and those of the solid brush entities, placed — in world
-    /// space, one list per brush (with repeats where more than three sides
-    /// meet). The physics world builds its static colliders from these.
+    /// world's and those of the solid brush entities that never move,
+    /// placed — in world space, one list per brush (with repeats where more
+    /// than three sides meet). The physics world builds its static
+    /// colliders from these; movers get bodies of their own
+    /// ([`CollisionWorld::model_solids`]).
     #[must_use]
     pub fn convex_solids(&self, mask: u32) -> Vec<Vec<Vec3>> {
         let mut solids = Vec::new();
-        let mut collect = |root: i32, place: &dyn Fn(Vec3) -> Vec3| {
-            for brush in self.model_brushes(root) {
-                let Some(contents) = self.map.brushes.get(brush).map(|brush| brush.contents) else {
-                    continue;
-                };
-                if contents & mask == 0 {
-                    continue;
-                }
-                let planes: Vec<(Vec3, f32)> = self
-                    .brush_planes(brush)
-                    .map(|plane| (plane.normal, plane.dist))
-                    .collect();
-                let corners: Vec<Vec3> = plane_corners(&planes).into_iter().map(place).collect();
-                if corners.len() >= 4 {
-                    solids.push(corners);
-                }
-            }
-        };
         if let Some(world) = self.map.models.first() {
-            collect(world.root, &|point| point);
+            self.collect_solids(world.root, mask, &|point| point, &mut solids);
         }
         for entity in &self.entities {
             let rotation = entity.rotation.unwrap_or(Mat3::IDENTITY);
-            collect(entity.root, &|point| entity.origin + rotation * point);
+            self.collect_solids(
+                entity.root,
+                mask,
+                &|point| entity.origin + rotation * point,
+                &mut solids,
+            );
         }
         solids
+    }
+
+    /// Adds the corners of each brush of the tree rooted at `root` whose
+    /// contents are in `mask`, moved by `place`, to `solids`.
+    fn collect_solids(
+        &self,
+        root: i32,
+        mask: u32,
+        place: &dyn Fn(Vec3) -> Vec3,
+        solids: &mut Vec<Vec<Vec3>>,
+    ) {
+        for brush in self.model_brushes(root) {
+            let Some(contents) = self.map.brushes.get(brush).map(|brush| brush.contents) else {
+                continue;
+            };
+            if contents & mask == 0 {
+                continue;
+            }
+            let planes: Vec<(Vec3, f32)> = self
+                .brush_planes(brush)
+                .map(|plane| (plane.normal, plane.dist))
+                .collect();
+            let corners: Vec<Vec3> = plane_corners(&planes).into_iter().map(place).collect();
+            if corners.len() >= 4 {
+                solids.push(corners);
+            }
+        }
     }
 
     /// The map's displacement surfaces whose contents are in `mask`, as
@@ -269,8 +435,9 @@ impl CollisionWorld {
         brushes
     }
 
-    /// Sweeps against the world and every solid entity.
-    fn sweep(&self, sweep: &Sweep) -> Hit {
+    /// Sweeps against the world and every solid entity, returning the hit
+    /// and the BSP model of the brush entity hit, if one was hit first.
+    fn sweep(&self, sweep: &Sweep) -> (Hit, Option<usize>) {
         let mut hit = Hit::default();
         if let Some(world) = self.map.models.first() {
             self.trace_tree(
@@ -286,12 +453,24 @@ impl CollisionWorld {
         }
         self.trace_displacements(sweep, &mut hit);
         let (mins, maxs) = sweep.bounds(CULL_MARGIN);
-        for entity in &self.entities {
+        let mut model = None;
+        let entities = self.entities.iter().map(|entity| (entity, None));
+        let movers = self
+            .movers
+            .iter()
+            .filter(|mover| mover.solid)
+            .map(|mover| (&mover.placed, Some(mover.model)));
+        for (entity, entity_model) in entities.chain(movers) {
             if overlaps(mins, maxs, entity.mins, entity.maxs) {
-                hit.merge(self.trace_entity(entity, sweep));
+                let entity_hit = self.trace_entity(entity, sweep);
+                if entity_hit.fraction < hit.fraction || (entity_hit.start_solid && model.is_none())
+                {
+                    model = entity_model;
+                }
+                hit.merge(entity_hit);
             }
         }
-        hit
+        (hit, model)
     }
 
     /// Sweeps against one brush entity, in its own frame.
@@ -524,7 +703,21 @@ impl CollisionQuery for CollisionWorld {
     }
 }
 
-/// Whether a brush entity blocks movement.
+/// Whether a brush entity is a mover: one of a class that blocks movement
+/// and either changes by nature (doors, buttons, breakables) or can be
+/// reached by map logic (it has a name or a parent).
+#[must_use]
+pub fn is_mover(entity: &BrushEntityCollision) -> bool {
+    let class = entity.classname.as_str();
+    let never_solid = class == "func_brush" && entity.solidity == Some(SOLIDITY_NEVER);
+    SOLID_BRUSH_CLASSES.contains(&class)
+        && !never_solid
+        && (CHANGING_BRUSH_CLASSES.contains(&class)
+            || entity.targetname.is_some()
+            || entity.parentname.is_some())
+}
+
+/// Whether a brush entity blocks movement as the map starts.
 fn is_solid(entity: &BrushEntityCollision) -> bool {
     if !SOLID_BRUSH_CLASSES.contains(&entity.classname.as_str()) {
         return false;
@@ -544,11 +737,7 @@ fn is_solid(entity: &BrushEntityCollision) -> bool {
 fn place(map: &MapCollision, entity: &BrushEntityCollision) -> Option<PlacedModel> {
     let model = map.models.get(entity.model)?;
     let origin = Vec3::from(entity.origin);
-    let rotation = entity
-        .angles
-        .iter()
-        .any(|&angle| angle != 0.0)
-        .then(|| rotation_from_angles(entity.angles));
+    let rotation = rotation_of(entity.angles);
     let (mins, maxs) = placed_bounds(
         Vec3::from(model.mins),
         Vec3::from(model.maxs),
@@ -582,6 +771,15 @@ fn placed_bounds(
             (world_center - world_half, world_center + world_half)
         }
     }
+}
+
+/// The rotation of `angles`, or `None` when they are all zero (traced
+/// without a transform).
+fn rotation_of(angles: [f32; 3]) -> Option<Mat3> {
+    angles
+        .iter()
+        .any(|&angle| angle != 0.0)
+        .then(|| rotation_from_angles(angles))
 }
 
 /// Source Euler angles `[pitch, yaw, roll]` (degrees) as a rotation matrix:
@@ -631,6 +829,8 @@ mod tests {
             angles: [0.0; 3],
             solidity,
             start_disabled,
+            targetname: None,
+            parentname: None,
         }
     }
 

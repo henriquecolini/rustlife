@@ -245,7 +245,7 @@ impl Simulation {
             for hazard in self
                 .hazards
                 .iter()
-                .filter(|hazard| hazard.touches(mins, maxs))
+                .filter(|hazard| hazard.enabled && hazard.touches(mins, maxs))
             {
                 doses.push((id, hazard.dose()));
             }
@@ -272,6 +272,7 @@ impl Simulation {
         for pickup in &mut self.pickups {
             pickup.away = 0.0;
         }
+        self.reset_logic();
         let ids: Vec<PlayerId> = self.players().map(|(id, _)| id).collect();
         for id in ids {
             self.respawn(id, events);

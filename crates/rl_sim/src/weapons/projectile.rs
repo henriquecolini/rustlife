@@ -131,7 +131,7 @@ impl Projectile {
             return Flight::Flying;
         }
         self.position = map.end + map.normal * SURFACE_GAP;
-        let struck = map.body.map_or(Struck::World, Struck::Prop);
+        let struck = crate::combat::hitscan::struck_by(&map);
         let Some(bounce) = config.bounce else {
             return Flight::Struck {
                 struck,

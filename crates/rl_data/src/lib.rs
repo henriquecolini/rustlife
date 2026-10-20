@@ -17,7 +17,7 @@
 //! [`GameData::from_files`]), so both run the same rules; [`content_hash`]
 //! lets a client that already has identical data skip the transfer.
 //!
-//! As of M6 the data set is:
+//! As of M7 the data set is:
 //!
 //! | File | Type | Contents |
 //! |------|------|----------|
@@ -33,6 +33,7 @@
 //! | `rules/deathmatch.ron` | [`RulesConfig`] | Limits, respawning, loadout, fall damage. |
 //! | `hud.ron` | [`HudConfig`] | HUD layout and colours. |
 //! | `net.ron` | [`NetConfig`] | Ports, snapshot rate, interpolation, lag compensation. |
+//! | `map_logic.ron` | [`MapLogicConfig`] | Using doors and buttons, map explosions, the event budget. |
 
 #![forbid(unsafe_code)]
 
@@ -47,6 +48,7 @@ pub mod entity_map;
 pub mod hud;
 pub mod items;
 pub mod manipulator;
+pub mod map_logic;
 pub mod movement;
 pub mod net;
 pub mod physics;
@@ -61,6 +63,7 @@ pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
 pub use items::{ItemConfig, ItemEffect};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
+pub use map_logic::{MapExplosionConfig, MapLogicConfig};
 pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,
     MovementConfig, WaterConfig,
@@ -98,6 +101,8 @@ pub const PLAYER_FILE: &str = "player.ron";
 pub const HUD_FILE: &str = "hud.ron";
 /// File name of the networking data.
 pub const NET_FILE: &str = "net.ron";
+/// File name of the map logic data.
+pub const MAP_LOGIC_FILE: &str = "map_logic.ron";
 pub use rules::DEATHMATCH_FILE;
 
 /// Pairs each data file's path (relative to `data/`) with its built-in text.
@@ -119,6 +124,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "rules/deathmatch.ron",
     "hud.ron",
     "net.ron",
+    "map_logic.ron",
     "weapons/bar.ron",
     "weapons/boltcaster.ron",
     "weapons/frag.ron",
@@ -219,6 +225,8 @@ pub struct GameData {
     pub hud: HudConfig,
     /// Networking.
     pub net: NetConfig,
+    /// The map's doors, buttons, triggers and traps.
+    pub map_logic: MapLogicConfig,
 }
 
 /// Where data files come from.
@@ -301,6 +309,7 @@ impl GameData {
         put(DEATHMATCH_FILE.to_owned(), ron::to_string(&self.rules))?;
         put(HUD_FILE.to_owned(), ron::to_string(&self.hud))?;
         put(NET_FILE.to_owned(), ron::to_string(&self.net))?;
+        put(MAP_LOGIC_FILE.to_owned(), ron::to_string(&self.map_logic))?;
         Ok(files)
     }
 
@@ -319,6 +328,7 @@ impl GameData {
             rules: load_file(files, DEATHMATCH_FILE, RulesConfig::validate)?,
             hud: load_file(files, HUD_FILE, HudConfig::validate)?,
             net: load_file(files, NET_FILE, NetConfig::validate)?,
+            map_logic: load_file(files, MAP_LOGIC_FILE, MapLogicConfig::validate)?,
         };
         let problems = data.reference_problems();
         if problems.is_empty() {

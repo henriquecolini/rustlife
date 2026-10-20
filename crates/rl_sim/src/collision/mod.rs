@@ -28,7 +28,7 @@ mod world;
 
 pub use builder::WorldBuilder;
 pub use hull::ConvexHull;
-pub use world::{CollisionWorld, rotation_from_angles};
+pub use world::{CollisionWorld, is_mover, rotation_from_angles};
 
 pub use clip::DIST_EPSILON;
 use clip::Hit;
@@ -96,6 +96,9 @@ pub struct Trace {
     /// The physics body hit, if what stopped the trace was a prop rather
     /// than the map.
     pub body: Option<BodyId>,
+    /// The BSP model of the brush entity hit (a door, a button, ...), if
+    /// what stopped the trace was one; `None` for the world and props.
+    pub model: Option<usize>,
 }
 
 impl Trace {
@@ -134,6 +137,7 @@ impl Trace {
             start_solid: hit.start_solid,
             all_solid: hit.all_solid,
             body: None,
+            model: None,
         }
     }
 }

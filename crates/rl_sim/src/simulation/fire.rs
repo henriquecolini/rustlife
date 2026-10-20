@@ -232,6 +232,7 @@ impl Simulation {
                 self.hurt(victim, damage, events);
             }
             Struck::Prop(body) => self.physics.apply_impulse(body, impulse, point),
+            Struck::Brush(model) => self.brush_damage.push((Some(id), model as usize, damage)),
             Struck::World | Struck::Nothing => {}
         }
     }
@@ -309,15 +310,23 @@ impl Simulation {
     ) {
         let center = match flight {
             Flight::Struck { struck, point, .. } => {
-                if let Struck::Player(victim) = struck
-                    && config.hit_damage > 0.0
-                {
-                    let damage = Damage {
-                        amount: config.hit_damage,
-                        attacker: Some(projectile.owner),
-                        cause: Cause::Weapon(projectile.weapon),
-                    };
-                    self.hurt(victim, damage, events);
+                if config.hit_damage > 0.0 {
+                    match struck {
+                        Struck::Player(victim) => {
+                            let damage = Damage {
+                                amount: config.hit_damage,
+                                attacker: Some(projectile.owner),
+                                cause: Cause::Weapon(projectile.weapon),
+                            };
+                            self.hurt(victim, damage, events);
+                        }
+                        Struck::Brush(model) => self.brush_damage.push((
+                            Some(projectile.owner),
+                            model as usize,
+                            config.hit_damage,
+                        )),
+                        Struck::Prop(_) | Struck::World | Struck::Nothing => {}
+                    }
                 }
                 point
             }
@@ -326,8 +335,8 @@ impl Simulation {
         };
         if let Some(explosion) = &config.explosion {
             self.explode(
-                projectile.owner,
-                projectile.weapon,
+                Some(projectile.owner),
+                Some(projectile.weapon),
                 center,
                 explosion,
                 events,
@@ -335,12 +344,13 @@ impl Simulation {
         }
     }
 
-    /// A blast at `center`: damages and throws the players it reaches,
-    /// shoves the props.
-    fn explode(
+    /// A blast at `center` set off by `owner` with `weapon` (neither: the
+    /// map's): damages and throws the players it reaches, shoves the props,
+    /// damages the breakables.
+    pub(super) fn explode(
         &mut self,
-        owner: PlayerId,
-        weapon: WeaponId,
+        owner: Option<PlayerId>,
+        weapon: Option<WeaponId>,
         center: Vec3,
         explosion: &ExplosionConfig,
         events: &mut TickEvents,
@@ -355,15 +365,22 @@ impl Simulation {
             self.physics
                 .apply_impulse(reach.body, impulse, reach.center);
         }
+        for (model, scale) in blast::brushes(center, explosion, &self.world, self.logic.movers()) {
+            self.brush_damage
+                .push((owner, model, explosion.damage * scale));
+        }
         let targets = self.targets();
         for reach in blast::players(center, explosion, &targets, &self.world) {
             if let Some(player) = self.player_mut(reach.player) {
                 player.state.velocity += reach.direction * explosion.knockback * reach.scale;
             }
+            if explosion.damage <= 0.0 {
+                continue;
+            }
             let damage = Damage {
                 amount: explosion.damage * reach.scale,
-                attacker: Some(owner),
-                cause: Cause::Weapon(weapon),
+                attacker: owner,
+                cause: weapon.map_or(Cause::Hazard, Cause::Weapon),
             };
             self.hurt(reach.player, damage, events);
         }

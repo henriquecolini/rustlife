@@ -5,10 +5,15 @@
 //! moving brush entity becomes a convex hull of its corners, and brushes
 //! that clip both players and NPCs ("tools/toolsclip", which blocks
 //! everything) are kept too. Each displacement becomes a triangle mesh.
+//!
+//! Movers (doors, buttons, brushes map logic can switch) are not part of the
+//! fixed body: each gets a kinematic body of its own, made of the same
+//! brushes in the model's frame, which follows the mover as it moves.
 
 use glam::Vec3;
 use rapier3d::prelude::{
-    ColliderBuilder, InteractionGroups, PhysicsWorld as RapierWorld, RigidBodyBuilder,
+    ColliderBuilder, ColliderHandle, InteractionGroups, PhysicsWorld as RapierWorld, Pose,
+    RigidBodyBuilder, RigidBodyHandle, SharedShape,
 };
 
 use crate::collision::CollisionWorld;
@@ -52,4 +57,51 @@ pub(super) fn add_map(
         }
     }
     count
+}
+
+/// A mover's kinematic body.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct MoverBody {
+    /// The mover's BSP model.
+    pub(super) model: usize,
+    pub(super) handle: RigidBodyHandle,
+    /// `None` for a model with nothing props collide with.
+    pub(super) collider: Option<ColliderHandle>,
+}
+
+/// Adds a kinematic body for each of `map`'s movers, where it is now.
+pub(super) fn add_movers(
+    rapier: &mut RapierWorld,
+    map: &CollisionWorld,
+    groups: InteractionGroups,
+) -> Vec<MoverBody> {
+    map.movers()
+        .filter_map(|model| {
+            let (origin, rotation, solid) = map.mover_pose(model)?;
+            let handle = rapier.insert_body(
+                RigidBodyBuilder::kinematic_position_based()
+                    .pose(Pose::from_parts(origin, rotation))
+                    .user_data(u128::from(u32::MAX)),
+            );
+            let shapes: Vec<(Pose, SharedShape)> = map
+                .model_solids(model, PROP_SOLID | FULL_CLIP)
+                .iter()
+                .filter_map(|corners| SharedShape::convex_hull(corners))
+                .map(|shape| (Pose::IDENTITY, shape))
+                .collect();
+            let collider = (!shapes.is_empty()).then(|| {
+                rapier.insert_collider(
+                    ColliderBuilder::new(SharedShape::compound(shapes))
+                        .collision_groups(groups)
+                        .enabled(solid),
+                    Some(handle),
+                )
+            });
+            Some(MoverBody {
+                model,
+                handle,
+                collider,
+            })
+        })
+        .collect()
 }

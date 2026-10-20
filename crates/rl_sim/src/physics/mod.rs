@@ -140,6 +140,8 @@ pub struct PhysicsWorld {
     /// `(player, prop)` pairs in contact after the last step, so an impact
     /// is counted once when contact begins.
     touching: Vec<(BodyId, BodyId)>,
+    /// The map's movers' kinematic bodies.
+    movers: Vec<statics::MoverBody>,
     config: PhysicsConfig,
 }
 
@@ -164,14 +166,39 @@ impl PhysicsWorld {
         parameters.length_unit = statics::UNITS_PER_METRE;
         parameters.num_solver_iterations = config.solver_iterations as usize;
         let colliders = statics::add_map(&mut rapier, map, interaction(GROUP_WORLD));
-        tracing::debug!(colliders, "built the physics world's static geometry");
+        let movers = statics::add_movers(&mut rapier, map, interaction(GROUP_WORLD));
+        tracing::debug!(
+            colliders,
+            movers = movers.len(),
+            "built the physics world's static geometry"
+        );
         Self {
             rapier,
             bodies: Vec::new(),
             held: Vec::new(),
             released: Vec::new(),
             touching: Vec::new(),
+            movers,
             config: config.clone(),
+        }
+    }
+
+    /// Moves the body of the mover of BSP model `model` to `origin` and
+    /// `rotation` by the next step, pushing the props in its way, and
+    /// makes it solid or passable. Unknown models are ignored.
+    pub fn set_mover(&mut self, model: usize, origin: Vec3, rotation: Quat, solid: bool) {
+        let Some(mover) = self.movers.iter().find(|mover| mover.model == model) else {
+            return;
+        };
+        if let Some(rigid) = self.rapier.bodies.get_mut(mover.handle) {
+            rigid.set_next_kinematic_position(Pose::from_parts(origin, rotation));
+        }
+        if let Some(collider) = mover
+            .collider
+            .and_then(|collider| self.rapier.colliders.get_mut(collider))
+            && collider.is_enabled() != solid
+        {
+            collider.set_enabled(solid);
         }
     }
 

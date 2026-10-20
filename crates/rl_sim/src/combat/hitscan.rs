@@ -26,6 +26,9 @@ pub enum Struck {
     World,
     /// A prop.
     Prop(BodyId),
+    /// A brush entity map logic runs (a button, a breakable...), by BSP
+    /// model.
+    Brush(u32),
     /// A player.
     Player(PlayerId),
 }
@@ -56,10 +59,10 @@ pub fn trace(
     let mut best = ShotTrace {
         end: map.end,
         normal: map.normal,
-        struck: match map.body {
-            _ if !map.hit() => Struck::Nothing,
-            Some(body) => Struck::Prop(body),
-            None => Struck::World,
+        struck: if map.hit() {
+            struck_by(&map)
+        } else {
+            Struck::Nothing
         },
     };
     let mut best_fraction = map.fraction;
@@ -76,6 +79,17 @@ pub fn trace(
         }
     }
     best
+}
+
+/// What a trace that hit something hit: a prop, a brush entity or the
+/// world.
+#[must_use]
+pub fn struck_by(trace: &crate::collision::Trace) -> Struck {
+    match (trace.body, trace.model) {
+        (Some(body), _) => Struck::Prop(body),
+        (None, Some(model)) => Struck::Brush(u32::try_from(model).unwrap_or(u32::MAX)),
+        (None, None) => Struck::World,
+    }
 }
 
 /// A bullet direction within `spread` degrees of `forward` (unit length),

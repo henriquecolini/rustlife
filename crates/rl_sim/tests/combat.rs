@@ -308,6 +308,7 @@ fn pressing_fire_respawns_once_the_delay_is_over() {
         mins: Vec3::new(-50.0, -50.0, -10.0),
         maxs: Vec3::new(50.0, 50.0, 10.0),
         damage: 100.0,
+        enabled: true,
     });
     let events = arena.idle(40);
     let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();

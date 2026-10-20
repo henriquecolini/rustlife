@@ -10,8 +10,8 @@
 
 use glam::Vec3;
 use source_formats::collision::{
-    CollisionBrush, CollisionLeaf, CollisionPlane, CollisionSide, DisplacementMesh, LadderSegment,
-    MapCollision, SubModel,
+    BrushEntityCollision, CollisionBrush, CollisionLeaf, CollisionPlane, CollisionSide,
+    DisplacementMesh, LadderSegment, MapCollision, SubModel,
 };
 
 use super::CollisionWorld;
@@ -24,6 +24,8 @@ const SAME_NORMAL_EPSILON: f32 = 1e-4;
 #[derive(Debug, Clone, Default)]
 pub struct WorldBuilder {
     map: MapCollision,
+    /// Brush entities, each with its brushes and local bounds.
+    entities: Vec<(BrushEntityCollision, Vec<u32>, Vec3, Vec3)>,
 }
 
 impl WorldBuilder {
@@ -112,6 +114,39 @@ impl WorldBuilder {
         self.brush(contents::SOLID, &planes)
     }
 
+    /// Adds a brush entity of `classname`, named `name`, placed at
+    /// `origin`: a solid box `mins..maxs` in its own frame, which becomes
+    /// BSP model `1 + ` the number of brush entities added before it.
+    #[must_use]
+    pub fn brush_entity(
+        mut self,
+        classname: &str,
+        name: Option<&str>,
+        origin: Vec3,
+        mins: Vec3,
+        maxs: Vec3,
+    ) -> Self {
+        let brush = self.map.brushes.len() as u32;
+        self = self.solid_box(mins, maxs);
+        let model = self.entities.len() + 1;
+        self.entities.push((
+            BrushEntityCollision {
+                classname: classname.to_owned(),
+                model,
+                origin: origin.to_array(),
+                angles: [0.0; 3],
+                solidity: None,
+                start_disabled: false,
+                targetname: name.map(str::to_owned),
+                parentname: None,
+            },
+            vec![brush],
+            mins,
+            maxs,
+        ));
+        self
+    }
+
     /// Adds a solid displacement surface made of `triangles`.
     #[must_use]
     pub fn displacement(mut self, triangles: Vec<[Vec3; 3]>) -> Self {
@@ -151,21 +186,43 @@ impl WorldBuilder {
         self
     }
 
-    /// Finishes the world: one leaf holding every brush.
+    /// Finishes the world: one leaf holding every world brush, and one
+    /// more per brush entity holding its own.
     #[must_use]
     pub fn build(mut self) -> CollisionWorld {
-        let count = self.map.brushes.len() as u32;
-        self.map.leaf_brushes = (0..count).collect();
+        let owned: Vec<u32> = self
+            .entities
+            .iter()
+            .flat_map(|(_, brushes, ..)| brushes.iter().copied())
+            .collect();
+        let world: Vec<u32> = (0..self.map.brushes.len() as u32)
+            .filter(|brush| !owned.contains(brush))
+            .collect();
         self.map.leaves = vec![CollisionLeaf {
             contents: contents::EMPTY,
             first_brush: 0,
-            brush_count: count,
+            brush_count: world.len() as u32,
         }];
+        self.map.leaf_brushes = world;
         self.map.models = vec![SubModel {
             root: !0,
             mins: [f32::MIN; 3],
             maxs: [f32::MAX; 3],
         }];
+        for (index, (entity, brushes, mins, maxs)) in self.entities.into_iter().enumerate() {
+            self.map.leaves.push(CollisionLeaf {
+                contents: contents::EMPTY,
+                first_brush: self.map.leaf_brushes.len() as u32,
+                brush_count: brushes.len() as u32,
+            });
+            self.map.leaf_brushes.extend(brushes);
+            self.map.models.push(SubModel {
+                root: !(index as i32 + 1),
+                mins: mins.to_array(),
+                maxs: maxs.to_array(),
+            });
+            self.map.brush_entities.push(entity);
+        }
         CollisionWorld::new(self.map)
     }
 }

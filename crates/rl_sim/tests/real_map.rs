@@ -224,3 +224,55 @@ fn the_map_is_stocked_with_pickups() {
         assert!(sim.player(id).expect("player").alive());
     }
 }
+
+#[test]
+#[ignore = "requires a BSP file; set RUSTLIFE_TEST_BSP"]
+fn the_maps_logic_runs_for_two_minutes() {
+    use std::sync::Arc;
+
+    use rl_sim::simulation::{MapEvent, Simulation, Spawn};
+
+    let Some(path) = std::env::var("RUSTLIFE_TEST_BSP").ok() else {
+        return;
+    };
+    let bytes = std::fs::read(&path).expect("read bsp");
+    let collision = source_formats::collision::load(&bytes).expect("collision");
+    let geometry = source_formats::bsp::load_geometry(&bytes).expect("geometry");
+    let data = rl_data::GameData::builtin().expect("builtin");
+    let mut sim = Simulation::new(Arc::new(CollisionWorld::new(collision)), &data);
+    sim.set_spawns(
+        geometry
+            .spawns
+            .iter()
+            .map(|spawn| Spawn {
+                origin: Vec3::from(spawn.origin),
+                yaw: spawn.yaw,
+            })
+            .collect(),
+    );
+    sim.add_entities(&geometry.entities);
+    let enabled = |sim: &Simulation| sim.hazards().iter().filter(|h| h.enabled).count();
+    let hazards_at_start = enabled(&sim);
+    let players: Vec<_> = (0..2).map(|_| sim.join()).collect();
+    let mut started = 0;
+    let mut most_hazards = hazards_at_start;
+    // Two minutes and a bit: dm_runoff's blast doors open at one minute,
+    // its strike sequence at two.
+    for _ in 0..(125 * 66) {
+        let events = sim.tick(&[]);
+        started += events
+            .map
+            .iter()
+            .filter(|event| matches!(event, MapEvent::MoverStarted { .. }))
+            .count();
+        most_hazards = most_hazards.max(enabled(&sim));
+    }
+    eprintln!(
+        "{} movers, {} hazards, {started} mover starts, hazards on: {hazards_at_start} at start, \
+         {most_hazards} at most, {} sounds",
+        sim.logic().movers().len(),
+        sim.hazards().len(),
+        sim.logic().sounds().len(),
+    );
+    assert!(players.iter().all(|&id| sim.player(id).is_some()));
+}

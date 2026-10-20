@@ -14,6 +14,7 @@
 //! - [`weapons`]: what players carry, firing, reloading, projectiles.
 //! - [`combat`]: health and armor, damage, what shots and blasts hit.
 //! - [`pickups`], [`hazards`]: what the map's entities become.
+//! - [`logic`]: the map's own wiring — doors, buttons, triggers, traps.
 //! - [`rules`]: scoring, the match clock, spawn choice.
 //! - [`rng`]: deterministic randomness (bullet spread, spawn choice).
 //! - [`simulation`]: all of the above for a map's players, a tick at a
@@ -32,6 +33,7 @@
 pub mod collision;
 pub mod combat;
 pub mod hazards;
+pub mod logic;
 pub mod movement;
 pub mod physics;
 pub mod pickups;

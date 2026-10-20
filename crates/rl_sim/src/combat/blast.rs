@@ -13,6 +13,7 @@ use rl_data::ExplosionConfig;
 use super::Target;
 use crate::collision::CollisionWorld;
 use crate::collision::contents::{SOLID, WINDOW};
+use crate::logic::mover::{Mover, MoverClass};
 use crate::physics::{BodyId, PhysicsWorld};
 use crate::simulation::PlayerId;
 
@@ -91,6 +92,30 @@ pub fn props(center: Vec3, explosion: &ExplosionConfig, physics: &PhysicsWorld) 
                 direction: (prop_center - center).normalize_or(Vec3::Z),
                 center: prop_center,
             })
+        })
+        .collect()
+}
+
+/// The movers a blast at `center` damages — breakables and buttons that
+/// are still there — with the blast's strength at each: `(BSP model,
+/// scale)`. Measured to the nearest point of the mover's bounds; walls do
+/// not shelter them.
+#[must_use]
+pub fn brushes(
+    center: Vec3,
+    explosion: &ExplosionConfig,
+    world: &CollisionWorld,
+    movers: &[Mover],
+) -> Vec<(usize, f32)> {
+    movers
+        .iter()
+        .filter(|mover| {
+            matches!(mover.class, MoverClass::Breakable | MoverClass::Button) && !mover.gone()
+        })
+        .filter_map(|mover| {
+            let (mins, maxs) = world.mover_bounds(mover.model)?;
+            let scale = explosion.scale(center.clamp(mins, maxs).distance(center));
+            (scale > 0.0).then_some((mover.model, scale))
         })
         .collect()
 }

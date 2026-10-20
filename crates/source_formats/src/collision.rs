@@ -134,6 +134,10 @@ pub struct BrushEntityCollision {
     pub solidity: Option<i32>,
     /// Whether the entity starts disabled (`StartDisabled 1`).
     pub start_disabled: bool,
+    /// The entity's name, which map logic addresses it by, if it has one.
+    pub targetname: Option<String>,
+    /// The name of the entity it moves with, if it has one.
+    pub parentname: Option<String>,
 }
 
 /// A climbable ladder (`func_useableladder`): the segment a climber's feet
@@ -448,6 +452,12 @@ fn brush_entities(bsp: &Bsp, model_count: usize) -> Vec<BrushEntityCollision> {
             if model == 0 || model >= model_count {
                 return None;
             }
+            let name = |key| {
+                entity
+                    .prop(key)
+                    .filter(|name: &&str| !name.is_empty())
+                    .map(str::to_owned)
+            };
             Some(BrushEntityCollision {
                 classname: entity.prop("classname").unwrap_or_default().to_owned(),
                 model,
@@ -461,6 +471,8 @@ fn brush_entities(bsp: &Bsp, model_count: usize) -> Vec<BrushEntityCollision> {
                     .unwrap_or_default(),
                 solidity: entity.prop("Solidity").and_then(|value| value.parse().ok()),
                 start_disabled: entity.prop("StartDisabled") == Some("1"),
+                targetname: name("targetname"),
+                parentname: name("parentname"),
             })
         })
         .collect()
