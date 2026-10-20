@@ -2,9 +2,10 @@
 //! renders a map.
 //!
 //! It loads a BSP and its props through the `source://` asset source and lets
-//! the player walk it with rustlife's movement and handle its props with the
-//! Manipulator ([`player`], [`props`]), or fly it in noclip. Later milestones
-//! add combat, networking and audio on top of the same app.
+//! the player fight through it ([`player`], [`input`]): rustlife's movement,
+//! weapons and Manipulator, the map's pickups ([`actors`]), with a HUD
+//! ([`hud`]) and combat effects ([`effects`]); or fly it in noclip. Later
+//! milestones add networking and audio on top of the same app.
 
 #![forbid(unsafe_code)]
 
@@ -15,17 +16,24 @@ use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
 use rl_data::GameData;
 use source_fs::Vfs;
 
+use crate::actors::ActorsPlugin;
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
+use crate::effects::EffectsPlugin;
+use crate::hud::HudPlugin;
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
 use crate::script::InputScript;
 use crate::world::WorldPlugin;
 
+pub mod actors;
 pub mod browser;
 pub mod camera;
 pub mod capture;
+pub mod effects;
+pub mod hud;
+pub mod input;
 pub mod player;
 pub mod props;
 pub mod script;
@@ -65,6 +73,8 @@ pub struct ClientOptions {
     pub script: Option<InputScript>,
     /// The gameplay data to play with.
     pub data: GameData,
+    /// Training dummies to add: players who stand still and respawn.
+    pub dummies: usize,
 }
 
 /// Builds and runs the client over the content mounted in `vfs`.
@@ -102,7 +112,13 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         },
         PropsPlugin,
         BrowserPlugin,
-        PlayerPlugin { data: options.data },
+        PlayerPlugin {
+            data: options.data,
+            dummies: options.dummies,
+        },
+        ActorsPlugin,
+        HudPlugin,
+        EffectsPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);

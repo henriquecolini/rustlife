@@ -54,6 +54,27 @@ struct Cli {
     #[arg(long, value_name = "SECS", requires = "grab_prop")]
     throw_after: Option<f32>,
 
+    /// Add this many training dummies: players who stand still where they
+    /// spawn and respawn when killed.
+    #[arg(long, default_value_t = 0, value_name = "N")]
+    dummies: usize,
+
+    /// Take this weapon (by id, e.g. `launcher`) in hand from the start,
+    /// with plenty of ammo (for scripted captures).
+    #[arg(long, value_name = "ID")]
+    weapon: Option<String>,
+
+    /// Once the map has had time to load, go to the nearest other player
+    /// and fire at them for this many seconds (for scripted captures); the
+    /// shot is taken as firing ends.
+    #[arg(long, value_name = "SECS")]
+    shoot_for: Option<f32>,
+
+    /// Once the map has had time to load, go and look at the nearest
+    /// pickup (for scripted captures).
+    #[arg(long)]
+    visit_pickup: bool,
+
     /// Render non-interactively, save one screenshot to this PNG path, and exit.
     #[arg(long, value_name = "PNG")]
     screenshot: Option<PathBuf>,
@@ -63,6 +84,8 @@ struct Cli {
 const LOAD_SECS: f32 = 3.0;
 /// Seconds a scripted grab takes to settle the prop in front of the player.
 const GRAB_SECS: f32 = 1.5;
+/// Seconds a scripted visit to a pickup waits for its model to light.
+const VISIT_SECS: f32 = 0.5;
 /// Seconds after a scripted throw before the shot, with the prop in flight.
 const THROW_SHOT_SECS: f32 = 0.2;
 
@@ -75,12 +98,27 @@ fn main() -> Result<()> {
     let grab_at = cli.grab_prop.then_some(LOAD_SECS);
     let fire_at = cli.throw_after.map(|secs| LOAD_SECS + secs);
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
-    let script =
-        (walk.is_some() || grab_at.is_some()).then(|| InputScript::new(walk, grab_at, fire_at));
-    let shot_secs = match (fire_at, grab_at, cli.walk_forward) {
+    let shoot = cli.shoot_for.map(|secs| (LOAD_SECS, secs));
+    let visit = cli.visit_pickup.then_some(LOAD_SECS);
+    let scripted = walk.is_some()
+        || grab_at.is_some()
+        || shoot.is_some()
+        || visit.is_some()
+        || cli.weapon.is_some();
+    let script = scripted.then(|| {
+        InputScript::new(walk, grab_at, fire_at)
+            .with_weapon(cli.weapon)
+            .with_shooting(shoot)
+            .with_visit(visit)
+    });
+    let shot_secs = match (fire_at, grab_at, shoot) {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,
         (None, Some(grab), _) => grab + GRAB_SECS,
-        (None, None, walk) => LOAD_SECS + walk.map_or(0.0, |secs| (secs - 0.2).max(0.0)),
+        (None, None, Some((start, secs))) => start + secs,
+        (None, None, None) if visit.is_some() => LOAD_SECS + VISIT_SECS,
+        (None, None, None) => {
+            LOAD_SECS + cli.walk_forward.map_or(0.0, |secs| (secs - 0.2).max(0.0))
+        }
     };
     let capture = cli.screenshot.map(|path| Capture {
         path,
@@ -94,6 +132,7 @@ fn main() -> Result<()> {
             capture,
             script,
             data,
+            dummies: cli.dummies,
         },
     );
     Ok(())

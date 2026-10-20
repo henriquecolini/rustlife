@@ -99,6 +99,11 @@ pub struct Prop {
     pub placement: PropPlacement,
 }
 
+/// A model that moves (a physics prop, a projectile, another player): it is
+/// relit as it goes.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct Moving;
+
 /// A prop that can move, and its body's pose after the last two ticks.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct PhysicsBody {
@@ -140,7 +145,49 @@ struct PropsSpawned(bool);
 
 /// One handle per distinct model, so props sharing a model share its assets.
 #[derive(Resource, Default)]
-struct ModelHandles(HashMap<String, Handle<ModelAsset>>);
+pub(crate) struct ModelHandles(HashMap<String, Handle<ModelAsset>>);
+
+impl ModelHandles {
+    /// The handle of `model` (a path such as `models/items/battery.mdl`),
+    /// loading it the first time.
+    pub(crate) fn get(&mut self, model: &str, asset_server: &AssetServer) -> Handle<ModelAsset> {
+        let path = format!("source://{model}");
+        self.0
+            .entry(path.clone())
+            .or_insert_with(|| asset_server.load(path))
+            .clone()
+    }
+}
+
+/// Spawns a model drawn and lit like a prop, but placed by the simulation
+/// rather than by physics (pickups, projectiles, other players): it gets no
+/// body of its own. `transform` is in Bevy space; the entity is
+/// [`MapScoped`].
+pub(crate) fn spawn_model(
+    commands: &mut Commands,
+    models: &mut ModelHandles,
+    asset_server: &AssetServer,
+    model: &str,
+    transform: Transform,
+) -> Entity {
+    let mut placement = PropPlacement::new(model, [0.0; 3], [0.0; 3], PropKind::Dynamic);
+    placement.solid = source_formats::props::PropSolid::None;
+    commands
+        .spawn((
+            Prop {
+                model: models.get(model, asset_server),
+                skin: 0,
+                kind: PropKind::Dynamic,
+                lighting: None,
+                placement,
+            },
+            AwaitingModel,
+            transform,
+            Visibility::default(),
+            MapScoped,
+        ))
+        .id()
+}
 
 /// Forgets the previous map's props and models on entering or leaving a map.
 /// The entities themselves are [`MapScoped`] and despawned by the world.
@@ -334,11 +381,14 @@ fn add_bodies(
                 position: desc.origin,
                 rotation: desc.rotation,
             };
-            commands.entity(entity).insert(PhysicsBody {
-                id,
-                previous: pose,
-                current: pose,
-            });
+            commands.entity(entity).insert((
+                PhysicsBody {
+                    id,
+                    previous: pose,
+                    current: pose,
+                },
+                Moving,
+            ));
         }
     }
 }
@@ -372,7 +422,7 @@ fn follow_bodies(time: Res<Time<Fixed>>, mut bodies: Query<(&PhysicsBody, &mut T
 /// place.
 fn relight_moved_props(
     time: Res<Time>,
-    mut props: Query<(&Prop, &Transform, &mut CubeLit, &Children), With<PhysicsBody>>,
+    mut props: Query<(&Prop, &Transform, &mut CubeLit, &Children), With<Moving>>,
     parts: Query<(&LitPart, &Mesh3d)>,
     models: Res<Assets<ModelAsset>>,
     map: Option<Res<MapHandle>>,
