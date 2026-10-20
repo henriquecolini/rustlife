@@ -10,6 +10,9 @@
 //! - [`movement`]: Source-like player movement, one tick at a time.
 //! - [`physics`]: props as rigid bodies, pushed by and hitting players.
 //! - [`scene`]: the map and its props together, as movement sees them.
+//! - [`tools`]: what players carry; for now the Manipulator.
+//! - [`simulation`]: all of the above for a map's players, a tick at a
+//!   time.
 //!
 //! # Determinism
 //!
@@ -25,3 +28,5 @@ pub mod collision;
 pub mod movement;
 pub mod physics;
 pub mod scene;
+pub mod simulation;
+pub mod tools;

@@ -53,6 +53,10 @@ impl Buttons {
     pub const WALK: Self = Self(1 << 2);
     /// Use: grab or let go of a ladder.
     pub const USE: Self = Self(1 << 3);
+    /// Primary fire.
+    pub const ATTACK: Self = Self(1 << 4);
+    /// Secondary fire.
+    pub const ATTACK2: Self = Self(1 << 5);
 
     /// Whether every button of `other` is held.
     #[must_use]
@@ -457,6 +461,13 @@ impl<W: MovementWorld> Mover<'_, W> {
 fn flat_axes(yaw: f32) -> (Vec3, Vec3) {
     let (sin, cos) = yaw.to_radians().sin_cos();
     (Vec3::new(cos, sin, 0.0), Vec3::new(sin, -cos, 0.0))
+}
+
+/// The direction a view looks along (degrees; positive pitch looks down,
+/// yaw 0 faces +X).
+#[must_use]
+pub fn view_direction(pitch: f32, yaw: f32) -> Vec3 {
+    view_axes(pitch, yaw).0
 }
 
 /// The full forward and right directions of a view (degrees; positive pitch
