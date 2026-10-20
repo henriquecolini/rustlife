@@ -179,5 +179,5 @@ the throw.
 | `rl_client/tests/local_play.rs` | A real map's props becoming bodies in the running client (`RUSTLIFE_TEST_GAME_DIR`) |
 
 `cargo bench -p rl_sim -- simulation` times a whole tick: one player
-running into 64 tumbling crates takes about 35 µs (Ryzen desktop, release
-build), far inside a 15 ms tick.
+running into 64 tumbling crates takes about 35 µs on the development
+machine, far inside a 15 ms tick.
