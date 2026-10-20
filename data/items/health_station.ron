@@ -1,10 +1,13 @@
-// A wall-mounted health dispenser: a big dose, then a long recharge.
+// A wall-mounted health dispenser: holding use at it draws
+// a dose a little at a time, then it recharges.
 Item(
     name: "Health station",
     model: "models/props_combine/health_charger001.mdl",
     gives: Health(50.0),
-    // Seconds before it comes back once taken.
+    // Seconds it takes to recharge once spent.
     respawn: 60.0,
-    // Taken by a player whose box comes within this many units of it.
+    // Unused by stations, which are used rather than touched.
     radius: 40.0,
+    // Hold use at it to draw its charge at this many points a second.
+    station: Some((rate: 25.0)),
 )

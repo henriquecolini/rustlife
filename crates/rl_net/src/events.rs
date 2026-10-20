@@ -44,6 +44,13 @@ pub enum Event {
         /// Which (an index into the simulation's pickups).
         index: u16,
     },
+    /// A player drew from a station (a wall charger).
+    Charging {
+        /// Who.
+        player: PlayerId,
+        /// Which (an index into the simulation's pickups).
+        index: u16,
+    },
     /// A player came (back) into the game.
     Respawn(RespawnEvent),
     /// A player's Manipulator acted.
@@ -98,6 +105,15 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
     }));
     out.extend(
         events
+            .charging
+            .iter()
+            .map(|&(player, index)| Event::Charging {
+                player,
+                index: u16::try_from(index).unwrap_or(u16::MAX),
+            }),
+    );
+    out.extend(
+        events
             .respawns
             .iter()
             .map(|&respawn| Event::Respawn(respawn)),
@@ -131,6 +147,9 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Explosion(blast) => tick.explosions.push(blast),
             Event::Damage(damage) => tick.damage.push(damage),
             Event::Pickup { player, index } => tick.pickups.push((player, usize::from(index))),
+            Event::Charging { player, index } => {
+                tick.charging.push((player, usize::from(index)));
+            }
             Event::Respawn(respawn) => tick.respawns.push(respawn),
             Event::Tool { player, event } => tick.tools.push((player, event)),
             Event::Match(event) => tick.match_event = Some(event),

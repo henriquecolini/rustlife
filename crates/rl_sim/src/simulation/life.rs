@@ -6,6 +6,7 @@ use std::sync::Arc;
 use glam::Vec3;
 
 use super::{DamageEvent, Kill, Life, PlayerId, RespawnEvent, Simulation, Spawn, TickEvents};
+use crate::collision::contents::MASK_SHOT;
 use crate::combat::{Cause, Damage, Vitals};
 use crate::hazards::DOSE_INTERVAL;
 use crate::movement::{Buttons, PlayerState, UserCmd};
@@ -17,6 +18,9 @@ use crate::weapons::Inventory;
 
 /// Two players spawning closer than this would overlap, units.
 const SPAWN_CLEARANCE: f32 = 48.0;
+/// How far behind the wall a station's origin may lie and still be seen
+/// by a player looking at it, units.
+const STATION_DEPTH: f32 = 16.0;
 
 impl Simulation {
     /// Deals `damage` to a living player, armor first; kills them if their
@@ -197,6 +201,7 @@ impl Simulation {
         if !self.game.playing() {
             return;
         }
+        self.use_stations(events);
         let arsenal = Arc::clone(&self.arsenal);
         for (index, player) in self.players.iter_mut().enumerate() {
             let Some(player) = player.as_mut().filter(|player| player.alive()) else {
@@ -223,6 +228,55 @@ impl Simulation {
                 }
             }
         }
+    }
+
+    /// Lets each player holding use draw from the station they look at.
+    fn use_stations(&mut self, events: &mut TickEvents) {
+        let holders = std::mem::take(&mut self.holders);
+        for id in holders {
+            let Some(index) = self.station_in_view(id) else {
+                continue;
+            };
+            let (dt, config) = (self.dt, &self.data.player);
+            let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
+                continue;
+            };
+            if self.pickups[index].dispense(&mut player.vitals, config, dt) > 0.0 {
+                events.charging.push((id, index));
+            }
+        }
+    }
+
+    /// The available station nearest a living player's view: within use
+    /// range of their eyes, within the use cone of where they look, and in
+    /// plain sight.
+    fn station_in_view(&self, id: PlayerId) -> Option<usize> {
+        let player = self.player(id).filter(|player| player.alive())?;
+        let eye = self.eye_position(id)?;
+        let (pitch, yaw) = player.look;
+        let forward = crate::movement::view_direction(pitch, yaw);
+        let logic = &self.data.map_logic;
+        let cone = logic.use_cone.to_radians().cos();
+        self.pickups
+            .iter()
+            .enumerate()
+            .filter(|(_, pickup)| pickup.station.is_some() && pickup.available())
+            .filter_map(|(index, pickup)| {
+                let to = pickup.origin - eye;
+                let distance = to.length();
+                let facing = to.normalize_or_zero().dot(forward);
+                (distance <= logic.use_range && facing >= cone).then_some((index, distance))
+            })
+            .filter(|&(index, distance)| {
+                // Chargers sit on walls: reaching the wall at the charger
+                // counts as seeing it.
+                let trace = self
+                    .world
+                    .trace_ray(eye, self.pickups[index].origin, MASK_SHOT);
+                !trace.hit() || trace.fraction * distance >= distance - STATION_DEPTH
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
     }
 
     /// Doses everyone inside a hazard, twice a second.

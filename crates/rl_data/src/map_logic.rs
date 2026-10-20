@@ -17,6 +17,9 @@ pub struct MapLogicConfig {
     /// How far from the eyes a player reaches to press a button or open a
     /// door with use, units.
     pub use_range: f32,
+    /// How far off the view, degrees, a station (a wall charger) may be
+    /// and still be used.
+    pub use_cone: f32,
     /// The map's explosions (`env_explosion`).
     pub explosion: MapExplosionConfig,
     /// Most outputs fired in one tick: a map whose relays trigger each
@@ -42,6 +45,7 @@ pub struct MapExplosionConfig {
 impl MapLogicConfig {
     pub(crate) fn validate(&self, check: &mut Validator) {
         check.positive("use_range", self.use_range);
+        check.range("use_cone", self.use_cone, 0.0, 90.0);
         check.positive(
             "explosion.radius_per_damage",
             self.explosion.radius_per_damage,
@@ -67,6 +71,7 @@ mod tests {
     fn config() -> MapLogicConfig {
         MapLogicConfig {
             use_range: 80.0,
+            use_cone: 30.0,
             explosion: MapExplosionConfig {
                 radius_per_damage: 2.5,
                 knockback_per_damage: 7.0,
@@ -88,6 +93,7 @@ mod tests {
         let mut check = Validator::default();
         MapLogicConfig {
             use_range: 0.0,
+            use_cone: 120.0,
             explosion: MapExplosionConfig {
                 radius_per_damage: -1.0,
                 knockback_per_damage: -1.0,
@@ -96,6 +102,6 @@ mod tests {
             max_events_per_tick: 0,
         }
         .validate(&mut check);
-        assert_eq!(check.finish().len(), 5);
+        assert_eq!(check.finish().len(), 6);
     }
 }

@@ -92,7 +92,8 @@ fn spawn_pickups(
     }
 }
 
-/// Hides taken pickups.
+/// Hides taken pickups. Stations (wall chargers) stay on their wall while
+/// they recharge.
 fn show_pickups(game: Game, mut pickups: Query<(&PickupView, &mut Visibility)>) {
     let Some(sim) = game.sim() else {
         return;
@@ -101,7 +102,7 @@ fn show_pickups(game: Game, mut pickups: Query<(&PickupView, &mut Visibility)>) 
         let shown = sim
             .pickups()
             .get(view.0)
-            .is_some_and(rl_sim::pickups::Pickup::available);
+            .is_some_and(|pickup| pickup.available() || pickup.station.is_some());
         visibility.set_if_neq(if shown {
             Visibility::Inherited
         } else {

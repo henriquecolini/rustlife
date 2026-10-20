@@ -4,6 +4,10 @@
 //! the first player to touch it who can use it, and comes back after a
 //! while. Weapons are picked up too, but describe their pickup in their own
 //! file ([`crate::WeaponPickupConfig`]).
+//!
+//! An item with a `station` is not picked up but used, as wall chargers
+//! are: a player holding use at it draws its health or armor a little at a
+//! time, until its charge is spent; it then recharges.
 
 use std::collections::BTreeMap;
 
@@ -26,6 +30,18 @@ pub struct ItemConfig {
     /// A player touches it when it is within this distance of their box,
     /// units.
     pub radius: f32,
+    /// Used rather than picked up, if set: it dispenses its `gives` while
+    /// held at, and `respawn` is how long it takes to recharge once spent.
+    #[serde(default)]
+    pub station: Option<StationConfig>,
+}
+
+/// How a station dispenses.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StationConfig {
+    /// Points of health or armor given per second of use.
+    pub rate: f32,
 }
 
 /// What an item gives.
@@ -60,5 +76,43 @@ impl ItemConfig {
         }
         check.non_negative("respawn", self.respawn);
         check.non_negative("radius", self.radius);
+        if let Some(station) = &self.station {
+            check.positive("station.rate", station.rate);
+            if matches!(self.gives, ItemEffect::Ammo(_)) {
+                check.fail("station", "a station dispenses health or armor, not ammo");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn station(gives: ItemEffect, rate: f32) -> ItemConfig {
+        ItemConfig {
+            name: "Station".to_owned(),
+            model: "models/station.mdl".to_owned(),
+            gives,
+            respawn: 60.0,
+            radius: 40.0,
+            station: Some(StationConfig { rate }),
+        }
+    }
+
+    #[test]
+    fn stations_dispense_health_or_armor_at_a_positive_rate() {
+        let mut check = Validator::default();
+        station(ItemEffect::Health(50.0), 25.0).validate(&mut check);
+        assert!(check.finish().is_empty());
+
+        let mut check = Validator::default();
+        station(
+            ItemEffect::Ammo(BTreeMap::from([("smg".to_owned(), 10)])),
+            0.0,
+        )
+        .validate(&mut check);
+        let fields: Vec<String> = check.finish().into_iter().map(|p| p.field).collect();
+        assert_eq!(fields, ["station.rate", "station"]);
     }
 }

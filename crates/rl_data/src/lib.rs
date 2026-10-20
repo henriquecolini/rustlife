@@ -61,7 +61,7 @@ pub mod weapons;
 pub use ammo::{AmmoConfig, AmmoType};
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
-pub use items::{ItemConfig, ItemEffect};
+pub use items::{ItemConfig, ItemEffect, StationConfig};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use map_logic::{MapExplosionConfig, MapLogicConfig};
 pub use movement::{

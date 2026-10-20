@@ -5,6 +5,11 @@
 //! ([`from_entities`]). A pickup is taken by the first living player to come
 //! within its radius who can use it — a full player leaves a medkit where it
 //! is — and comes back after its respawn time.
+//!
+//! *Stations* (wall chargers) are used rather than touched: a player
+//! holding use at one draws its health or armor at its rate
+//! ([`Pickup::dispense`]) until its charge is spent; it is then away until
+//! it has recharged.
 
 use std::collections::BTreeSet;
 
@@ -54,6 +59,10 @@ pub struct Pickup {
     pub respawn: f32,
     /// Seconds until it is back; zero while it is there to take.
     pub away: f32,
+    /// For a station: points given per second of use.
+    pub station: Option<f32>,
+    /// For a station: what is left of its charge (its `gives`).
+    pub charge: f32,
 }
 
 impl Pickup {
@@ -76,7 +85,46 @@ impl Pickup {
             return false;
         }
         self.away -= dt;
-        self.away <= 0.0
+        let back = self.away <= 0.0;
+        if back {
+            self.charge = self.capacity();
+        }
+        back
+    }
+
+    /// A station's full charge: what it gives (zero for other pickups).
+    #[must_use]
+    pub fn capacity(&self) -> f32 {
+        match self.gives {
+            Gives::Health(amount) | Gives::Armor(amount) if self.station.is_some() => amount,
+            _ => 0.0,
+        }
+    }
+
+    /// A station being used for `dt` seconds: gives a player what of its
+    /// rate they can take, from its charge; once that is spent it is away
+    /// until recharged. Returns how much it gave.
+    pub fn dispense(&mut self, vitals: &mut Vitals, player: &PlayerConfig, dt: f32) -> f32 {
+        let Some(rate) = self.station else {
+            return 0.0;
+        };
+        if !self.available() {
+            return 0.0;
+        }
+        let dose = (rate * dt).min(self.charge);
+        let (value, max) = match self.gives {
+            Gives::Health(_) => (&mut vitals.health, player.health.max),
+            Gives::Armor(_) => (&mut vitals.armor, player.armor.max),
+            Gives::Weapon { .. } | Gives::Ammo(_) => return 0.0,
+        };
+        let given = dose.min(max - *value).max(0.0);
+        *value += given;
+        self.charge -= given;
+        if self.charge <= 0.0 {
+            self.charge = 0.0;
+            self.away = self.respawn.max(f32::MIN_POSITIVE);
+        }
+        given
     }
 
     /// Gives it to a player if they can use any of it; then it is away for
@@ -88,7 +136,7 @@ impl Pickup {
         arsenal: &Arsenal,
         player: &PlayerConfig,
     ) -> bool {
-        if !self.available() {
+        if !self.available() || self.station.is_some() {
             return false;
         }
         let used = match &self.gives {
@@ -168,6 +216,8 @@ fn weapon_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup>
         radius: pickup.radius,
         respawn: pickup.respawn,
         away: 0.0,
+        station: None,
+        charge: 0.0,
     })
 }
 
@@ -184,7 +234,7 @@ fn item_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup> {
                 .collect(),
         ),
     };
-    Some(Pickup {
+    let mut pickup = Pickup {
         id: id.to_owned(),
         name: item.name.clone(),
         gives,
@@ -194,7 +244,11 @@ fn item_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup> {
         radius: item.radius,
         respawn: item.respawn,
         away: 0.0,
-    })
+        station: item.station.as_ref().map(|station| station.rate),
+        charge: 0.0,
+    };
+    pickup.charge = pickup.capacity();
+    Some(pickup)
 }
 
 #[cfg(test)]
@@ -275,6 +329,41 @@ mod tests {
             !pickups[0].take(&mut vitals, &mut inventory, &arsenal, &data.player),
             "nothing to gain"
         );
+    }
+
+    #[test]
+    fn stations_dispense_their_charge_at_their_rate_then_recharge() {
+        let (data, arsenal, mut pickups) =
+            pickups(&[MapEntity::new("item_healthcharger", [0.0; 3])]);
+        let station = &mut pickups[0];
+        assert_eq!((station.station, station.charge), (Some(25.0), 50.0));
+        let mut vitals = Vitals {
+            health: 10.0,
+            armor: 0.0,
+        };
+        let mut inventory = Inventory::empty(&arsenal);
+        assert!(
+            !station.take(&mut vitals, &mut inventory, &arsenal, &data.player),
+            "used, not picked up"
+        );
+        let given = station.dispense(&mut vitals, &data.player, 1.0);
+        assert_eq!((given, vitals.health, station.charge), (25.0, 35.0, 25.0));
+        vitals.health = 90.0;
+        assert_eq!(
+            station.dispense(&mut vitals, &data.player, 1.0),
+            10.0,
+            "up to the maximum"
+        );
+        vitals.health = 0.0;
+        assert_eq!(
+            station.dispense(&mut vitals, &data.player, 1.0),
+            15.0,
+            "what was left"
+        );
+        assert!(!station.available(), "spent");
+        assert_eq!(station.dispense(&mut vitals, &data.player, 1.0), 0.0);
+        let back = (0..=(61 * 66)).filter(|_| station.tick(1.0 / 66.0)).count();
+        assert_eq!((back, station.charge), (1, 50.0), "recharged");
     }
 
     #[test]

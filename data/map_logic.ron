@@ -5,6 +5,9 @@ MapLogic(
     // Players press buttons and open doors with use (E) within this many
     // units of their eyes.
     use_range: 80.0,
+    // Wall chargers have no brush to aim at: one is used when it lies
+    // within this many degrees of the view (and within use range).
+    use_cone: 30.0,
     // Explosions the map sets off (env_explosion). Damage and reach are the
     // map's; an explosion without a reach of its own reaches 2.5 units per
     // point of damage, as in Source. Players and props are thrown about as

@@ -460,3 +460,49 @@ fn a_replica_collides_with_doors_where_the_server_has_them() {
     assert!(through(&replica), "and opens with the server's state");
     assert!(through(&server.sim));
 }
+
+#[test]
+fn holding_use_at_a_charger_draws_its_charge() {
+    // A wall ahead at x = 64, with a health charger on it.
+    let world =
+        WorldBuilder::new().solid_box(Vec3::new(64.0, -128.0, 0.0), Vec3::new(80.0, 128.0, 128.0));
+    let entities = [MapEntity::new("item_healthcharger", [66.0, 0.0, 56.0])];
+    let mut room = Room::new(world, &entities);
+    room.sim
+        .player_mut(room.player)
+        .expect("player")
+        .vitals
+        .health = 20.0;
+    let looking_away = UserCmd {
+        yaw: 180.0,
+        buttons: Buttons::USE,
+        ..UserCmd::default()
+    };
+    room.tick(&looking_away);
+    room.tick(&looking_away);
+    assert_eq!(
+        room.sim.player(room.player).expect("player").vitals.health,
+        20.0
+    );
+
+    let using = UserCmd {
+        buttons: Buttons::USE,
+        ..UserCmd::default()
+    };
+    let charged: usize = (0..66).map(|_| room.tick(&using).charging.len()).sum();
+    let health = room.sim.player(room.player).expect("player").vitals.health;
+    assert!((health - 45.0).abs() < 1.0, "25 a second: {health}");
+    assert!(charged >= 60, "{charged}");
+    // Drained: 25 more, then nothing until it recharges.
+    room.sim
+        .player_mut(room.player)
+        .expect("player")
+        .vitals
+        .health = 1.0;
+    for _ in 0..132 {
+        room.tick(&using);
+    }
+    let health = room.sim.player(room.player).expect("player").vitals.health;
+    assert!((health - 26.0).abs() < 1.0, "the rest of its 50: {health}");
+    assert!(!room.sim.pickups()[0].available());
+}

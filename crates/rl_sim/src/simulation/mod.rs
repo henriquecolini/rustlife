@@ -220,6 +220,9 @@ pub struct TickEvents {
     /// Pickups taken: who took which (an index into
     /// [`Simulation::pickups`]).
     pub pickups: Vec<(PlayerId, usize)>,
+    /// Stations players drew from this tick: who used which (an index into
+    /// [`Simulation::pickups`]).
+    pub charging: Vec<(PlayerId, usize)>,
     /// Players spawning.
     pub respawns: Vec<RespawnEvent>,
     /// The match ended or restarted.
@@ -255,6 +258,8 @@ pub struct Simulation {
     logic: MapLogic,
     /// Players who pressed use this tick.
     users: Vec<PlayerId>,
+    /// Players who held use this tick, once each.
+    holders: Vec<PlayerId>,
     /// Damage dealt to movers this tick: `(attacker, BSP model, amount)`.
     brush_damage: Vec<(Option<PlayerId>, usize, f32)>,
     /// Each mover's pose as last given to collision and physics, and
@@ -293,6 +298,7 @@ impl Simulation {
             hazards: Vec::new(),
             logic,
             users: Vec::new(),
+            holders: Vec::new(),
             brush_damage: Vec::new(),
             mover_poses: Vec::new(),
             hazard_clock: 0.0,
@@ -612,8 +618,13 @@ impl Simulation {
         if !player.alive() {
             return;
         }
-        if cmd.buttons.contains(Buttons::USE) && !player.state.old_buttons.contains(Buttons::USE) {
-            self.users.push(id);
+        if cmd.buttons.contains(Buttons::USE) {
+            if !player.state.old_buttons.contains(Buttons::USE) {
+                self.users.push(id);
+            }
+            if !self.holders.contains(&id) {
+                self.holders.push(id);
+            }
         }
         let scene = Scene {
             world: &self.world,
