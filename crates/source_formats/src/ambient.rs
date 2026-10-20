@@ -18,6 +18,12 @@
 //! which the renderer uploads as an irradiance volume: the same ambient-cube
 //! representation, interpolated in hardware.
 //!
+//! The cubes hold only indirect light. For a model, the engine adds every
+//! world light ([`crate::lights`]) with a clear line of sight to it;
+//! [`AmbientLighting::lighting_at`] does the same, tracing segments through
+//! the BSP tree's solid leaves, and lets sunlight through only where the trace
+//! reaches a sky brush.
+//!
 //! `vbsp` sorts its leaves by cluster, so its leaf indices no longer match the
 //! node tree or the ambient index lump; this module therefore reads the leaf
 //! lump itself.
@@ -26,6 +32,7 @@ use vbsp::Bsp;
 
 use crate::bsp::{lump, lump_version};
 use crate::lightmap::{Luxel, decode_luxel};
+use crate::lights::{self, LightKind, WorldLight};
 
 /// Light arriving from each axis direction, in Source space: `+X, -X, +Y, -Y,
 /// +Z, -Z`. Linear RGB, `1.0` being nominal full brightness (as for luxels).
@@ -58,6 +65,15 @@ const CUBE_SIZE: usize = 24;
 const AMBIENT_SCALE: f32 = 255.0;
 /// `CONTENTS_SOLID`: a leaf inside a brush, which no light reaches.
 const CONTENTS_SOLID: i32 = 1;
+/// Offset of a leaf's `first_leaf_brush` and `leaf_brush_count` (`u16` each),
+/// the same in leaf versions 0 and 1.
+const LEAF_BRUSHES_OFFSET: usize = 24;
+/// How far a sunlight trace runs towards the sun: beyond the largest
+/// possible map (±16384 units on each axis).
+const SUN_TRACE_LENGTH: f32 = 65_536.0;
+/// Deepest tree a trace descends before giving up: real BSP trees are a few
+/// dozen levels deep, so this only stops corrupt (cyclic) trees.
+const MAX_TRACE_DEPTH: usize = 512;
 
 /// One baked sample: an ambient cube at a point, Source space.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,12 +93,37 @@ struct TreeNode {
     children: [i32; 2],
 }
 
-/// A map's baked ambient lighting, queryable at any point.
+/// What lighting needs to know about one BSP leaf.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Leaf {
+    /// Ambient samples inside the leaf (none for solid leaves).
+    samples: Vec<AmbientSample>,
+    /// Whether the leaf is inside a solid brush, blocking light.
+    solid: bool,
+    /// Whether one of the leaf's brushes is a sky brush, so a sunlight trace
+    /// ending here has reached the sky.
+    sky: bool,
+}
+
+impl Leaf {
+    /// An open leaf with the given samples.
+    #[cfg(test)]
+    fn open(samples: Vec<AmbientSample>) -> Self {
+        Self {
+            samples,
+            ..Self::default()
+        }
+    }
+}
+
+/// A map's baked ambient lighting and light sources, queryable at any point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AmbientLighting {
     nodes: Vec<TreeNode>,
-    /// Samples of each leaf, in leaf-lump order (empty for solid leaves).
-    leaves: Vec<Vec<AmbientSample>>,
+    /// Every leaf, in leaf-lump order.
+    leaves: Vec<Leaf>,
+    /// The lights the engine adds to models.
+    lights: Vec<WorldLight>,
     /// Bounds of the world, `(min, max)`, Source space.
     bounds: ([f32; 3], [f32; 3]),
 }
@@ -112,14 +153,11 @@ impl AmbientLighting {
     /// Builds the sampler from its parts. Mostly useful for tests; maps are
     /// read with [`crate::bsp::load_geometry`].
     #[cfg(test)]
-    fn from_parts(
-        nodes: Vec<TreeNode>,
-        leaves: Vec<Vec<AmbientSample>>,
-        bounds: ([f32; 3], [f32; 3]),
-    ) -> Self {
+    fn from_parts(nodes: Vec<TreeNode>, leaves: Vec<Leaf>, bounds: ([f32; 3], [f32; 3])) -> Self {
         Self {
             nodes,
             leaves,
+            lights: Vec::new(),
             bounds,
         }
     }
@@ -153,8 +191,73 @@ impl AmbientLighting {
     /// without samples.
     #[must_use]
     pub fn sample(&self, point: [f32; 3]) -> Option<AmbientCube> {
-        let samples = self.leaves.get(self.leaf_at(point)?)?;
-        blend(samples, point)
+        let leaf = self.leaves.get(self.leaf_at(point)?)?;
+        blend(&leaf.samples, point)
+    }
+
+    /// The light a model at `point` receives, as the engine computes it: the
+    /// ambient [`sample`](Self::sample) plus every world light that reaches
+    /// the point unobstructed, folded into the cube by direction. `None`
+    /// where [`sample`](Self::sample) is.
+    #[must_use]
+    pub fn lighting_at(&self, point: [f32; 3]) -> Option<AmbientCube> {
+        let mut cube = self.sample(point)?;
+        for light in &self.lights {
+            let Some((color, towards)) = light.arriving_at(point) else {
+                continue;
+            };
+            let visible = match light.kind {
+                LightKind::Sun { .. } => {
+                    let end = [0, 1, 2].map(|axis| point[axis] + towards[axis] * SUN_TRACE_LENGTH);
+                    self.first_solid(point, end)
+                        .is_none_or(|leaf| self.leaves.get(leaf).is_some_and(|leaf| leaf.sky))
+                }
+                LightKind::Point | LightKind::Spot { .. } => {
+                    self.first_solid(point, light.origin).is_none()
+                }
+            };
+            if visible {
+                lights::add_to_cube(&mut cube, color, towards);
+            }
+        }
+        Some(cube)
+    }
+
+    /// The first solid leaf the segment `from → to` enters, or `None` if the
+    /// whole segment lies in open space.
+    fn first_solid(&self, from: [f32; 3], to: [f32; 3]) -> Option<usize> {
+        self.trace(0, from, to, 0)
+    }
+
+    /// Recursive segment trace (as in Quake's `RecursiveHullCheck`): a
+    /// segment on one side of a node's plane descends that side; one that
+    /// crosses it is split, and the half nearer `from` is searched first.
+    fn trace(&self, child: i32, from: [f32; 3], to: [f32; 3], depth: usize) -> Option<usize> {
+        if child < 0 {
+            let leaf = usize::try_from(!child).ok()?;
+            return self
+                .leaves
+                .get(leaf)
+                .is_some_and(|leaf| leaf.solid)
+                .then_some(leaf);
+        }
+        if depth > MAX_TRACE_DEPTH {
+            return None;
+        }
+        let node = self.nodes.get(usize::try_from(child).ok()?)?;
+        let start = dot(node.normal, from) - node.dist;
+        let end = dot(node.normal, to) - node.dist;
+        if start >= 0.0 && end >= 0.0 {
+            return self.trace(node.children[0], from, to, depth + 1);
+        }
+        if start < 0.0 && end < 0.0 {
+            return self.trace(node.children[1], from, to, depth + 1);
+        }
+        let near = usize::from(start < 0.0);
+        let fraction = start / (start - end);
+        let middle = [0, 1, 2].map(|axis| from[axis] + (to[axis] - from[axis]) * fraction);
+        self.trace(node.children[near], from, middle, depth + 1)
+            .or_else(|| self.trace(node.children[1 - near], middle, to, depth + 1))
     }
 
     /// Resamples the lighting onto a grid covering the world bounds with
@@ -309,18 +412,66 @@ pub(crate) fn load(bsp: &Bsp, bytes: &[u8]) -> Option<AmbientLighting> {
     );
 
     let leaf_lump = lump(bytes, LUMP_LEAVES)?;
-    let leaves = match lump_version(bytes, LUMP_LEAVES)? {
-        0 => inline_cube_leaves(leaf_lump),
-        1 => sampled_leaves(bytes, leaf_lump)?,
+    let (records, samples) = match lump_version(bytes, LUMP_LEAVES)? {
+        0 => {
+            let leaves = leaf_lump.as_chunks::<LEAF_SIZE_V0>().0;
+            (
+                leaves.iter().map(|leaf| LeafRecord::read(leaf)).collect(),
+                inline_cube_leaves(leaves),
+            )
+        }
+        1 => {
+            let leaves = leaf_lump.as_chunks::<LEAF_SIZE_V1>().0;
+            let records: Vec<LeafRecord> =
+                leaves.iter().map(|leaf| LeafRecord::read(leaf)).collect();
+            let samples = sampled_leaves(bytes, &records)?;
+            (records, samples)
+        }
         _ => return None,
     };
-    if leaves.iter().all(Vec::is_empty) {
+    if samples.iter().all(Vec::is_empty) {
         return None;
     }
+    let leaves = records
+        .iter()
+        .zip(samples)
+        .map(|(record, samples)| Leaf {
+            samples,
+            solid: record.is_solid(),
+            sky: record.is_solid() && has_sky_brush(bsp, record),
+        })
+        .collect();
     Some(AmbientLighting {
         nodes,
         leaves,
+        lights: lights::load(bytes),
         bounds,
+    })
+}
+
+/// Whether any brush in `leaf` has a sky side (2D or 3D sky).
+fn has_sky_brush(bsp: &Bsp, leaf: &LeafRecord) -> bool {
+    let sky = vbsp::TextureFlags::SKY | vbsp::TextureFlags::SKY2D;
+    let first = usize::from(leaf.first_brush);
+    let brushes = bsp
+        .leaf_brushes
+        .get(first..first + usize::from(leaf.brush_count))
+        .unwrap_or_default();
+    brushes.iter().any(|leaf_brush| {
+        let Some(brush) = bsp.brushes.get(usize::from(leaf_brush.brush)) else {
+            return false;
+        };
+        let first_side = brush.brush_side as usize;
+        bsp.brush_sides
+            .get(first_side..first_side + brush.num_brush_sides as usize)
+            .unwrap_or_default()
+            .iter()
+            .any(|side| {
+                usize::try_from(side.texture_info)
+                    .ok()
+                    .and_then(|index| bsp.textures_info.get(index))
+                    .is_some_and(|info| info.flags.intersects(sky))
+            })
     })
 }
 
@@ -329,16 +480,21 @@ struct LeafRecord {
     contents: i32,
     mins: [f32; 3],
     maxs: [f32; 3],
+    first_brush: u16,
+    brush_count: u16,
 }
 
 impl LeafRecord {
     /// Reads the common prefix of a version 0 or 1 leaf.
     fn read(leaf: &[u8]) -> Self {
+        let u16_at = |at: usize| u16::from_le_bytes([leaf[at], leaf[at + 1]]);
         let i16_at = |at: usize| f32::from(i16::from_le_bytes([leaf[at], leaf[at + 1]]));
         Self {
             contents: i32::from_le_bytes([leaf[0], leaf[1], leaf[2], leaf[3]]),
             mins: [i16_at(8), i16_at(10), i16_at(12)],
             maxs: [i16_at(14), i16_at(16), i16_at(18)],
+            first_brush: u16_at(LEAF_BRUSHES_OFFSET),
+            brush_count: u16_at(LEAF_BRUSHES_OFFSET + 2),
         }
     }
 
@@ -348,9 +504,8 @@ impl LeafRecord {
 }
 
 /// Version-0 leaves: one inline cube per leaf, sampled at the leaf's centre.
-fn inline_cube_leaves(lump: &[u8]) -> Vec<Vec<AmbientSample>> {
-    lump.as_chunks::<LEAF_SIZE_V0>()
-        .0
+fn inline_cube_leaves(leaves: &[[u8; LEAF_SIZE_V0]]) -> Vec<Vec<AmbientSample>> {
+    leaves
         .iter()
         .map(|leaf| {
             let record = LeafRecord::read(leaf);
@@ -368,7 +523,7 @@ fn inline_cube_leaves(lump: &[u8]) -> Vec<Vec<AmbientSample>> {
 
 /// Version-1 leaves: samples from the ambient lumps, LDR preferred (matching
 /// the LDR lightmaps the world is drawn with), HDR as a fallback.
-fn sampled_leaves(bytes: &[u8], leaf_lump: &[u8]) -> Option<Vec<Vec<AmbientSample>>> {
+fn sampled_leaves(bytes: &[u8], records: &[LeafRecord]) -> Option<Vec<Vec<AmbientSample>>> {
     let (index, samples) = LUMP_AMBIENT_INDEX
         .into_iter()
         .zip(LUMP_AMBIENT_LIGHTING)
@@ -378,13 +533,10 @@ fn sampled_leaves(bytes: &[u8], leaf_lump: &[u8]) -> Option<Vec<Vec<AmbientSampl
             Some((index, samples))
         })?;
     let samples = samples.as_chunks::<SAMPLE_SIZE>().0;
-    let leaves = leaf_lump
-        .as_chunks::<LEAF_SIZE_V1>()
-        .0
+    let leaves = records
         .iter()
         .zip(index.as_chunks::<4>().0)
-        .map(|(leaf, entry)| {
-            let record = LeafRecord::read(leaf);
+        .map(|(record, entry)| {
             if record.is_solid() {
                 return Vec::new();
             }
@@ -435,7 +587,13 @@ mod tests {
                 dist: 0.0,
                 children: [!0, !1],
             }],
-            vec![samples, Vec::new()],
+            vec![
+                Leaf::open(samples),
+                Leaf {
+                    solid: true,
+                    ..Leaf::default()
+                },
+            ],
             ([-100.0, -100.0, -100.0], [100.0, 100.0, 100.0]),
         )
     }
@@ -460,6 +618,80 @@ mod tests {
             ([0.0; 3], [0.0; 3]),
         );
         assert_eq!(world.leaf_at([1.0, 0.0, 0.0]), None);
+    }
+
+    #[test]
+    fn traces_stop_at_the_first_solid_leaf() {
+        let world = split_world(Vec::new());
+        assert_eq!(world.first_solid([10.0, 0.0, 0.0], [20.0, 5.0, 0.0]), None);
+        assert_eq!(
+            world.first_solid([10.0, 0.0, 0.0], [-10.0, 0.0, 0.0]),
+            Some(1)
+        );
+        assert_eq!(
+            world.first_solid([-5.0, 0.0, 0.0], [10.0, 0.0, 0.0]),
+            Some(1)
+        );
+    }
+
+    /// The split world with one sample in the open half and `light`.
+    fn lit_world(light: WorldLight, solid_is_sky: bool) -> AmbientLighting {
+        let mut world = split_world(vec![AmbientSample {
+            position: [50.0, 0.0, 0.0],
+            cube: uniform(0.1),
+        }]);
+        world.leaves[1].sky = solid_is_sky;
+        world.lights.push(light);
+        world
+    }
+
+    fn point_light(origin: [f32; 3]) -> WorldLight {
+        WorldLight {
+            kind: LightKind::Point,
+            origin,
+            intensity: [100.0; 3],
+            radius: 0.0,
+            attenuation: [0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn visible_lights_add_to_the_sides_facing_them() {
+        let world = lit_world(point_light([60.0, 0.0, 0.0]), false);
+        let cube = world.lighting_at([50.0, 0.0, 0.0]).expect("open leaf");
+        assert!(
+            (cube[0][0] - (0.1 + 100.0 / 100.0)).abs() < 1e-4,
+            "+X faces the light"
+        );
+        assert!((cube[1][0] - 0.1).abs() < 1e-6, "-X faces away");
+    }
+
+    #[test]
+    fn walls_block_lights() {
+        // The light sits beyond the solid half; the segment crosses it.
+        let world = lit_world(point_light([-60.0, 0.0, 0.0]), false);
+        let cube = world.lighting_at([50.0, 0.0, 0.0]).expect("open leaf");
+        assert_eq!(cube, uniform(0.1));
+    }
+
+    #[test]
+    fn sunlight_needs_a_view_of_the_sky() {
+        // The sun shines along +X, so it is seen looking towards -X, through
+        // the solid half.
+        let sun = WorldLight {
+            kind: LightKind::Sun {
+                direction: [1.0, 0.0, 0.0],
+            },
+            ..point_light([0.0; 3])
+        };
+        let blocked = lit_world(sun, false)
+            .lighting_at([50.0, 0.0, 0.0])
+            .expect("open");
+        assert_eq!(blocked, uniform(0.1), "a plain wall is in the way");
+        let lit = lit_world(sun, true)
+            .lighting_at([50.0, 0.0, 0.0])
+            .expect("open");
+        assert!((lit[1][0] - 100.1).abs() < 1e-3, "-X sees the sky");
     }
 
     #[test]
@@ -530,7 +762,14 @@ mod tests {
         let bytes = std::fs::read(&path).expect("read bsp");
         let bsp = Bsp::read(&bytes).expect("parse bsp");
         let ambient = load(&bsp, &bytes).expect("map has ambient lighting");
-        let sampled = ambient.leaves.iter().filter(|l| !l.is_empty()).count();
+        let sampled = ambient
+            .leaves
+            .iter()
+            .filter(|l| !l.samples.is_empty())
+            .count();
+        let sky = ambient.leaves.iter().filter(|l| l.sky).count();
+        eprintln!("{} lights, {sky} sky leaves", ambient.lights.len());
+        assert!(sky > 0, "a stock map has sky brushes");
         let grid = ambient.grid(64.0).expect("grid");
         let brightest = grid
             .cubes
