@@ -7,6 +7,7 @@
 //! results on the server and the client.
 //!
 //! - [`collision`]: the map's collision world and box traces through it.
+//! - [`movement`]: Source-like player movement, one tick at a time.
 //!
 //! # Determinism
 //!
@@ -17,3 +18,4 @@
 #![forbid(unsafe_code)]
 
 pub mod collision;
+pub mod movement;

@@ -142,6 +142,9 @@ pub struct LadderConfig {
     pub mount_distance: f32,
     /// Speed of the push away from the ladder when jumping off, units/s.
     pub jump_off_speed: f32,
+    /// Farthest a dismount point may be from the climber for them to step
+    /// off onto it, units.
+    pub dismount_range: f32,
 }
 
 impl MovementConfig {
@@ -187,6 +190,7 @@ impl MovementConfig {
         check.positive("ladder.climb_speed", self.ladder.climb_speed);
         check.positive("ladder.mount_distance", self.ladder.mount_distance);
         check.non_negative("ladder.jump_off_speed", self.ladder.jump_off_speed);
+        check.non_negative("ladder.dismount_range", self.ladder.dismount_range);
     }
 }
 

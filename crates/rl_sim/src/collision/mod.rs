@@ -26,6 +26,7 @@ mod world;
 pub use builder::WorldBuilder;
 pub use world::{CollisionWorld, rotation_from_angles};
 
+pub use clip::DIST_EPSILON;
 use clip::Hit;
 use contents::MASK_PLAYER_SOLID;
 

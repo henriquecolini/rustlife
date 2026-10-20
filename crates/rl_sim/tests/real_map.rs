@@ -69,3 +69,55 @@ fn displacements_are_never_fallen_through() {
     }
     eprintln!("{checked} displacement samples hold");
 }
+
+/// Walks a player out of every spawn for a few seconds — forward, then
+/// strafing, jumping and crouching — and checks they never get stuck in or
+/// fall out of the world.
+#[test]
+#[ignore = "requires a BSP file; set RUSTLIFE_TEST_BSP"]
+fn players_walk_out_of_every_spawn_without_leaving_the_world() {
+    use rl_sim::movement::{Buttons, PlayerState, UserCmd, simulate};
+    let Some((world, spawns)) = load() else {
+        return;
+    };
+    let config = rl_data::GameData::builtin().expect("data").movement;
+    let hull = Hull::from(&config.hulls.standing);
+    let dt = 1.0 / 66.0;
+    for (index, spawn) in spawns.iter().enumerate() {
+        let origin = find_free_position(&world, Vec3::from(*spawn) + Vec3::Z, &hull)
+            .expect("spawn has room");
+        let mut state = PlayerState::at(origin);
+        let lowest = spawn[2] - 4096.0;
+        for tick in 0..330usize {
+            let cmd = UserCmd {
+                forward: 1.0,
+                side: if tick > 132 {
+                    (tick as f32 * 0.05).sin()
+                } else {
+                    0.0
+                },
+                yaw: index as f32 * 37.0 + tick as f32 * 0.3,
+                pitch: 0.0,
+                buttons: match tick % 66 {
+                    0 => Buttons::JUMP,
+                    30..=40 => Buttons::DUCK,
+                    _ => Buttons::NONE,
+                },
+            };
+            state = simulate(&state, &cmd, &config, dt, &world).0;
+            let stuck = world
+                .trace_hull(
+                    state.origin,
+                    state.origin,
+                    &state.hull(&config),
+                    MASK_PLAYER_SOLID,
+                )
+                .all_solid;
+            assert!(!stuck, "spawn {index}: stuck at tick {tick}: {state:?}");
+            assert!(
+                state.origin.z > lowest,
+                "spawn {index}: fell out of the world"
+            );
+        }
+    }
+}

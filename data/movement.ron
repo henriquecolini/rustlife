@@ -69,5 +69,8 @@ Movement(
         mount_distance: 48.0,
         // Speed of the push away from the ladder when jumping off, units/s.
         jump_off_speed: 270.0,
+        // Farthest a dismount point (info_ladder_dismount) may be from the
+        // climber for them to step off onto it, units.
+        dismount_range: 96.0,
     ),
 )

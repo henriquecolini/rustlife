@@ -116,5 +116,32 @@ fn bench_real_map(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_room, bench_real_map);
+fn bench_movement(c: &mut Criterion) {
+    use rl_sim::movement::{PlayerState, UserCmd, simulate};
+    let world = room();
+    let Ok(data) = rl_data::GameData::builtin() else {
+        return;
+    };
+    let config = data.movement;
+    let mut state = PlayerState::at(Vec3::new(-600.0, -600.0, 1.0));
+    let cmd = UserCmd {
+        forward: 1.0,
+        side: 0.3,
+        yaw: 45.0,
+        ..UserCmd::default()
+    };
+    c.bench_function("movement: one tick running through the room", |b| {
+        b.iter(|| {
+            let (next, _) = simulate(black_box(&state), &cmd, &config, 1.0 / 66.0, &world);
+            // Wrap around the room so every tick does real work.
+            state = if next.origin.x > 600.0 {
+                PlayerState::at(Vec3::new(-600.0, -600.0, 1.0))
+            } else {
+                next
+            };
+        });
+    });
+}
+
+criterion_group!(benches, bench_room, bench_real_map, bench_movement);
 criterion_main!(benches);
