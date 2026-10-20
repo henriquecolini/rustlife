@@ -16,10 +16,7 @@ use source_formats::collision::{
 
 use super::CollisionWorld;
 use super::contents;
-
-/// Tolerance for deciding a point lies inside a brush when finding its
-/// corners.
-const INSIDE_EPSILON: f32 = 0.01;
+use super::hull::plane_corners;
 /// Two normals closer than this (component-wise) are the same direction.
 const SAME_NORMAL_EPSILON: f32 = 1e-4;
 
@@ -183,56 +180,22 @@ fn side(normal: Vec3, dist: f32, bevel: bool) -> CollisionSide {
     }
 }
 
-/// Bounds of a brush's corners — every point where three of its planes meet
-/// that lies inside all of them — or `None` if it has none (unbounded).
+/// Bounds of a brush's corners, or `None` if it has none (unbounded).
 fn corner_bounds(sides: &[CollisionSide]) -> Option<(Vec3, Vec3)> {
     let planes: Vec<(Vec3, f32)> = sides
         .iter()
         .map(|side| (Vec3::from(side.plane.normal), side.plane.dist))
         .collect();
-    let mut bounds: Option<(Vec3, Vec3)> = None;
-    for (i, a) in planes.iter().enumerate() {
-        for (j, b) in planes.iter().enumerate().skip(i + 1) {
-            for c in planes.iter().skip(j + 1) {
-                let Some(corner) = intersect(*a, *b, *c) else {
-                    continue;
-                };
-                let inside = planes
-                    .iter()
-                    .all(|(normal, dist)| normal.dot(corner) <= dist + INSIDE_EPSILON);
-                if inside {
-                    bounds = Some(bounds.map_or((corner, corner), |(lo, hi)| {
-                        (lo.min(corner), hi.max(corner))
-                    }));
-                }
-            }
-        }
-    }
-    bounds
-}
-
-/// The point where three planes meet, or `None` if two are parallel.
-fn intersect(a: (Vec3, f32), b: (Vec3, f32), c: (Vec3, f32)) -> Option<Vec3> {
-    let denominator = a.0.dot(b.0.cross(c.0));
-    if denominator.abs() < 1e-6 {
-        return None;
-    }
-    Some((b.0.cross(c.0) * a.1 + c.0.cross(a.0) * b.1 + a.0.cross(b.0) * c.1) / denominator)
+    let corners = plane_corners(&planes);
+    let first = *corners.first()?;
+    Some(corners.iter().fold((first, first), |(lo, hi), &corner| {
+        (lo.min(corner), hi.max(corner))
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn three_planes_meet_at_a_corner() {
-        let corner = intersect((Vec3::X, 1.0), (Vec3::Y, 2.0), (Vec3::Z, 3.0));
-        assert_eq!(corner, Some(Vec3::new(1.0, 2.0, 3.0)));
-        assert_eq!(
-            intersect((Vec3::X, 1.0), (Vec3::X, 2.0), (Vec3::Z, 3.0)),
-            None
-        );
-    }
 
     #[test]
     fn ramps_gain_a_top_bevel() {

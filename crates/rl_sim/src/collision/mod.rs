@@ -17,13 +17,17 @@
 use glam::Vec3;
 use rl_data::HullConfig;
 
+use crate::physics::BodyId;
+
 mod builder;
-mod clip;
+pub(crate) mod clip;
 pub mod contents;
+mod hull;
 mod triangle;
 mod world;
 
 pub use builder::WorldBuilder;
+pub use hull::ConvexHull;
 pub use world::{CollisionWorld, rotation_from_angles};
 
 pub use clip::DIST_EPSILON;
@@ -89,6 +93,9 @@ pub struct Trace {
     pub start_solid: bool,
     /// The hull never left solid space: it is stuck.
     pub all_solid: bool,
+    /// The physics body hit, if what stopped the trace was a prop rather
+    /// than the map.
+    pub body: Option<BodyId>,
 }
 
 impl Trace {
@@ -98,8 +105,22 @@ impl Trace {
         self.fraction < 1.0
     }
 
+    /// The nearer of two traces of the same move, carrying the solid flags
+    /// of both.
+    #[must_use]
+    pub fn nearest(self, other: Self) -> Self {
+        let mut nearest = if other.fraction < self.fraction {
+            other
+        } else {
+            self
+        };
+        nearest.start_solid = self.start_solid || other.start_solid;
+        nearest.all_solid = self.all_solid || other.all_solid;
+        nearest
+    }
+
     /// Converts a sweep's [`Hit`] into a trace from `start` to `end`.
-    fn from_hit(start: Vec3, end: Vec3, hit: Hit) -> Self {
+    pub(crate) fn from_hit(start: Vec3, end: Vec3, hit: Hit) -> Self {
         let end = if hit.fraction >= 1.0 {
             end
         } else {
@@ -112,6 +133,7 @@ impl Trace {
             contents: hit.contents,
             start_solid: hit.start_solid,
             all_solid: hit.all_solid,
+            body: None,
         }
     }
 }
@@ -127,8 +149,8 @@ pub struct Ladder {
 
 /// Anything movement can collide with.
 ///
-/// Implemented by [`CollisionWorld`] for a map's static geometry; later
-/// layers (physics props, other players) wrap it and merge their own hits.
+/// Implemented by [`CollisionWorld`] for a map's static geometry, and by
+/// [`crate::scene::Scene`] for the map together with its physics props.
 pub trait CollisionQuery {
     /// Sweeps `hull`, placed at `start`, to `end`, stopping at the first
     /// contents in `mask`.

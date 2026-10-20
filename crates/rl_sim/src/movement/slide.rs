@@ -78,6 +78,18 @@ impl<W: MovementWorld> Mover<'_, W> {
             if !trace.hit() {
                 break;
             }
+            if let Some(body) = trace.body {
+                // Running into a prop's side (not landing on its top): it
+                // gets pushed.
+                let speed = -self.state.velocity.dot(trace.normal);
+                if speed > 0.0 && trace.normal.z < self.config.ground.floor_normal_z {
+                    self.events.touch(super::Touch {
+                        body,
+                        normal: trace.normal,
+                        speed,
+                    });
+                }
+            }
             time_left -= time_left * trace.fraction;
             if plane_count >= MAX_CLIP_PLANES {
                 self.state.velocity = Vec3::ZERO;

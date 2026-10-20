@@ -4,6 +4,7 @@ use glam::{Mat3, Vec3};
 use source_formats::collision::{BrushEntityCollision, MapCollision};
 
 use super::clip::{ClipPlane, Hit, Sweep, clip_convex};
+use super::hull::plane_corners;
 use super::triangle::prism_planes;
 use super::{CollisionQuery, Hull, Ladder, Trace, contents};
 
@@ -165,6 +166,81 @@ impl CollisionWorld {
     #[must_use]
     pub fn ladder_dismounts(&self) -> &[Vec3] {
         &self.dismounts
+    }
+
+    /// The corners of every brush whose contents are in `mask` — the
+    /// world's and those of the solid brush entities, placed — in world
+    /// space, one list per brush (with repeats where more than three sides
+    /// meet). The physics world builds its static colliders from these.
+    #[must_use]
+    pub fn convex_solids(&self, mask: u32) -> Vec<Vec<Vec3>> {
+        let mut solids = Vec::new();
+        let mut collect = |root: i32, place: &dyn Fn(Vec3) -> Vec3| {
+            for brush in self.model_brushes(root) {
+                let Some(contents) = self.map.brushes.get(brush).map(|brush| brush.contents) else {
+                    continue;
+                };
+                if contents & mask == 0 {
+                    continue;
+                }
+                let planes: Vec<(Vec3, f32)> = self
+                    .brush_planes(brush)
+                    .map(|plane| (plane.normal, plane.dist))
+                    .collect();
+                let corners: Vec<Vec3> = plane_corners(&planes).into_iter().map(place).collect();
+                if corners.len() >= 4 {
+                    solids.push(corners);
+                }
+            }
+        };
+        if let Some(world) = self.map.models.first() {
+            collect(world.root, &|point| point);
+        }
+        for entity in &self.entities {
+            let rotation = entity.rotation.unwrap_or(Mat3::IDENTITY);
+            collect(entity.root, &|point| entity.origin + rotation * point);
+        }
+        solids
+    }
+
+    /// The map's displacement surfaces whose contents are in `mask`, as
+    /// world-space triangles, one list per displacement.
+    pub fn displacement_triangles(&self, mask: u32) -> impl Iterator<Item = &[[[f32; 3]; 3]]> {
+        self.map
+            .displacements
+            .iter()
+            .filter(move |displacement| displacement.contents & mask != 0)
+            .map(|displacement| displacement.triangles.as_slice())
+    }
+
+    /// Every brush listed by a leaf of the tree rooted at `root`, once each.
+    fn model_brushes(&self, root: i32) -> Vec<usize> {
+        let mut seen = vec![false; self.map.brushes.len()];
+        let mut brushes = Vec::new();
+        let mut stack = vec![root];
+        // Each node is pushed at most once by a well-formed tree; the budget
+        // stops corrupt (cyclic) ones.
+        let mut budget = self.map.nodes.len() + self.map.leaves.len() + 1;
+        while let Some(child) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            if child < 0 {
+                for brush in self.leaf_brushes((!child) as usize) {
+                    if let Some(seen) = seen.get_mut(brush)
+                        && !*seen
+                    {
+                        *seen = true;
+                        brushes.push(brush);
+                    }
+                }
+            } else if let Some(node) = self.map.nodes.get(child as usize) {
+                stack.extend(node.children);
+            }
+        }
+        brushes.sort_unstable();
+        brushes
     }
 
     /// Sweeps against the world and every solid entity.
@@ -515,6 +591,21 @@ mod tests {
             solidity,
             start_disabled,
         }
+    }
+
+    #[test]
+    fn convex_solids_list_matching_brushes_with_their_corners() {
+        let world = super::super::WorldBuilder::new()
+            .solid_box(Vec3::ZERO, Vec3::ONE * 10.0)
+            .box_of(contents::WATER, Vec3::ONE * 20.0, Vec3::ONE * 30.0)
+            .build();
+        let solids = world.convex_solids(contents::SOLID);
+        assert_eq!(solids.len(), 1, "water is not solid");
+        let (mins, maxs) = solids[0].iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(lo, hi), &p| (lo.min(p), hi.max(p)),
+        );
+        assert_eq!((mins, maxs), (Vec3::ZERO, Vec3::ONE * 10.0));
     }
 
     #[test]

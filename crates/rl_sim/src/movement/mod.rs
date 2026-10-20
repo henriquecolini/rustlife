@@ -29,6 +29,7 @@ use glam::Vec3;
 use rl_data::MovementConfig;
 
 use crate::collision::{CollisionQuery, CollisionWorld, Hull, Ladder};
+use crate::physics::BodyId;
 
 mod accelerate;
 mod duck;
@@ -200,6 +201,20 @@ impl PlayerState {
     }
 }
 
+/// Most props one tick's move remembers touching.
+pub const MAX_TOUCHES: usize = 4;
+
+/// A prop the player ran into during a tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Touch {
+    /// The prop.
+    pub body: BodyId,
+    /// Normal of the prop's surface hit, pointing out of it.
+    pub normal: Vec3,
+    /// How fast the player was moving into the surface, units/s.
+    pub speed: f32,
+}
+
 /// Things that happened during a tick, for sounds, effects and damage.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MoveEvents {
@@ -207,6 +222,33 @@ pub struct MoveEvents {
     pub jumped: bool,
     /// The player landed, falling at this speed (units/s, positive).
     pub landed: Option<f32>,
+    /// Props walked or flown into (not stood on), fastest contact per
+    /// prop; see [`MoveEvents::touches`].
+    touches: [Option<Touch>; MAX_TOUCHES],
+}
+
+impl MoveEvents {
+    /// The props the player ran into this tick.
+    pub fn touches(&self) -> impl Iterator<Item = &Touch> {
+        self.touches.iter().flatten()
+    }
+
+    /// Records running into a prop, keeping the fastest contact with each
+    /// and dropping new props once [`MAX_TOUCHES`] are known.
+    fn touch(&mut self, touch: Touch) {
+        if let Some(known) = self
+            .touches
+            .iter_mut()
+            .flatten()
+            .find(|known| known.body == touch.body)
+        {
+            if touch.speed > known.speed {
+                *known = touch;
+            }
+        } else if let Some(free) = self.touches.iter_mut().find(|slot| slot.is_none()) {
+            *free = Some(touch);
+        }
+    }
 }
 
 /// What movement needs from the world: collision plus the map's ladders.
@@ -442,6 +484,25 @@ mod tests {
             forward.abs_diff_eq(Vec3::NEG_Z, 1e-6),
             "positive pitch looks down"
         );
+    }
+
+    #[test]
+    fn touches_keep_the_fastest_contact_per_prop() {
+        let mut events = MoveEvents::default();
+        let touch = |body, speed| Touch {
+            body: BodyId::from_index(body),
+            normal: Vec3::X,
+            speed,
+        };
+        events.touch(touch(1, 10.0));
+        events.touch(touch(1, 30.0));
+        events.touch(touch(1, 20.0));
+        for body in 2..10 {
+            events.touch(touch(body, 1.0));
+        }
+        let touches: Vec<_> = events.touches().collect();
+        assert_eq!(touches.len(), MAX_TOUCHES);
+        assert_eq!(touches[0].speed, 30.0);
     }
 
     #[test]

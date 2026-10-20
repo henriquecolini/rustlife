@@ -19,6 +19,9 @@ pub const WATER: u32 = 0x20;
 pub const MOVEABLE: u32 = 0x4000;
 /// Invisible walls that block only players.
 pub const PLAYER_CLIP: u32 = 0x1_0000;
+/// Invisible walls that block NPCs (and, together with [`PLAYER_CLIP`],
+/// physics props too).
+pub const MONSTER_CLIP: u32 = 0x2_0000;
 /// Other players and creatures (never on a brush).
 pub const MONSTER: u32 = 0x200_0000;
 /// Brush ladders (CS-style; HL2 maps use ladder entities instead).

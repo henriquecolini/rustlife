@@ -8,14 +8,20 @@
 //!
 //! - [`collision`]: the map's collision world and box traces through it.
 //! - [`movement`]: Source-like player movement, one tick at a time.
+//! - [`physics`]: props as rigid bodies, pushed by and hitting players.
+//! - [`scene`]: the map and its props together, as movement sees them.
 //!
 //! # Determinism
 //!
-//! Given the same inputs, the simulation produces bit-identical outputs: it
-//! uses only `f32` arithmetic in a fixed order, never iterates hash maps, and
-//! reads no clocks or random sources. Client-side prediction depends on this.
+//! Given the same inputs, movement produces bit-identical outputs: it uses
+//! only `f32` arithmetic in a fixed order, never iterates hash maps, and
+//! reads no clocks or random sources. Client-side prediction depends on
+//! this. Prop physics is server-authoritative and repeatable on one build,
+//! but not promised to match across machines (see [`physics`]).
 
 #![forbid(unsafe_code)]
 
 pub mod collision;
 pub mod movement;
+pub mod physics;
+pub mod scene;

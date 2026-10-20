@@ -7,15 +7,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "rustlife's deterministic, headless simulation: collision, player movement and (later) physics and rules."
+description = "rustlife's headless simulation: collision, player movement, prop physics and tools."
 
 [dependencies]
 glam.workspace = true
+rapier3d.workspace = true
 rl_data.workspace = true
 source_formats.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+source_formats = { workspace = true, features = ["testing"] }
 proptest.workspace = true
 
 [[bench]]

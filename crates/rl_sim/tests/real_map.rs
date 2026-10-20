@@ -121,3 +121,62 @@ fn players_walk_out_of_every_spawn_without_leaving_the_world() {
         }
     }
 }
+
+/// The map's physics world builds in reasonable time, and a crate dropped
+/// at each spawn lands near the floor the player would stand on.
+#[test]
+#[ignore = "requires a BSP file; set RUSTLIFE_TEST_BSP"]
+fn crates_dropped_at_spawns_land_on_the_floor() {
+    use rl_sim::collision::ConvexHull;
+    use rl_sim::physics::{Motion, PhysicsWorld, PropDesc};
+
+    let Some((world, spawns)) = load() else {
+        return;
+    };
+    let config = rl_data::GameData::builtin().expect("builtin").physics;
+    let started = std::time::Instant::now();
+    let mut physics = PhysicsWorld::new(&world, &config, 1.0 / 66.0);
+    eprintln!("built {physics:?} in {:?}", started.elapsed());
+    let crates: Vec<_> = spawns
+        .iter()
+        .map(|&spawn| {
+            physics.add_prop(&PropDesc {
+                pieces: vec![ConvexHull::from_box(
+                    Vec3::new(-8.0, -8.0, 0.0),
+                    Vec3::splat(8.0) + Vec3::Z * 8.0,
+                )],
+                origin: Vec3::from(spawn) + Vec3::Z * 64.0,
+                rotation: glam::Quat::IDENTITY,
+                motion: Motion::Dynamic,
+                mass: 10.0,
+                material: *config.materials.get("wood"),
+                linear_damping: 0.0,
+                angular_damping: 0.0,
+                debris: false,
+                start_asleep: false,
+                grabbable: true,
+                free_on_grab: false,
+            })
+        })
+        .collect();
+    let started = std::time::Instant::now();
+    for _ in 0..200 {
+        physics.step();
+    }
+    eprintln!(
+        "200 steps with {} crates in {:?}",
+        crates.len(),
+        started.elapsed()
+    );
+    let hull = Hull::new(Vec3::new(-8.0, -8.0, 0.0), Vec3::new(8.0, 8.0, 16.0));
+    for (body, spawn) in crates.iter().zip(&spawns) {
+        let rest = physics.pose(*body).expect("crate").position;
+        let start = Vec3::from(*spawn) + Vec3::Z * 64.0;
+        let floor = world.trace_hull(start, start - Vec3::Z * 512.0, &hull, SOLID);
+        assert!(
+            (rest.z - floor.end.z).abs() < 24.0,
+            "crate from {spawn:?} rests at {rest}, floor at {}",
+            floor.end
+        );
+    }
+}
