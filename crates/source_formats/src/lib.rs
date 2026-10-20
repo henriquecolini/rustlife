@@ -20,5 +20,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bsp;
 pub mod vmt;
 pub mod vtf;
