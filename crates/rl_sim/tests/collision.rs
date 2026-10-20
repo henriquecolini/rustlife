@@ -197,6 +197,38 @@ proptest! {
     }
 
     #[test]
+    fn chains_of_short_moves_never_end_inside(
+        face in 0usize..6,
+        gap in 0.0f32..0.05,
+        across in (-60.0f32..60.0, -60.0f32..60.0),
+        steps in proptest::collection::vec((point(), 0.0f32..0.2), 1..40),
+    ) {
+        // Movement makes many tiny traces from wherever the last one ended,
+        // usually within the clip epsilon of a surface. Start resting just
+        // off one of the cube's faces and nudge about: none may sink in.
+        let world = cube_world();
+        let hull = player();
+        let (axis, sign) = (face / 2, if face % 2 == 0 { 1.0 } else { -1.0 });
+        let mut position = Vec3::ZERO;
+        let [u, v] = [(axis + 1) % 3, (axis + 2) % 3];
+        position[u] = across.0;
+        position[v] = across.1;
+        // The hull's side facing the cube sits `gap` units off the face.
+        position[axis] = if sign > 0.0 {
+            64.0 + gap - hull.mins[axis]
+        } else {
+            -64.0 - gap - hull.maxs[axis]
+        };
+        for (direction, length) in steps {
+            let end = position + direction.normalize_or_zero() * length;
+            let trace = world.trace_hull(position, end, &hull, SOLID);
+            prop_assert!(!trace.start_solid, "{trace:?}");
+            position = trace.end;
+            prop_assert!(!penetrates_cube(position, &hull, 0.0), "sank in at {position}");
+        }
+    }
+
+    #[test]
     fn hits_report_a_unit_normal_facing_the_mover(start in point(), end in point()) {
         let world = cube_world();
         let trace = world.trace_hull(start, end, &player(), SOLID);

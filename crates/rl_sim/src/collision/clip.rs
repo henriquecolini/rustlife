@@ -20,7 +20,7 @@
 use glam::Vec3;
 
 /// How far short of a surface a trace stops, in units. Source's value: 1/32.
-pub(crate) const DIST_EPSILON: f32 = 0.031_25;
+pub const DIST_EPSILON: f32 = 0.031_25;
 
 /// "No entering plane found yet"; any real entering fraction is larger.
 const NEVER_ENTERED: f32 = -1.0;
@@ -155,7 +155,12 @@ pub(crate) fn clip_convex(
             continue;
         }
         if d1 > d2 {
-            let fraction = (d1 - DIST_EPSILON) / (d1 - d2);
+            // A start closer to the plane than the epsilon would pull the
+            // crossing back past the start; over a short move that gives a
+            // large negative fraction, the hit would be discarded and the
+            // box would end inside. Clamp it to "hit at the start" instead
+            // (as the Source engine does).
+            let fraction = (d1 - DIST_EPSILON).max(0.0) / (d1 - d2);
             if fraction > enter {
                 enter = fraction;
                 enter_normal = plane.normal;
@@ -242,6 +247,16 @@ mod tests {
         let stuck = sweep(Vec3::ZERO, Vec3::new(0.5, 0.0, 0.0), 0.0);
         assert!(stuck.all_solid);
         assert_eq!(stuck.fraction, 0.0);
+    }
+
+    #[test]
+    fn a_box_already_within_the_epsilon_still_hits() {
+        // 0.004 units from the face, moving 0.02 units into it: the pulled-
+        // back crossing lies far behind the start, but this is still a hit.
+        let start = Vec3::new(-1.004, 0.0, 0.0);
+        let hit = sweep(start, start + Vec3::new(0.02, 0.0, 0.0), 0.0);
+        assert_eq!(hit.fraction, 0.0);
+        assert_eq!(hit.normal, Vec3::NEG_X);
     }
 
     #[test]
