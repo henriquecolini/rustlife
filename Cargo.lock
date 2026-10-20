@@ -5071,6 +5071,7 @@ dependencies = [
  "bevy_mesh",
  "bevy_reflect",
  "futures-lite",
+ "half",
  "source_formats",
  "source_fs",
  "tempfile",

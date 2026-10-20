@@ -2,11 +2,13 @@
 //!
 //! The map's pakfile is mounted, its geometry spawned as one entity per
 //! material, and each surface's `StandardMaterial` is built from the resolved
-//! VMT ([`rl_assets::SourceMaterial`]) as it streams in. Lightmaps and the sky
-//! arrive in later M1 increments.
+//! VMT ([`rl_assets::SourceMaterial`]) as it streams in. World surfaces are lit
+//! by the map's baked lightmap; dynamic lights only touch unlit content.
 
 use std::collections::HashMap;
 
+use bevy::camera::Exposure;
+use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use rl_assets::{MapAsset, SOURCE, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
@@ -59,12 +61,23 @@ impl Plugin for WorldPlugin {
     }
 }
 
+/// Scale applied to lightmap texels so a decoded luxel of `1.0` — Source's
+/// nominal full brightness — renders as the unmodified texture colour.
+///
+/// Bevy treats lightmap values as scene radiance and then applies the camera's
+/// exposure; dividing that exposure back out makes the final colour
+/// `albedo × luxel`, which is what Source's `LightmappedGeneric` produces.
+fn lightmap_exposure() -> f32 {
+    1.0 / Exposure::default().exposure()
+}
+
 fn setup_lighting(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(Placeholder(materials.add(StandardMaterial {
         base_color: Color::srgb(0.6, 0.6, 0.62),
         perceptual_roughness: 0.9,
         cull_mode: None,
         double_sided: true,
+        lightmap_exposure: lightmap_exposure(),
         ..default()
     })));
 
@@ -72,6 +85,9 @@ fn setup_lighting(mut commands: Commands, mut materials: ResMut<Assets<StandardM
         DirectionalLight {
             illuminance: 8_000.0,
             shadow_maps_enabled: false,
+            // Baked lighting already includes the sun; adding it again would
+            // double-light the world.
+            affects_lightmapped_mesh_diffuse: false,
             ..default()
         },
         Transform::from_xyz(1.0, 3.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -153,11 +169,20 @@ fn spawn_when_loaded(
             .or_insert_with(|| {
                 asset_server.load(format!("{SOURCE}://materials/{}.vmt", mesh.material))
             });
-        commands.spawn((
+        let mut surface = commands.spawn((
             Mesh3d(mesh.mesh.clone()),
             MeshMaterial3d(placeholder.0.clone()),
             Surface(mesh.material.clone()),
         ));
+        // Every surface shares the map's single atlas; its UV_1 coordinates
+        // already address its own blocks, so the rect is the whole image.
+        if let Some(lightmap) = &map.lightmap {
+            surface.insert(Lightmap {
+                image: lightmap.clone(),
+                uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+                bicubic_sampling: false,
+            });
+        }
     }
 
     // Drop the camera into the middle of the level and scale its speed to the
@@ -236,6 +261,7 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         cull_mode: None,
         double_sided: true,
         alpha_mode,
+        lightmap_exposure: lightmap_exposure(),
         ..default()
     }
 }

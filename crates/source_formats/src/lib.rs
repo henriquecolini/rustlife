@@ -21,5 +21,6 @@
 #![forbid(unsafe_code)]
 
 pub mod bsp;
+pub mod lightmap;
 pub mod vmt;
 pub mod vtf;

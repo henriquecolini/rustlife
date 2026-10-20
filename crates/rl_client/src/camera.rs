@@ -61,6 +61,8 @@ fn spawn_camera(mut commands: Commands) {
         // pure black.
         AmbientLight {
             brightness: 600.0,
+            // Lightmapped world surfaces carry their own baked ambient.
+            affects_lightmapped_meshes: false,
             ..default()
         },
     ));

@@ -10,15 +10,29 @@
 //! The conversion to Bevy's coordinate system happens once, at the render
 //! boundary (`rl_assets`), so the geometry here matches what the simulation and
 //! collision code will later use.
+//!
+//! The baked lighting is extracted alongside: every lit face's luxels are
+//! decoded and packed into one [`LightmapAtlas`], and each vertex gets a second
+//! UV set addressing its face's block (see [`crate::lightmap`]).
 
 use std::collections::HashMap;
 
 use thiserror::Error;
 use vbsp::Bsp;
 
+use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, decode_luxel};
+
+/// BSP lump index of the low-dynamic-range lighting data the face lump's
+/// `light_offset`s point into.
+const LUMP_LIGHTING: usize = 8;
 /// BSP lump index of the embedded pakfile (a zip archive of map-specific
 /// content: patched cubemap materials, custom textures and models).
 const LUMP_PAKFILE: usize = 40;
+/// Light style value meaning "no lightmap in this slot".
+const NO_LIGHT_STYLE: u8 = 255;
+/// Largest lightmap block dimension accepted, in luxels. vbsp caps face
+/// lightmaps far below this; anything larger means corrupt data.
+const MAX_LIGHTMAP_SIZE: usize = 1024;
 /// Size of one entry in the BSP lump directory: `fileofs`, `filelen` and
 /// `version` as `i32`, then a 4-byte `fourCC`.
 const LUMP_ENTRY_SIZE: usize = 16;
@@ -38,6 +52,9 @@ pub struct MapSurface {
     pub normals: Vec<[f32; 3]>,
     /// Per-vertex texture coordinates, already divided by texture size.
     pub uvs: Vec<[f32; 2]>,
+    /// Per-vertex coordinates into [`MapGeometry::lightmap`]; empty when the
+    /// map has no lightmap.
+    pub lightmap_uvs: Vec<[f32; 2]>,
 }
 
 /// A player spawn point, in Source space.
@@ -57,6 +74,9 @@ pub struct MapGeometry {
     pub surfaces: Vec<MapSurface>,
     /// Player spawn points parsed from the map's entities.
     pub spawns: Vec<SpawnPoint>,
+    /// The map's baked lighting, or `None` if it has none (unlit or
+    /// HDR-only maps).
+    pub lightmap: Option<LightmapAtlas>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -96,17 +116,37 @@ pub fn load_geometry(bytes: &[u8]) -> Result<MapGeometry, BspError> {
 
 fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
     let bsp = Bsp::read(bytes).map_err(|error| BspError::Parse(error.to_string()))?;
+    let visible: Vec<usize> = (0..bsp.faces.len())
+        .filter(|&index| bsp.face(index).is_some_and(|face| face.is_visible()))
+        .collect();
 
+    // Pass 1: decode each lit face's luxels and pack them into one atlas. A
+    // 1×1 full-bright block serves faces without baked light (e.g. unlit
+    // materials), which Source draws at full brightness.
+    let lighting = lump(bytes, LUMP_LIGHTING).filter(|data| !data.is_empty());
+    let mut builder = AtlasBuilder::new();
+    let full_bright = builder.add(1, 1, vec![[1.0; 3]]);
+    let mut face_blocks: HashMap<usize, usize> = HashMap::new();
+    if let Some(lighting) = lighting {
+        for &index in &visible {
+            let Some(face) = bsp.face(index) else {
+                continue;
+            };
+            if let Some((width, height, luxels)) = face_luxels(&face, lighting) {
+                face_blocks.insert(index, builder.add(width, height, luxels));
+            }
+        }
+    }
+    let (atlas, placements) = builder.pack();
+    let has_lightmap = !face_blocks.is_empty();
+
+    // Pass 2: emit triangles grouped by material.
     let mut by_material: HashMap<String, usize> = HashMap::new();
     let mut surfaces: Vec<MapSurface> = Vec::new();
-
-    for index in 0..bsp.faces.len() {
+    for &index in &visible {
         let Some(face) = bsp.face(index) else {
             continue;
         };
-        if !face.is_visible() {
-            continue;
-        }
 
         let texture = face.texture();
         let material = texture.name().to_owned();
@@ -119,6 +159,7 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),
+                lightmap_uvs: Vec::new(),
             });
             surfaces.len() - 1
         });
@@ -130,6 +171,26 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
             surface.positions.push([position.x, position.y, position.z]);
             surface.normals.push(normal);
             surface.uvs.push(texture.uv(position));
+            if has_lightmap {
+                let uv = match face_blocks.get(&index) {
+                    Some(&block) => {
+                        // Project onto the face's lightmap axes. Displaced
+                        // vertices project too: their offsets lie mostly along
+                        // the normal, which the projection discards.
+                        let [s, t] =
+                            [texture.light_map_scale, texture.light_map_transform].map(|axis| {
+                                axis[0] * position.x
+                                    + axis[1] * position.y
+                                    + axis[2] * position.z
+                                    + axis[3]
+                            });
+                        let mins = face.light_map_texture_min;
+                        placements[block].uv(&atlas, s - mins[0] as f32, t - mins[1] as f32)
+                    }
+                    None => placements[full_bright].uv(&atlas, 0.0, 0.0),
+                };
+                surface.lightmap_uvs.push(uv);
+            }
         }
     }
 
@@ -152,7 +213,52 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         })
         .collect();
 
-    Ok(MapGeometry { surfaces, spawns })
+    Ok(MapGeometry {
+        surfaces,
+        spawns,
+        lightmap: has_lightmap.then_some(atlas),
+    })
+}
+
+/// Decodes a face's style-0 lightmap: its `width × height` luxels, or `None`
+/// if the face has no baked light or its data is out of range.
+///
+/// Bump-mapped faces store four sample sets per style (flat plus three bump
+/// basis directions); the flat set comes first, so reading from
+/// `light_offset` yields it in both cases.
+fn face_luxels(face: &vbsp::Face, lighting: &[u8]) -> Option<(usize, usize, Vec<Luxel>)> {
+    if face.styles[0] == NO_LIGHT_STYLE {
+        return None;
+    }
+    let offset = usize::try_from(face.light_offset).ok()?;
+    let width = usize::try_from(face.light_map_texture_size[0]).ok()? + 1;
+    let height = usize::try_from(face.light_map_texture_size[1]).ok()? + 1;
+    if width > MAX_LIGHTMAP_SIZE || height > MAX_LIGHTMAP_SIZE {
+        return None;
+    }
+    let data = lighting.get(offset..offset.checked_add(width * height * 4)?)?;
+    let luxels = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|&luxel| decode_luxel(luxel))
+        .collect();
+    Some((width, height, luxels))
+}
+
+/// Returns the bytes of lump `index`, or `None` if the header is invalid or the
+/// lump lies outside the file. Reads only the lump directory.
+fn lump(bytes: &[u8], index: usize) -> Option<&[u8]> {
+    if bytes.get(0..4)? != b"VBSP" {
+        return None;
+    }
+    let entry = LUMP_DIRECTORY_OFFSET + index * LUMP_ENTRY_SIZE;
+    let read_i32 = |at: usize| -> Option<i32> {
+        Some(i32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+    };
+    let start = usize::try_from(read_i32(entry)?).ok()?;
+    let length = usize::try_from(read_i32(entry + 4)?).ok()?;
+    bytes.get(start..start.checked_add(length)?)
 }
 
 /// Parses a KeyValues vector such as `"-1024 512 64"`.
@@ -178,20 +284,9 @@ fn parse_vector(text: &str) -> Option<[f32; 3]> {
 /// by simply not mounting it. HL2DM maps store the pakfile uncompressed.
 #[must_use]
 pub fn pakfile_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
-    if bytes.len() < LUMP_DIRECTORY_OFFSET || &bytes[0..4] != b"VBSP" {
-        return None;
-    }
-    let entry = LUMP_DIRECTORY_OFFSET + LUMP_PAKFILE * LUMP_ENTRY_SIZE;
-    let file_offset = i32::from_le_bytes(bytes.get(entry..entry + 4)?.try_into().ok()?);
-    let file_length = i32::from_le_bytes(bytes.get(entry + 4..entry + 8)?.try_into().ok()?);
-
-    let start = usize::try_from(file_offset).ok()?;
-    let length = usize::try_from(file_length).ok()?;
-    if length == 0 {
-        return None;
-    }
-    let end = start.checked_add(length)?;
-    Some(bytes.get(start..end)?.to_vec())
+    lump(bytes, LUMP_PAKFILE)
+        .filter(|data| !data.is_empty())
+        .map(<[u8]>::to_vec)
 }
 
 #[cfg(test)]
@@ -244,6 +339,28 @@ mod tests {
         assert!(triangles > 0, "a real map has triangles");
         eprintln!("spawns: {}", geometry.spawns.len());
         assert!(!geometry.spawns.is_empty(), "a DM map has spawn points");
+
+        let lightmap = geometry.lightmap.as_ref().expect("map has baked lighting");
+        let lit = lightmap
+            .luxels
+            .iter()
+            .filter(|l| l.iter().any(|&c| c > 0.0))
+            .count();
+        eprintln!(
+            "lightmap: {}x{} luxels, {lit} non-black",
+            lightmap.width, lightmap.height
+        );
+        for surface in &geometry.surfaces {
+            assert_eq!(surface.lightmap_uvs.len(), surface.positions.len());
+            assert!(
+                surface
+                    .lightmap_uvs
+                    .iter()
+                    .all(|uv| uv.iter().all(|c| (0.0..=1.0).contains(c))),
+                "lightmap UVs stay inside the atlas ({})",
+                surface.material
+            );
+        }
 
         // The embedded pakfile should be a mountable zip (starts with "PK").
         let pak = pakfile_bytes(&bytes).expect("map has a pakfile");

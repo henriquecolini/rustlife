@@ -5,15 +5,22 @@
 //! normals to Bevy space), stored as a labeled sub-asset. The resulting
 //! [`MapAsset`] pairs each mesh handle with its material name; the client
 //! resolves those names to materials and spawns the meshes.
+//!
+//! The baked lighting becomes one `Rgba16Float` atlas image (a labeled
+//! sub-asset too), addressed by each mesh's second UV set.
 
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, RenderAssetUsages};
+use bevy_image::{Image, ImageSampler};
 use bevy_math::Vec3;
 use bevy_mesh::{Mesh, PrimitiveTopology};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
+use half::f16;
 use source_formats::bsp::{self, BspError, MapGeometry, MapSurface};
+use source_formats::lightmap::LightmapAtlas;
 use thiserror::Error;
+use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::coords;
 
@@ -45,6 +52,9 @@ pub struct MapAsset {
     pub meshes: Vec<MapMesh>,
     /// Player spawn points, in entity-lump order.
     pub spawns: Vec<Spawn>,
+    /// The baked-lighting atlas, sampled with each mesh's `UV_1`; `None` for
+    /// maps without lightmaps.
+    pub lightmap: Option<Handle<Image>>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -56,6 +66,7 @@ impl Default for MapAsset {
         Self {
             meshes: Vec::new(),
             spawns: Vec::new(),
+            lightmap: None,
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -140,9 +151,15 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         })
         .collect();
 
+    let lightmap = geometry
+        .lightmap
+        .as_ref()
+        .map(|atlas| load_context.add_labeled_asset("lightmap", lightmap_image(atlas)));
+
     MapAsset {
         meshes,
         spawns,
+        lightmap,
         center,
         radius: radius.max(1.0),
     }
@@ -161,13 +178,48 @@ fn mesh_of(surface: &MapSurface) -> Mesh {
         .map(|&n| coords::direction(n).normalize_or_zero().to_array())
         .collect();
 
-    Mesh::new(
+    let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, surface.uvs.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, surface.uvs.clone());
+    if !surface.lightmap_uvs.is_empty() {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, surface.lightmap_uvs.clone());
+    }
+    mesh
+}
+
+/// Uploads a lightmap atlas as an `Rgba16Float` image.
+///
+/// Half floats keep the over-bright range of Source lighting (luxels well above
+/// 1.0 are common near lights) while staying filterable on every GPU, which
+/// `Rgba32Float` is not. The sampler is linear and clamps to the edge; the
+/// atlas's per-block borders already stop bleeding between faces.
+fn lightmap_image(atlas: &LightmapAtlas) -> Image {
+    let one = f16::from_f32(1.0).to_le_bytes();
+    let data: Vec<u8> = atlas
+        .luxels
+        .iter()
+        .flat_map(|luxel| {
+            let [r, g, b] = luxel.map(|c| f16::from_f32(c).to_le_bytes());
+            [r, g, b, one].into_iter().flatten()
+        })
+        .collect();
+    let mut image = Image::new(
+        Extent3d {
+            width: atlas.width as u32,
+            height: atlas.height as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba16Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::linear();
+    image
 }
 
 #[cfg(test)]
@@ -181,11 +233,37 @@ mod tests {
             positions: vec![[0.0, 0.0, 0.0], [16.0, 0.0, 0.0], [0.0, 0.0, 16.0]],
             normals: vec![[0.0, 1.0, 0.0]; 3],
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            lightmap_uvs: Vec::new(),
         };
         let mesh = mesh_of(&surface);
         assert_eq!(mesh.count_vertices(), 3);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+        assert!(
+            mesh.attribute(Mesh::ATTRIBUTE_UV_1).is_none(),
+            "no lightmap, no second UV set"
+        );
+
+        let lit = MapSurface {
+            lightmap_uvs: vec![[0.5, 0.5]; 3],
+            ..surface
+        };
+        assert!(mesh_of(&lit).attribute(Mesh::ATTRIBUTE_UV_1).is_some());
+    }
+
+    #[test]
+    fn lightmap_atlas_becomes_a_half_float_image() {
+        let atlas = LightmapAtlas {
+            width: 2,
+            height: 1,
+            luxels: vec![[2.0, 0.5, 0.0], [1.0, 1.0, 1.0]],
+        };
+        let image = lightmap_image(&atlas);
+        assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba16Float);
+        let data = image.data.as_ref().expect("CPU data present before upload");
+        assert_eq!(data.len(), 2 * 4 * 2, "two luxels of four f16 channels");
+        let red = f16::from_le_bytes([data[0], data[1]]).to_f32();
+        assert_eq!(red, 2.0, "over-bright values survive");
     }
 }

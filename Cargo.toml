@@ -33,6 +33,8 @@ bevy_math = "0.20"
 bevy_mesh = "0.20"
 bevy_reflect = "0.20"
 futures-lite = "2"
+# IEEE half floats, for HDR lightmap texels (Rgba16Float).
+half = "2"
 # wgpu texture types (Extent3d/TextureFormat/...), pinned to the major version
 # Bevy's `bevy_image` uses so the `Image::new` argument types unify.
 wgpu-types = { version = "30", default-features = false }
