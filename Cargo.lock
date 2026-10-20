@@ -5117,6 +5117,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl_data"
+version = "0.1.0"
+dependencies = [
+ "ron",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "rodio"
 version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

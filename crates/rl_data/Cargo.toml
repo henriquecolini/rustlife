@@ -1,0 +1,21 @@
+[package]
+name = "rl_data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Schema, validation and loading of rustlife's own gameplay data (data/*.ron)."
+
+[dependencies]
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

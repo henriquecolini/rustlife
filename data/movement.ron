@@ -1,0 +1,73 @@
+// Player movement tuning: rustlife's own values, read by `rl_sim::movement`.
+//
+// Units are Source units (1 unit = 1 inch) and seconds. The algorithm and
+// every parameter are described in docs/movement.md.
+Movement(
+    // Downward acceleration, units/s².
+    gravity: 800.0,
+    // No velocity component may exceed this, units/s.
+    max_velocity: 3500.0,
+    ground: (
+        // Top speed when running and walking (walk button held), units/s.
+        run_speed: 320.0,
+        walk_speed: 150.0,
+        // How quickly the player reaches the wished speed on the ground
+        // (fraction of the wished speed gained per second).
+        accelerate: 10.0,
+        // Ground friction: fraction of speed lost per second...
+        friction: 4.0,
+        // ...computed as if moving at least this fast, so slow sliding stops.
+        stop_speed: 100.0,
+        // Tallest ledge the player walks up without jumping, units.
+        step_size: 18.0,
+        // Surfaces whose normal has at least this Z component are floors;
+        // steeper ones are walls (and surfable ramps).
+        floor_normal_z: 0.7,
+    ),
+    air: (
+        // Air control: acceleration towards the wished direction...
+        accelerate: 10.0,
+        // ...but only while the speed along it is below this cap, units/s.
+        // A low cap with a high acceleration is what makes air-strafing
+        // (and bunny-hopping) gain speed.
+        speed_cap: 30.0,
+    ),
+    jump: (
+        // Height of a standing jump, units.
+        height: 45.0,
+        // Jump again on landing while the button is held. When false, the
+        // jump button must be re-pressed for every hop.
+        auto_hop: false,
+    ),
+    hulls: (
+        // Collision boxes relative to the player's origin (at the feet), and
+        // the eye height above it.
+        standing: (mins: (-16.0, -16.0, 0.0), maxs: (16.0, 16.0, 72.0), eye_height: 64.0),
+        ducked: (mins: (-16.0, -16.0, 0.0), maxs: (16.0, 16.0, 36.0), eye_height: 28.0),
+    ),
+    duck: (
+        // Seconds to crouch fully on the ground (the hull shrinks at the
+        // end), and to stand back up.
+        duck_time: 0.4,
+        unduck_time: 0.2,
+        // Speed multiplier while crouched.
+        speed_scale: 0.333,
+    ),
+    water: (
+        accelerate: 10.0,
+        friction: 1.0,
+        // Speed multiplier while swimming.
+        speed_scale: 0.8,
+        // Speed the player drifts down at without input, units/s.
+        sink_speed: 60.0,
+    ),
+    ladder: (
+        // Climbing speed along the ladder, units/s.
+        climb_speed: 200.0,
+        // Farthest a player can stand from a ladder's axis and still grab
+        // it with the use key, units.
+        mount_distance: 48.0,
+        // Speed of the push away from the ladder when jumping off, units/s.
+        jump_off_speed: 270.0,
+    ),
+)

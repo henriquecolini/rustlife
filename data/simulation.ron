@@ -1,0 +1,6 @@
+// Simulation timing, shared by the server and every client.
+Simulation(
+    // Fixed simulation ticks per second. Movement is evaluated once per tick
+    // with a time step of 1 / tick_rate.
+    tick_rate: 66,
+)
