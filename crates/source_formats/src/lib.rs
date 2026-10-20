@@ -7,7 +7,8 @@
 //! models ([`mdl`]) and their collision ([`phy`]), their placements
 //! ([`props`]), the baked light that models are lit by ([`ambient`],
 //! [`lights`], [`vhv`]), what players collide with ([`collision`]) and the
-//! map's entities ([`entities`]).
+//! map's entities ([`entities`]), and the game's sounds ([`wav`],
+//! [`soundscript`], [`soundscape`]).
 //!
 //! Nothing here depends on Bevy. Every decoder is a pure function over bytes,
 //! so the format layer can be unit-tested without an `App`, a window or a GPU,
@@ -35,7 +36,10 @@ pub mod mdl;
 pub mod phy;
 pub mod props;
 pub mod skybox;
+pub mod soundscape;
+pub mod soundscript;
 pub mod vhv;
 pub mod vmt;
 mod vmt_fallback;
 pub mod vtf;
+pub mod wav;
