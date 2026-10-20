@@ -166,3 +166,31 @@ samples with weights `1 / (distance² + 1)`.
 `vbsp` sorts leaves by cluster after reading them, so its leaf indices no
 longer match the node tree's children or the ambient index; rustlife reads the
 leaf lump and walks the tree itself.
+
+## Collision
+
+What players collide with is not the faces but the brushes
+(`source_formats::collision`):
+
+- **Brushes** (lump 18): `contents` flags plus a range of **brush sides**
+  (lump 19). Each side is a plane index, texinfo, a `dispinfo` field and a
+  `bevel` byte. The compiler adds bevel sides (axis-aligned and edge planes)
+  so box sweeps clip exactly; rays must skip them. Newer compilers put a
+  `thin` flag in the high byte of `bevel`, so only the low byte means bevel.
+- **Leaves** list the brushes touching them (lump 17, `u16` brush indices).
+  As for lighting, the leaf lump is read directly, because `vbsp` reorders
+  leaves by cluster.
+- **Models** (lump 14): each has a `head_node`. Model 0 is the world;
+  brush entities (`model "*N"`) have their own sub-trees in the same node
+  and leaf arrays. Their planes are in the entity's frame, placed by its
+  `origin` and `angles`.
+- **Displacements** collide as their tessellated triangles. The brush a
+  displacement was built on is still in the file as an ordinary solid
+  brush. Its sides' `dispinfo` is not filled in, so it is recognised
+  geometrically: it has a side on the displacement's base-face plane, and
+  the face's corners are the brush's corners. Source collides displacements
+  only through their surface, so that brush must be made non-solid.
+  Otherwise its flat face is a lid over terrain that dips below it.
+- **Ladders** in HL2-era maps are `func_useableladder` entities (`point0` and
+  `point1` are the feet positions at the ends), with `info_ladder_dismount`
+  points nearby. They are not `CONTENTS_LADDER` brushes.

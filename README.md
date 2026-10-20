@@ -61,20 +61,29 @@ cargo run --release -p rustlife                          # opens the map browser
 cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map
 ```
 
-In the map browser, click a map to load it. In a map, the camera flies freely:
+In the map browser, click a map to load it. In a map you play at a spawn
+point, with Source-style movement ([docs/movement.md](docs/movement.md)):
 
 | Input | Action |
 |-------|--------|
 | Mouse | Look |
 | W A S D | Move |
-| Space / Left Ctrl | Rise / sink |
-| Left Shift | Move faster |
+| Space | Jump (swim up in water) |
+| Left Ctrl / C | Crouch |
+| Left Shift | Walk |
+| E | Grab or let go of a ladder |
+| V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Free or recapture the mouse |
 | M | Back to the map browser |
 
-Other options: `--spawn <n>` starts at a different spawn point, and
-`--screenshot <file.png>` renders one frame non-interactively, saves it and
-exits (useful for visual checks).
+Other options:
+
+- `--spawn <n>` starts at a different spawn point.
+- `--data-dir <dir>` overrides the built-in gameplay data file by file, e.g.
+  with a tweaked `movement.ron`.
+- `--screenshot <file.png>` renders one frame non-interactively, saves it and
+  exits, which is useful for visual checks. Add `--walk-forward <secs>` to
+  capture the player mid-walk.
 
 ## Workshop content
 
@@ -96,11 +105,13 @@ cargo run -p rustlife-inspect -- ls 'materials/concrete/*.vtf'
 ```sh
 cargo xtask ci              # fmt, clippy -D warnings, tests, docs, audit, asset check
 cargo xtask content-tests   # tests that need a real HL2DM install
+cargo bench -p rl_sim       # trace and movement benchmarks
 ```
 
 The content tests read their inputs from environment variables and skip
 silently when unset: `RUSTLIFE_TEST_GAME_DIR` (an HL2DM install),
-`RUSTLIFE_TEST_BSP`, `RUSTLIFE_TEST_VTF` (single files) and
+`RUSTLIFE_TEST_BSP` (a map: collision and movement checks among others),
+`RUSTLIFE_TEST_VTF` (single files) and
 `RUSTLIFE_TEST_SKY` (a directory holding a sky's six `<suffix>.vtf` faces).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -112,7 +123,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | M0 | Workspace, CI, content discovery, VPK/VFS, inspect CLI | done |
 | M1 | World viewer: BSP, textures, lightmaps, displacements, sky, map browser | done |
 | M2 | Props and models: static props, prop entities, brush entities, baked model lighting | done |
-| M3 | Source-style movement | |
+| M3 | Collision and Source-style movement: walking, air-strafing, bunny-hopping, surfing, crouching, swimming, ladders | done |
 | M4 | Physics props and the Manipulator | |
 | M5 | Data-driven weapons, items and rules | |
 | M6 | Networking: dedicated/listen servers, prediction, lag compensation | |

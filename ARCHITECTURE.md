@@ -4,19 +4,13 @@ rustlife is a Cargo workspace. Lower layers know nothing about higher ones,
 and nothing below `rl_client` depends on rendering.
 
 ```
-            bins/rustlife   bins/rustlife-server   bins/rustlife-inspect
-                 │                 │                       │
-            rl_client          rl_server                   │
-                 └──────┬──────────┘                       │
-                     rl_net                                 │
-                        │                                   │
-                     rl_sim ── rl_data                      │
-                        │                                   │
-                    rl_assets (Bevy asset loaders)          │
-                        │                                   │
-                  source_formats (BSP, VTF, VMT, MDL, PHY)  │
-                        │                                   │
-                    source_fs ─────────── rl_config ────────┘
+bins/rustlife ─────────► rl_client ──┬──► rl_net (M6) ──► rl_sim ──► rl_data
+bins/rustlife-server ──► rl_server ──┘                       │
+                                     rl_client ──► rl_assets │
+                                                       │     │
+                                                       ▼     ▼
+                                                  source_formats ──► source_fs
+bins/rustlife-inspect ──► rl_config ───────────────────────────────► source_fs
 ```
 
 | Crate | Responsibility |
@@ -26,13 +20,16 @@ and nothing below `rl_client` depends on rendering.
 | `source_formats` | Pure parsers for Source file formats. No Bevy. |
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
-| `rl_sim` | Deterministic shared simulation: collision, movement, physics, weapons, rules. Runs headless. |
+| `rl_sim` | Deterministic shared simulation: collision, movement, physics, weapons, rules. Runs headless; no Bevy. |
 | `rl_net` | Protocol, transport, prediction, interpolation, lag compensation. |
 | `rl_client` / `rl_server` | App composition for each side. |
 
-Crates are introduced by the milestone that needs them. As of M2 the workspace
-has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_client`, the
-`rustlife` and `rustlife-inspect` binaries, and `xtask`.
+Crates are introduced by the milestone that needs them. As of M3 the workspace
+has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
+`rl_sim`, `rl_client`, the `rustlife` and `rustlife-inspect` binaries, and
+`xtask`. `rl_sim` depends only on the format layer and the data schema, so the
+simulation runs (and is tested) without Bevy; the client feeds it the map's
+collision model from the asset and renders its results.
 
 ## Content pipeline
 
@@ -106,6 +103,29 @@ map creates is torn down on leaving it, so maps can be switched freely.
 
    There are no real-time lights: all light comes from `vrad`'s bake, so
    nothing is counted twice.
+
+## Collision and movement (M3)
+
+1. **Collision model.** `source_formats::collision` reads what players
+   collide with: brushes with their bevel sides, the node tree and leaf lump,
+   leaf brush lists, displacement triangles, sub-models, brush entities and
+   `func_useableladder` segments with their dismount points. The BSP loader
+   attaches it to the `MapAsset` (Source space).
+2. **Collision world.** `rl_sim::collision::CollisionWorld` answers
+   `trace_hull(start, end, hull, mask)` exactly as Source does for brushes,
+   plus displacement prisms and solid brush entities, and `point_contents`
+   for water.
+3. **Data.** `rl_data` loads `data/movement.ron` and `data/simulation.ron`:
+   compiled-in defaults, overridable file by file with `--data-dir`, and
+   validated with every problem reported by field path.
+4. **Movement.** `rl_sim::movement::simulate` advances a `PlayerState` by
+   one `UserCmd` tick; see [docs/movement.md](docs/movement.md).
+5. **Local play.** `rl_client::player` builds the collision world when the
+   map loads, places the player at the start spawn, samples input every
+   frame (latching presses until the next tick), simulates in Bevy's
+   `FixedUpdate` at the data's tick rate, and puts the camera at the eyes,
+   interpolated between the last two ticks. `V` switches to the fly camera
+   (noclip) and back.
 
 Format notes live in [`docs/formats/`](docs/formats/).
 
