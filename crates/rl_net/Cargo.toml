@@ -22,6 +22,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+source_formats.workspace = true
 
 [lints]
 workspace = true

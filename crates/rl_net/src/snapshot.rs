@@ -3,7 +3,9 @@
 //! After each tick the server captures a [`WorldState`] for each client:
 //! every player's motion and life, the client's own player's health,
 //! weapons and Manipulator too ([`Private`]), each moving prop's pose, which
-//! pickups are there, the projectiles in flight and the match. Other
+//! pickups are there, the projectiles in flight, the match, and what the
+//! map's logic shows: where its doors and buttons are, which brushes are
+//! there, which of its sounds play. Other
 //! players' private state is not sent: no client needs it, and none should
 //! see it.
 //!
@@ -25,6 +27,8 @@
 use std::collections::BTreeMap;
 
 use rl_sim::combat::Vitals;
+use rl_sim::logic::mover::MoverState;
+use rl_sim::logic::{LogicState, SoundState};
 use rl_sim::movement::PlayerState;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::rules::Match;
@@ -105,6 +109,8 @@ pub struct WorldState {
     pub projectiles: Vec<Projectile>,
     /// Scores and clock.
     pub game: Match,
+    /// What the map's logic shows.
+    pub logic: LogicState,
 }
 
 /// How a player changed since the baseline; parts that did not are `None`.
@@ -143,6 +149,10 @@ pub struct Snapshot {
     pub projectiles: Option<Vec<Projectile>>,
     /// The match, if it changed.
     pub game: Option<Match>,
+    /// Movers that changed: `(index, state)`.
+    pub movers: Vec<(u16, MoverState)>,
+    /// Map sounds that changed: `(index, state)`.
+    pub sounds: Vec<(u16, SoundState)>,
     /// What happened since the client's last snapshot.
     pub events: Vec<Event>,
 }
@@ -192,6 +202,7 @@ impl WorldState {
                 .collect(),
             projectiles: sim.projectiles().to_vec(),
             game: sim.game().clone(),
+            logic: sim.logic_state(),
         }
     }
 
@@ -269,6 +280,14 @@ impl WorldState {
             game: baseline
                 .is_none_or(|base| base.game != self.game)
                 .then(|| self.game.clone()),
+            movers: changed(
+                &self.logic.movers,
+                baseline.map(|base| &base.logic.movers[..]),
+            ),
+            sounds: changed(
+                &self.logic.sounds,
+                baseline.map(|base| &base.logic.sounds[..]),
+            ),
             events,
         }
     }
@@ -348,6 +367,10 @@ impl WorldState {
                 .clone()
                 .or_else(|| base.map(|base| base.game.clone()))
                 .unwrap_or_default(),
+            logic: LogicState {
+                movers: patched(base.map(|base| &base.logic.movers[..]), &snapshot.movers),
+                sounds: patched(base.map(|base| &base.logic.sounds[..]), &snapshot.sounds),
+            },
         })
     }
 
@@ -384,6 +407,9 @@ impl WorldState {
         }
         sim.set_projectiles(self.projectiles.clone());
         sim.set_match(self.game.clone());
+        if sim.logic_state() != self.logic {
+            sim.set_logic_state(&self.logic);
+        }
         // Only props that moved are placed: placing one makes collision
         // look at it again.
         let moved: Vec<(BodyId, BodyPose)> = self
@@ -396,6 +422,32 @@ impl WorldState {
             sim.set_prop_poses(moved);
         }
     }
+}
+
+/// The entries of `now` that differ from `base` (all of them without a
+/// base), by index.
+fn changed<T: Copy + PartialEq>(now: &[T], base: Option<&[T]>) -> Vec<(u16, T)> {
+    now.iter()
+        .enumerate()
+        .filter(|&(index, entry)| base.and_then(|base| base.get(index)) != Some(entry))
+        .map(|(index, &entry)| (u16::try_from(index).unwrap_or(u16::MAX), entry))
+        .collect()
+}
+
+/// `base` (or nothing) with the `changes` written in. Entries a change
+/// skips past are left out: a well-formed snapshot never does that, and
+/// the replica ignores what it cannot place.
+fn patched<T: Copy>(base: Option<&[T]>, changes: &[(u16, T)]) -> Vec<T> {
+    let mut entries = base.map(<[T]>::to_vec).unwrap_or_default();
+    for &(index, entry) in changes {
+        let index = usize::from(index);
+        if index < entries.len() {
+            entries[index] = entry;
+        } else if index == entries.len() {
+            entries.push(entry);
+        }
+    }
+    entries
 }
 
 /// The pose of every prop of `sim` that can move: what a full snapshot's
@@ -541,6 +593,75 @@ mod tests {
             Err(SnapshotError::MissingBaseline { .. })
         ));
         assert!(WorldState::apply(None, &delta, &initial).is_err());
+    }
+
+    /// A floor, a slow door opening from the start, a looping sound and a
+    /// player.
+    fn door_sim() -> (Simulation, PlayerId) {
+        let data = rl_data::GameData::builtin().expect("builtin");
+        let world = WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-2048.0, -2048.0, -64.0),
+                Vec3::new(2048.0, 2048.0, 0.0),
+            )
+            .brush_entity(
+                "func_door",
+                Some("door"),
+                Vec3::new(200.0, 0.0, 0.0),
+                Vec3::new(-8.0, -64.0, 0.0),
+                Vec3::new(8.0, 64.0, 128.0),
+            )
+            .build();
+        let mut sim = Simulation::new(Arc::new(world), &data);
+        let entity = |classname, keys: &[(&str, &str)]| {
+            keys.iter().fold(
+                source_formats::entities::MapEntity::new(classname, [200.0, 0.0, 0.0]),
+                |entity, (key, value)| entity.with(key, value),
+            )
+        };
+        sim.add_entities(&[
+            entity(
+                "func_door",
+                &[
+                    ("model", "*1"),
+                    ("targetname", "door"),
+                    ("movedir", "-90 0 0"),
+                    ("speed", "20"),
+                    ("wait", "-1"),
+                ],
+            ),
+            entity("ambient_generic", &[("message", "Hum.Loop")]),
+            entity("logic_auto", &[("OnMapSpawn", "door,Open,,0,-1")]),
+        ]);
+        let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+        (sim, player)
+    }
+
+    #[test]
+    fn deltas_carry_only_the_movers_that_moved() {
+        let (mut sim, a) = door_sim();
+        let initial = initial_props(&sim);
+        sim.tick(&[]);
+        let first = WorldState::capture(&sim, Some(a));
+        let full = first.diff(None, &initial, 0, 0, Vec::new());
+        assert_eq!((full.movers.len(), full.sounds.len()), (1, 1));
+        assert_eq!(
+            WorldState::apply(None, &full, &initial).expect("full"),
+            first
+        );
+
+        sim.tick(&[]);
+        let second = WorldState::capture(&sim, Some(a));
+        let delta = second.diff(Some(&first), &initial, 0, 0, Vec::new());
+        assert_eq!(delta.movers.len(), 1, "the door moved on");
+        assert!(delta.sounds.is_empty(), "the hum plays on unchanged");
+        let rebuilt = WorldState::apply(Some(&first), &delta, &initial).expect("delta");
+        assert_eq!(rebuilt, second);
+
+        let (mut client, _) = door_sim();
+        second.restore(&mut client);
+        assert_eq!(client.logic_state(), sim.logic_state());
+        assert_eq!(client.logic().mover_pose(0), sim.logic().mover_pose(0));
     }
 
     #[test]

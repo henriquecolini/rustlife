@@ -13,7 +13,7 @@
 
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{
-    DamageEvent, ExplosionEvent, Kill, PlayerId, RespawnEvent, ShotEvent, TickEvents,
+    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, WeaponId};
@@ -55,6 +55,9 @@ pub enum Event {
     },
     /// The match ended or restarted.
     Match(MatchEvent),
+    /// The map's logic did something: a door moved, a button was pressed,
+    /// glass broke, someone was teleported.
+    Map(MapEvent),
 }
 
 /// The events of a tick that `viewer` should hear of: everything but the
@@ -106,6 +109,7 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
             .map(|&(player, event)| Event::Tool { player, event }),
     );
     out.extend(events.match_event.map(Event::Match));
+    out.extend(events.map.iter().map(|&event| Event::Map(event)));
     out
 }
 
@@ -130,6 +134,7 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Respawn(respawn) => tick.respawns.push(respawn),
             Event::Tool { player, event } => tick.tools.push((player, event)),
             Event::Match(event) => tick.match_event = Some(event),
+            Event::Map(event) => tick.map.push(event),
         }
     }
     tick

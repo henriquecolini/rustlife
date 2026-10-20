@@ -3,8 +3,8 @@
 //! [`StateBuffer`] keeps the last second or so of world states, oldest
 //! first. They serve twice: as baselines the next snapshots may be sent
 //! against, and as keyframes for drawing everything but the client's own
-//! player. [`StateBuffer::sample`] places each player, prop and projectile
-//! at a render tick between two states — positions linearly, orientations
+//! player. [`StateBuffer::sample`] places each player, prop, projectile and
+//! map mover at a render tick between two states — positions linearly, orientations
 //! along the shortest turn — exactly as the server's lag compensation
 //! assumes the client drew them.
 //!
@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use glam::Vec3;
+use rl_sim::logic::mover::MoverState;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::simulation::{Life, PlayerId};
 use rl_sim::weapons::projectile::Projectile;
@@ -57,6 +58,8 @@ pub struct Interpolated {
     pub props: BTreeMap<BodyId, BodyPose>,
     /// Projectiles in flight, placed along their flight.
     pub projectiles: Vec<Projectile>,
+    /// The map's movers, in the logic's order, their positions blended.
+    pub movers: Vec<MoverState>,
 }
 
 impl StateBuffer {
@@ -176,6 +179,23 @@ impl StateBuffer {
                     projectile
                 })
                 .collect(),
+            movers: to
+                .logic
+                .movers
+                .iter()
+                .enumerate()
+                .map(|(index, &now)| {
+                    let then = from
+                        .logic
+                        .movers
+                        .get(index)
+                        .map_or(now.position, |then| then.position);
+                    MoverState {
+                        position: then + (now.position - then) * alpha,
+                        ..now
+                    }
+                })
+                .collect(),
         })
     }
 }
@@ -238,6 +258,14 @@ mod tests {
             pickups: Vec::new(),
             projectiles: Vec::new(),
             game: Match::new(),
+            logic: rl_sim::logic::LogicState {
+                movers: vec![MoverState {
+                    position: x / 1000.0,
+                    solid: true,
+                    visible: true,
+                }],
+                sounds: Vec::new(),
+            },
         }
     }
 
@@ -270,13 +298,17 @@ mod tests {
     }
 
     #[test]
-    fn places_players_and_props_between_states() {
+    fn places_players_props_and_movers_between_states() {
         let buffer = buffer();
         assert!((feet_x(&buffer, 11.0) - 110.0).abs() < 1e-3);
         assert!((feet_x(&buffer, 13.5) - 135.0).abs() < 1e-3);
         let sample = buffer.sample(13.0).expect("states");
         let prop = sample.props[&BodyId::from_index(3)];
         assert!((prop.position.y - 130.0).abs() < 1e-3);
+        assert!(
+            (sample.movers[0].position - 0.13).abs() < 1e-5,
+            "doors glide too"
+        );
     }
 
     #[test]
