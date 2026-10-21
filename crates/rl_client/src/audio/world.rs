@@ -22,7 +22,7 @@ use rl_assets::coords;
 use rl_sim::simulation::{MapEvent, PlayerId};
 
 use super::events::entity_of;
-use super::{Repeat, SoundPlayer};
+use super::{Repeat, SoundCategory, SoundPlayer};
 use crate::AppState;
 use crate::net::{Game, LevelEntities};
 use crate::player::Ticked;
@@ -129,6 +129,9 @@ fn ambient_sounds(
         let mut chosen = chosen;
         chosen.speed *= sound.state.pitch;
         let entity = player.spawn_chosen(&chosen, at, sound.state.volume, spatial, repeat);
+        if let Some(entity) = entity {
+            player.categorize(entity, SoundCategory::Ambient);
+        }
         playing.ambient[index] = Some((entity.unwrap_or(Entity::PLACEHOLDER), started));
     }
 }

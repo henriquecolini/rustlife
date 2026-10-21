@@ -18,6 +18,7 @@
 mod client;
 mod content;
 mod server;
+mod settings;
 
 use std::fs;
 use std::io;
@@ -29,6 +30,10 @@ use serde::de::DeserializeOwned;
 pub use client::UserConfig;
 pub use content::{ContentArgs, ContentConfig, GAME_DIR_ENV, GameConfig};
 pub use server::ServerConfig;
+pub use settings::{
+    ACTIONS, Action, Antialiasing, AudioSettings, ControlSettings, PlayerSettings, Quality,
+    Settings, VideoSettings, WindowMode,
+};
 
 /// Errors from loading or saving a configuration file.
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +67,18 @@ pub enum ConfigError {
 #[must_use]
 pub fn config_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "rustlife").map(|dirs| dirs.config_dir().to_owned())
+}
+
+/// A player name made presentable: control characters removed, trimmed,
+/// at most 32 characters, `player` when nothing is left.
+pub(crate) fn clean_player_name(name: &str) -> String {
+    let cleaned: String = name.chars().filter(|c| !c.is_control()).take(32).collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "player".to_owned()
+    } else {
+        cleaned.to_owned()
+    }
 }
 
 /// Reads and parses `path`; `Ok(None)` when it does not exist.

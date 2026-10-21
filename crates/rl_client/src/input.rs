@@ -4,21 +4,23 @@
 //! so a press shorter than a tick could fall between two ticks. Presses are
 //! therefore latched until the next tick takes them: buttons
 //! count as held for that tick, and a weapon choice (number keys, the mouse
-//! wheel, `Q` for the last weapon) waits to be resolved against the
-//! inventory.
+//! wheel, the last-weapon key) waits to be resolved against the inventory.
+//!
+//! Which key does what is the player's choice (the [`Bindings`], by
+//! default:)
 //!
 //! | Input | Does |
 //! |-------|------|
 //! | `W` `A` `S` `D` | Move |
 //! | Space | Jump |
-//! | Left Ctrl, `C` | Crouch |
+//! | Left Ctrl | Crouch |
 //! | Left Shift | Walk |
-//! | `E` | Use (ladders) |
+//! | `E` | Use (ladders, chargers) |
 //! | Left / right mouse | Primary / secondary fire |
 //! | `R` | Reload |
-//! | `1`–`9` | Weapons of that slot |
-//! | Mouse wheel | Next / previous weapon |
 //! | `Q` | Last weapon |
+//! | `1`–`9` | Weapons of that slot (fixed) |
+//! | Mouse wheel | Next / previous weapon (fixed) |
 
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
@@ -26,21 +28,17 @@ use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::weapons::Choice;
 
 use crate::player::ViewAngles;
+use crate::settings::Bindings;
 
-/// Keys and the buttons they press.
-const BUTTON_KEYS: [(KeyCode, Buttons); 6] = [
-    (KeyCode::Space, Buttons::JUMP),
-    (KeyCode::ControlLeft, Buttons::DUCK),
-    (KeyCode::KeyC, Buttons::DUCK),
-    (KeyCode::ShiftLeft, Buttons::WALK),
-    (KeyCode::KeyE, Buttons::USE),
-    (KeyCode::KeyR, Buttons::RELOAD),
-];
-
-/// Mouse buttons and the buttons they press.
-const BUTTON_MOUSE: [(MouseButton, Buttons); 2] = [
-    (MouseButton::Left, Buttons::ATTACK),
-    (MouseButton::Right, Buttons::ATTACK2),
+/// Actions that hold a command button down.
+const ACTION_BUTTONS: [(&str, Buttons); 7] = [
+    ("jump", Buttons::JUMP),
+    ("duck", Buttons::DUCK),
+    ("walk", Buttons::WALK),
+    ("use", Buttons::USE),
+    ("reload", Buttons::RELOAD),
+    ("attack", Buttons::ATTACK),
+    ("attack2", Buttons::ATTACK2),
 ];
 
 /// Number keys and the weapon slot each selects.
@@ -72,15 +70,11 @@ pub(crate) fn latch_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     scroll: Option<Res<AccumulatedMouseScroll>>,
+    bindings: Res<Bindings>,
     mut latched: ResMut<Latched>,
 ) {
-    for (key, button) in BUTTON_KEYS {
-        if keys.just_pressed(key) {
-            latched.buttons = latched.buttons | button;
-        }
-    }
-    for (key, button) in BUTTON_MOUSE {
-        if mouse.as_ref().is_some_and(|mouse| mouse.just_pressed(key)) {
+    for (action, button) in ACTION_BUTTONS {
+        if bindings.just_pressed(action, &keys, mouse.as_deref()) {
             latched.buttons = latched.buttons | button;
         }
     }
@@ -89,7 +83,7 @@ pub(crate) fn latch_input(
             latched.choice = Some(Choice::Slot(slot));
         }
     }
-    if keys.just_pressed(KeyCode::KeyQ) {
+    if bindings.just_pressed("last_weapon", &keys, mouse.as_deref()) {
         latched.choice = Some(Choice::Last);
     }
     // Wheel up goes back through the list, as in most shooters.
@@ -106,29 +100,36 @@ pub(crate) fn latch_input(
 pub(crate) fn user_cmd(
     keys: &ButtonInput<KeyCode>,
     mouse: Option<&ButtonInput<MouseButton>>,
+    bindings: &Bindings,
     latched: Buttons,
     angles: ViewAngles,
 ) -> UserCmd {
-    let axis = |positive: KeyCode, negative: KeyCode| {
-        f32::from(u8::from(keys.pressed(positive))) - f32::from(u8::from(keys.pressed(negative)))
+    let held = |action: &str| bindings.pressed(action, keys, mouse);
+    let axis = |positive: &str, negative: &str| {
+        f32::from(u8::from(held(positive))) - f32::from(u8::from(held(negative)))
     };
     let mut buttons = latched;
-    for (key, button) in BUTTON_KEYS {
-        if keys.pressed(key) {
-            buttons = buttons | button;
-        }
-    }
-    for (key, button) in BUTTON_MOUSE {
-        if mouse.is_some_and(|mouse| mouse.pressed(key)) {
+    for (action, button) in ACTION_BUTTONS {
+        if held(action) {
             buttons = buttons | button;
         }
     }
     UserCmd {
-        forward: axis(KeyCode::KeyW, KeyCode::KeyS),
-        side: axis(KeyCode::KeyD, KeyCode::KeyA),
+        forward: axis("forward", "back"),
+        side: axis("right", "left"),
         pitch: angles.pitch,
         yaw: angles.yaw,
         buttons,
+        ..UserCmd::default()
+    }
+}
+
+/// A command that does nothing but keep the view where it is: what a
+/// player sends while a menu is open.
+pub(crate) fn idle_cmd(angles: ViewAngles) -> UserCmd {
+    UserCmd {
+        pitch: angles.pitch,
+        yaw: angles.yaw,
         ..UserCmd::default()
     }
 }
@@ -146,7 +147,14 @@ mod tests {
         keys.press(KeyCode::KeyR);
         let mut mouse = ButtonInput::<MouseButton>::default();
         mouse.press(MouseButton::Right);
-        let cmd = user_cmd(&keys, Some(&mouse), Buttons::JUMP, ViewAngles::default());
+        let bindings = Bindings::default();
+        let cmd = user_cmd(
+            &keys,
+            Some(&mouse),
+            &bindings,
+            Buttons::JUMP,
+            ViewAngles::default(),
+        );
         assert_eq!((cmd.forward, cmd.side), (1.0, -1.0));
         assert!(
             cmd.buttons
@@ -154,5 +162,28 @@ mod tests {
         );
         assert!(!cmd.buttons.contains(Buttons::DUCK));
         assert!(!cmd.buttons.contains(Buttons::ATTACK));
+    }
+
+    #[test]
+    fn rebound_keys_drive_the_commands_and_idle_commands_do_nothing() {
+        let mut controls = rl_config::ControlSettings::default();
+        controls.rebind("forward", "ArrowUp");
+        let bindings = Bindings::from_controls(&controls);
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::KeyW);
+        let cmd = user_cmd(&keys, None, &bindings, Buttons::NONE, ViewAngles::default());
+        assert_eq!(cmd.forward, 0.0, "W no longer moves forward");
+        keys.press(KeyCode::ArrowUp);
+        let cmd = user_cmd(&keys, None, &bindings, Buttons::NONE, ViewAngles::default());
+        assert_eq!(cmd.forward, 1.0);
+
+        let angles = ViewAngles {
+            pitch: 12.0,
+            yaw: 34.0,
+        };
+        let idle = idle_cmd(angles);
+        assert_eq!((idle.pitch, idle.yaw), (12.0, 34.0));
+        assert_eq!(idle.forward, 0.0);
+        assert_eq!(idle.buttons, Buttons::NONE);
     }
 }

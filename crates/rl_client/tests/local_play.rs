@@ -17,11 +17,15 @@ use bevy::mesh::Mesh;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
+use rl_client::content::Content;
+use rl_client::menu::Menu;
 use rl_client::net::{Connection, NetPlugin, NetSettings, Network};
 use rl_client::player::{LocalPlayer, PlayerPlugin, ViewMode};
 use rl_client::props::{PhysicsBody, PropsPlugin};
+use rl_client::settings::{Bindings, Settings};
 use rl_client::world::WorldPlugin;
 use rl_client::{AppState, CurrentMap, GameVfs};
+use rl_config::UserConfig;
 use rl_data::GameData;
 use rl_net::conditioner::NetConditions;
 use rl_sim::simulation::Simulation;
@@ -77,6 +81,14 @@ fn client(spawn: usize, dummies: usize) -> Option<App> {
     app.init_asset::<StandardMaterial>();
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CurrentMap("dm_lockdown".into()));
+    app.insert_resource(Content {
+        config: UserConfig::default(),
+        path: None,
+        games: Vec::new(),
+    });
+    app.insert_resource(Settings(rl_config::Settings::default()));
+    app.init_resource::<Menu>();
+    app.init_resource::<Bindings>();
     app.insert_state(AppState::InGame);
     app.add_plugins((
         WorldPlugin { spawn: Some(spawn) },

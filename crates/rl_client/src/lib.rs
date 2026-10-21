@@ -21,7 +21,6 @@ use source_fs::Vfs;
 use crate::actors::ActorsPlugin;
 use crate::animation::ModelAnimationPlugin;
 use crate::audio::SoundPlugin;
-use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::effects::EffectsPlugin;
@@ -32,14 +31,15 @@ use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
 use crate::script::InputScript;
+use crate::settings::{Settings, SettingsPlugin};
 use crate::sky::SkyPlugin;
+use crate::ui::UiPlugin;
 use crate::viewmodel::ViewModelPlugin;
 use crate::world::WorldPlugin;
 
 pub mod actors;
 pub mod animation;
 pub mod audio;
-pub mod browser;
 pub mod camera;
 pub mod capture;
 pub mod content;
@@ -47,21 +47,24 @@ pub mod effects;
 pub mod fog;
 pub mod hud;
 pub mod input;
+pub mod menu;
 pub mod movers;
 pub mod net;
 pub mod player;
 pub mod props;
 pub mod script;
+pub mod settings;
 pub mod sky;
+pub mod ui;
 pub mod viewmodel;
 pub mod world;
 
 /// Top-level client state.
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum AppState {
-    /// Choosing a map in the [`browser`].
+    /// The main menu: choosing what to play.
     #[default]
-    Browser,
+    MainMenu,
     /// Joining a server, until it says which map to load.
     Connecting,
     /// Playing [`CurrentMap`].
@@ -85,6 +88,9 @@ pub struct GameVfs(pub Arc<Vfs>);
 pub struct ClientOptions {
     /// The mounted games and the player's content settings.
     pub content: content::Content,
+    /// A menu screen to open instead of the main menu (`--menu`), for
+    /// screenshots.
+    pub menu: Option<menu::Screen>,
     /// Map to host straight away (without path or extension); `None` opens
     /// the map browser (or, when joining, waits for the server's map).
     pub map: Option<String>,
@@ -117,20 +123,27 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     let start = match (&options.net.network, &options.map) {
         (net::Network::Join(_), _) => AppState::Connecting,
         (net::Network::Host { .. }, Some(_)) => AppState::InGame,
-        (net::Network::Host { .. }, None) => AppState::Browser,
+        (net::Network::Host { .. }, None) => AppState::MainMenu,
     };
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
+    let settings = Settings(options.content.config.settings.clone());
+    let video = settings.video.clone();
     app.insert_resource(options.content);
+    app.insert_resource(settings);
     app.add_plugins(SourceAssetPlugin::new(vfs));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
             title: "rustlife".to_owned(),
+            resolution: video.resolution.into(),
+            mode: settings::window_mode(&video),
+            present_mode: settings::present_mode(&video),
             ..default()
         }),
         ..default()
     }));
     app.add_plugins(SourceLoadersPlugin);
+    app.add_plugins(UiPlugin);
     app.insert_resource(CurrentMap(options.map.unwrap_or_default()));
     app.insert_state(start);
     app.insert_resource(CursorGrab(options.capture.is_none()));
@@ -140,7 +153,10 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
             spawn: options.spawn,
         },
         PropsPlugin,
-        BrowserPlugin,
+        menu::MenuPlugin {
+            start: options.menu,
+        },
+        SettingsPlugin,
         PlayerPlugin { data: options.data },
         NetPlugin {
             settings: options.net,

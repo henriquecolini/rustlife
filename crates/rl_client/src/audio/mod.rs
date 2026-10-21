@@ -31,6 +31,7 @@ use source_formats::soundscript::{self, SoundScripts};
 use source_fs::Vfs;
 
 use crate::camera::FlyCam;
+use crate::settings::Settings;
 use crate::world::MapScoped;
 use crate::{AppState, CurrentMap, GameVfs};
 
@@ -55,7 +56,7 @@ impl Plugin for SoundPlugin {
         app.init_resource::<Sounds>()
             .add_systems(Startup, load_soundscripts)
             .add_systems(OnEnter(AppState::InGame), load_level_sounds)
-            .add_systems(Update, (add_listener, start_emitters))
+            .add_systems(Update, (add_listener, start_emitters, apply_volumes))
             .add_plugins((
                 events::EventSoundsPlugin,
                 world::WorldSoundsPlugin,
@@ -179,6 +180,28 @@ pub struct Emitter {
     pub requested: f32,
 }
 
+/// Which of the player's volume sliders an emitter follows.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SoundCategory {
+    /// Weapons, footsteps, props, pickups and the like.
+    #[default]
+    Effects,
+    /// The place's soundscape and the map's ambient sounds.
+    Ambient,
+}
+
+impl SoundCategory {
+    /// The gain the player's volume settings give this category.
+    #[must_use]
+    pub fn gain(self, audio: &rl_config::AudioSettings) -> f32 {
+        audio.master
+            * match self {
+                Self::Effects => audio.effects,
+                Self::Ambient => audio.ambient,
+            }
+    }
+}
+
 /// Marks an emitter whose sound has started.
 #[derive(Component)]
 struct Started;
@@ -254,6 +277,11 @@ impl SoundPlayer<'_, '_> {
             requested: self.time.elapsed_secs(),
         };
         Some(self.commands.spawn((emitter, transform, MapScoped)).id())
+    }
+
+    /// Files an emitter under a volume slider other than the default one.
+    pub fn categorize(&mut self, emitter: Entity, category: SoundCategory) {
+        self.commands.entity(emitter).insert(category);
     }
 
     /// Resolves `name` without playing it.
@@ -338,6 +366,26 @@ fn add_listener(
     }
 }
 
+/// Applies a change of the volume settings to the sounds already playing.
+fn apply_volumes(
+    settings: Res<Settings>,
+    mut plain: Query<(&Emitter, Option<&SoundCategory>, &mut AudioSink)>,
+    mut spatial: Query<(&Emitter, Option<&SoundCategory>, &mut SpatialAudioSink)>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let level = |emitter: &Emitter, category: Option<&SoundCategory>| {
+        Volume::Linear(emitter.volume * category.copied().unwrap_or_default().gain(&settings.audio))
+    };
+    for (emitter, category, mut sink) in &mut plain {
+        sink.set_volume(level(emitter, category));
+    }
+    for (emitter, category, mut sink) in &mut spatial {
+        sink.set_volume(level(emitter, category));
+    }
+}
+
 /// Starts each emitter whose sound has loaded; drops one-shots that waited
 /// too long and sounds that failed to load.
 fn start_emitters(
@@ -345,10 +393,11 @@ fn start_emitters(
     time: Res<Time>,
     assets: Res<AssetServer>,
     loaded: Res<Assets<SoundAsset>>,
-    emitters: Query<(Entity, &Emitter), Without<Started>>,
+    settings: Res<Settings>,
+    emitters: Query<(Entity, &Emitter, Option<&SoundCategory>), Without<Started>>,
 ) {
     let now = time.elapsed_secs();
-    for (entity, emitter) in &emitters {
+    for (entity, emitter, category) in &emitters {
         let Some(sound) = loaded.get(&emitter.sound) else {
             let failed = assets.load_state(&emitter.sound).is_failed();
             let stale = emitter.repeat == Repeat::Once && now - emitter.requested > STALE_SECS;
@@ -365,7 +414,9 @@ fn start_emitters(
         };
         let mut settings = PlaybackSettings {
             mode,
-            volume: Volume::Linear(emitter.volume),
+            volume: Volume::Linear(
+                emitter.volume * category.copied().unwrap_or_default().gain(&settings.audio),
+            ),
             speed: emitter.speed,
             ..PlaybackSettings::ONCE
         };

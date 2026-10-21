@@ -1,10 +1,10 @@
 //! A free-flying "noclip" camera for inspecting maps.
 //!
-//! Mouse to look, WASD to move, space/control to rise and fall, shift to move
-//! faster. The cursor is grabbed on entering a map, released in the map
-//! browser, and toggled with `Escape`. The same camera is the player's view
-//! while walking ([`crate::player`] places it); it flies freely only in
-//! noclip ([`ViewMode::Noclip`]).
+//! Mouse to look, the movement keys to move, jump/crouch to rise and fall,
+//! walk to move faster. The menus grab and release the cursor
+//! ([`crate::menu`]). The same camera is the player's view while walking
+//! ([`crate::player`] places it); it flies freely only in noclip
+//! ([`ViewMode::Noclip`]).
 
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -12,7 +12,9 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::AppState;
+use crate::menu::Menu;
 use crate::player::ViewMode;
+use crate::settings::{Bindings, RADIANS_PER_PIXEL, Settings};
 
 /// Whether the fly camera grabs the cursor on startup. Inserted by
 /// [`crate::run`]; disabled for non-interactive screenshot captures so a
@@ -46,13 +48,12 @@ pub struct FlyCamPlugin;
 
 impl Plugin for FlyCamPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_camera)
-            .add_systems(OnEnter(AppState::InGame), grab_cursor)
-            .add_systems(OnEnter(AppState::Browser), release_cursor)
-            .add_systems(
-                Update,
-                (toggle_grab, (look, movement).run_if(flying)).run_if(in_state(AppState::InGame)),
-            );
+        app.add_systems(Startup, spawn_camera).add_systems(
+            Update,
+            (look, movement)
+                .run_if(flying)
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -62,8 +63,6 @@ fn flying(mode: Option<Res<ViewMode>>) -> bool {
     mode.is_none_or(|mode| *mode == ViewMode::Noclip)
 }
 
-/// How far (radians) one pixel of mouse motion turns the view.
-pub(crate) const MOUSE_SENSITIVITY: f32 = 0.003;
 /// Pitch limit, just under 90 degrees, to avoid gimbal flip at the poles.
 const PITCH_LIMIT: f32 = 1.54;
 
@@ -91,52 +90,10 @@ fn spawn_camera(mut commands: Commands) {
     ));
 }
 
-/// Locks and hides the cursor so mouse-look feels like an FPS, unless cursor
-/// grabbing has been disabled (e.g. during a screenshot capture).
-fn grab_cursor(
-    grab: Option<Res<CursorGrab>>,
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-) {
-    if grab.is_some_and(|g| !g.0) {
-        return;
-    }
-    if let Ok(mut options) = cursor.single_mut() {
-        set_grab(&mut options, true);
-    }
-}
-
-/// Frees the cursor so the map browser can be used with the mouse.
-fn release_cursor(mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>) {
-    if let Ok(mut options) = cursor.single_mut() {
-        set_grab(&mut options, false);
-    }
-}
-
-/// `Escape` toggles the cursor grab so the window can be released.
-fn toggle_grab(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
-) {
-    if keys.just_pressed(KeyCode::Escape)
-        && let Ok(mut options) = cursor.single_mut()
-    {
-        let grabbed = options.grab_mode != CursorGrabMode::None;
-        set_grab(&mut options, !grabbed);
-    }
-}
-
-fn set_grab(options: &mut CursorOptions, grab: bool) {
-    options.grab_mode = if grab {
-        CursorGrabMode::Locked
-    } else {
-        CursorGrabMode::None
-    };
-    options.visible = !grab;
-}
-
 /// Turns the camera with the mouse while the cursor is grabbed.
 fn look(
     mouse: Res<AccumulatedMouseMotion>,
+    settings: Res<Settings>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut camera: Query<(&mut Transform, &mut FlyCam)>,
 ) {
@@ -147,9 +104,14 @@ fn look(
         return;
     }
     if let Ok((mut transform, mut cam)) = camera.single_mut() {
-        cam.yaw -= mouse.delta.x * MOUSE_SENSITIVITY;
-        cam.pitch =
-            (cam.pitch - mouse.delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        let turn = RADIANS_PER_PIXEL * settings.controls.sensitivity;
+        let invert = if settings.controls.invert_y {
+            -1.0
+        } else {
+            1.0
+        };
+        cam.yaw -= mouse.delta.x * turn;
+        cam.pitch = (cam.pitch - mouse.delta.y * turn * invert).clamp(-PITCH_LIMIT, PITCH_LIMIT);
         transform.rotation = Quat::from_euler(EulerRot::YXZ, cam.yaw, cam.pitch, 0.0);
     }
 }
@@ -158,40 +120,43 @@ fn look(
 fn movement(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
+    bindings: Res<Bindings>,
+    menu: Res<Menu>,
     mut camera: Query<(&mut Transform, &FlyCam)>,
 ) {
     let Ok((mut transform, cam)) = camera.single_mut() else {
         return;
     };
 
+    if menu.is_open() {
+        return;
+    }
+    let held = |action: &str| bindings.pressed(action, &keys, mouse.as_deref());
     let mut direction = Vec3::ZERO;
     let forward = *transform.forward();
     let right = *transform.right();
-    if keys.pressed(KeyCode::KeyW) {
+    if held("forward") {
         direction += forward;
     }
-    if keys.pressed(KeyCode::KeyS) {
+    if held("back") {
         direction -= forward;
     }
-    if keys.pressed(KeyCode::KeyD) {
+    if held("right") {
         direction += right;
     }
-    if keys.pressed(KeyCode::KeyA) {
+    if held("left") {
         direction -= right;
     }
-    if keys.pressed(KeyCode::Space) {
+    if held("jump") {
         direction += Vec3::Y;
     }
-    if keys.pressed(KeyCode::ControlLeft) {
+    if held("duck") {
         direction -= Vec3::Y;
     }
 
     if direction != Vec3::ZERO {
-        let boost = if keys.pressed(KeyCode::ShiftLeft) {
-            4.0
-        } else {
-            1.0
-        };
+        let boost = if held("walk") { 4.0 } else { 1.0 };
         transform.translation += direction.normalize() * cam.speed * boost * time.delta_secs();
     }
 }

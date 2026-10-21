@@ -82,7 +82,7 @@ fn switching_maps_unloads_the_previous_one() {
 
     app.world_mut()
         .resource_mut::<NextState<AppState>>()
-        .set(AppState::Browser);
+        .set(AppState::MainMenu);
     app.update();
     app.update();
     assert_eq!(surface_count(&mut app), 0, "leaving despawns the map");

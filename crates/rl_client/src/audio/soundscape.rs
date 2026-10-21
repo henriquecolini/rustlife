@@ -14,7 +14,7 @@ use rl_sim::rng::Rng;
 use source_formats::entities::MapEntity;
 use source_formats::soundscape::{self, Soundscape, Soundscapes};
 
-use super::{Chosen, Repeat, SoundPlayer};
+use super::{Chosen, Repeat, SoundCategory, SoundPlayer};
 use crate::camera::FlyCam;
 use crate::net::{Game, LevelEntities};
 use crate::{AppState, GameVfs};
@@ -185,6 +185,7 @@ fn choose(
             soundlevel: 0.0,
         };
         if let Some(emitter) = player.spawn_chosen(&chosen, None, 1.0, None, Repeat::Loop) {
+            player.categorize(emitter, SoundCategory::Ambient);
             ambience.loops.push(emitter);
         }
     }
@@ -216,7 +217,9 @@ fn play_random(time: Res<Time>, mut ambience: ResMut<Ambience>, mut player: Soun
             speed: (pick(rng, sound.pitch) / 100.0).clamp(0.05, 4.0),
             soundlevel: 0.0,
         };
-        player.spawn_chosen(&chosen, None, 1.0, None, Repeat::Once);
+        if let Some(emitter) = player.spawn_chosen(&chosen, None, 1.0, None, Repeat::Once) {
+            player.categorize(emitter, SoundCategory::Ambient);
+        }
     }
 }
 

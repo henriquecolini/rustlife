@@ -231,7 +231,7 @@ fn connect(
     mut next: ResMut<NextState<AppState>>,
 ) {
     let Network::Join(address) = settings.network else {
-        next.set(AppState::Browser);
+        next.set(AppState::MainMenu);
         return;
     };
     match NetClient::connect(
@@ -246,7 +246,7 @@ fn connect(
         Err(error) => {
             warn!("cannot connect to {address}: {error}");
             *status = NetStatus::Failed(error.to_string());
-            next.set(AppState::Browser);
+            next.set(AppState::MainMenu);
         }
     }
 }
@@ -453,7 +453,7 @@ impl WelcomeParams<'_> {
     fn fail(&mut self, reason: &str) {
         warn!("left the game: {reason}");
         *self.status = NetStatus::Failed(reason.to_owned());
-        self.next.set(AppState::Browser);
+        self.next.set(AppState::MainMenu);
     }
 }
 

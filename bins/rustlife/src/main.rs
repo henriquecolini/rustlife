@@ -56,6 +56,12 @@ struct Cli {
     #[arg(long, requires = "listen")]
     port: Option<u16>,
 
+    /// Open this menu screen at startup (`main`, `play`, `join`, `games`,
+    /// `settings`, `settings-audio`, `settings-controls`, `settings-player`),
+    /// for screenshots.
+    #[arg(long, value_name = "SCREEN", hide = true)]
+    menu: Option<String>,
+
     /// The name other players see.
     #[arg(long, default_value = "player")]
     name: String,
@@ -229,6 +235,7 @@ fn main() -> Result<()> {
         vfs,
         ClientOptions {
             content,
+            menu: cli.menu.as_deref().and_then(rl_client::menu::Screen::parse),
             map: cli.map,
             spawn: cli.spawn,
             capture,

@@ -4,14 +4,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ConfigError, ContentConfig, config_dir, read_ron, to_ron, write_text};
+use crate::{ConfigError, ContentConfig, Settings, config_dir, read_ron, to_ron, write_text};
 
 /// The player's complete settings file (`config.ron`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UserConfig {
     /// Where game content comes from.
     pub content: ContentConfig,
+    /// Video, audio, controls and the player's name.
+    pub settings: Settings,
 }
 
 impl UserConfig {
@@ -28,7 +30,9 @@ impl UserConfig {
     ///
     /// Fails if the file exists but is unreadable or invalid.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        Ok(read_ron(path)?.unwrap_or_default())
+        let mut config: Self = read_ron(path)?.unwrap_or_default();
+        config.settings = config.settings.sanitized();
+        Ok(config)
     }
 
     /// Loads the config from [`UserConfig::default_path`], or the defaults if

@@ -112,7 +112,7 @@ pub(crate) struct Surface(pub(crate) String);
 pub(crate) struct StartSpawn(pub(crate) Option<usize>);
 
 /// Loads the [`CurrentMap`] on entering [`AppState::InGame`], renders it, and
-/// unloads it again on leaving (`M` returns to the map browser).
+/// unloads it again on leaving.
 pub struct WorldPlugin {
     /// Index of the spawn point to start at, if one was asked for; wraps
     /// around, so any value is valid.
@@ -132,7 +132,6 @@ impl Plugin for WorldPlugin {
                 Update,
                 (
                     (spawn_when_loaded, resolve_materials).chain(),
-                    open_browser,
                     cull_by_visibility,
                     inherit_render_layers,
                 )
@@ -317,13 +316,6 @@ fn inherit_render_layers(
         if let Ok(layers) = parents.get(parent.parent()) {
             commands.entity(entity).insert(layers.clone());
         }
-    }
-}
-
-/// `M` leaves the map for the map browser.
-fn open_browser(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>) {
-    if keys.just_pressed(KeyCode::KeyM) {
-        next.set(AppState::Browser);
     }
 }
 

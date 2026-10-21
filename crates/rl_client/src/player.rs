@@ -32,10 +32,12 @@ use rl_sim::simulation::{MapEvent, PlayerId, Prediction, Simulation, Spawn, Tick
 use rl_sim::weapons::WeaponId;
 
 use crate::AppState;
-use crate::camera::{FlyCam, MOUSE_SENSITIVITY};
-use crate::input::{Latched, latch_input, user_cmd};
+use crate::camera::FlyCam;
+use crate::input::{Latched, idle_cmd, latch_input, user_cmd};
+use crate::menu::Menu;
 use crate::net::{Connection, Game, Host, NetStatus, Receive};
 use crate::script::{self, InputScript};
+use crate::settings::{Bindings, RADIANS_PER_PIXEL, Settings};
 use crate::world::StartSpawn;
 
 /// Look-up/down limit, degrees (Source's default `cl_pitchup`/`down`).
@@ -126,7 +128,7 @@ impl Plugin for PlayerPlugin {
                     view_only_without_a_game,
                     face_respawns,
                     toggle_noclip,
-                    (look, latch_input, place_camera)
+                    (look, latch_input.run_if(menu_closed), place_camera)
                         .chain()
                         .run_if(resource_equals(ViewMode::Walk)),
                 )
@@ -149,6 +151,11 @@ fn enter_map(mut commands: Commands, mut mode: ResMut<ViewMode>) {
 
 fn leave_map(mut commands: Commands) {
     commands.remove_resource::<LocalPlayer>();
+}
+
+/// Whether no menu is up: the player is playing.
+fn menu_closed(menu: Res<Menu>) -> bool {
+    !menu.is_open()
 }
 
 /// Once the server has put the local player in the game, follows them: the
@@ -262,6 +269,7 @@ fn follow_corrections(game: Game, local: Option<ResMut<LocalPlayer>>) {
 /// In a hosted game, walking again puts the player where the camera is.
 fn toggle_noclip(
     keys: Res<ButtonInput<KeyCode>>,
+    menu: Res<Menu>,
     mut mode: ResMut<ViewMode>,
     mut angles: ResMut<ViewAngles>,
     player: Option<Res<LocalPlayer>>,
@@ -269,7 +277,7 @@ fn toggle_noclip(
     movement: Res<Movement>,
     mut camera: Query<(&Transform, &mut FlyCam)>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyV) {
+    if !keys.just_pressed(KeyCode::KeyV) || menu.is_open() {
         return;
     }
     let (Some(player), Ok((transform, mut fly))) = (player, camera.single_mut()) else {
@@ -302,6 +310,7 @@ fn toggle_noclip(
 /// Turns the view with the mouse while the cursor is grabbed.
 fn look(
     mouse: Res<AccumulatedMouseMotion>,
+    settings: Res<Settings>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut angles: ResMut<ViewAngles>,
 ) {
@@ -311,10 +320,15 @@ fn look(
     if !grabbed || mouse.delta == Vec2::ZERO {
         return;
     }
-    let degrees_per_pixel = MOUSE_SENSITIVITY.to_degrees();
+    let degrees_per_pixel = (RADIANS_PER_PIXEL * settings.controls.sensitivity).to_degrees();
+    let invert = if settings.controls.invert_y {
+        -1.0
+    } else {
+        1.0
+    };
     angles.yaw = (angles.yaw - mouse.delta.x * degrees_per_pixel).rem_euclid(360.0);
-    angles.pitch =
-        (angles.pitch + mouse.delta.y * degrees_per_pixel).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    angles.pitch = (angles.pitch + mouse.delta.y * degrees_per_pixel * invert)
+        .clamp(-PITCH_LIMIT, PITCH_LIMIT);
 }
 
 /// Issues the local player's command for this tick (adjusted by the input
@@ -324,6 +338,8 @@ fn tick(
     clock: Res<Time<Virtual>>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    bindings: Res<Bindings>,
+    menu: Res<Menu>,
     mut latched: ResMut<Latched>,
     mut angles: ResMut<ViewAngles>,
     connection: Option<ResMut<Connection>>,
@@ -338,7 +354,11 @@ fn tick(
     let Some(session) = connection.0.session() else {
         return;
     };
-    let mut cmd = user_cmd(&keys, mouse.as_deref(), latched.buttons, *angles);
+    let mut cmd = if menu.is_open() {
+        idle_cmd(*angles)
+    } else {
+        user_cmd(&keys, mouse.as_deref(), &bindings, latched.buttons, *angles)
+    };
     if let (Some(choice), Some(local)) = (latched.choice, session.sim().player(player.id)) {
         cmd.select = local.inventory.choose(session.sim().arsenal(), choice);
     }
