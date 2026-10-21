@@ -241,6 +241,40 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedTexture, VtfError> {
     )
 }
 
+/// Decodes every frame of an animated texture (a sprite's), each as
+/// [`decode`] decodes frame 0, at most `max_frames` of them.
+///
+/// # Errors
+///
+/// As [`decode`]: the first frame that cannot be decoded fails the whole.
+pub fn decode_frames(bytes: &[u8], max_frames: usize) -> Result<Vec<DecodedTexture>, VtfError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let parsed = vtf::from_bytes(bytes).map_err(|error| VtfError::Decode(error.to_string()))?;
+        let is_normal_map = parsed.header.flags & TEXTUREFLAGS_NORMAL != 0;
+        let frames = usize::from(parsed.header.frames.max(1)).min(max_frames.max(1));
+        (0..frames)
+            .map(|frame| {
+                let image = parsed
+                    .highres_image
+                    .decode(frame as u32)
+                    .map_err(|error| VtfError::Decode(error.to_string()))?;
+                let rgba = image.to_rgba8();
+                Ok(DecodedTexture {
+                    width: rgba.width(),
+                    height: rgba.height(),
+                    rgba8: rgba.into_raw(),
+                    is_normal_map,
+                })
+            })
+            .collect()
+    }))
+    .unwrap_or_else(|_| {
+        Err(VtfError::Decode(
+            "decoder panicked on malformed data".to_owned(),
+        ))
+    })
+}
+
 /// The actual decode, which may panic deep inside the `vtf` crate on bad input;
 /// [`decode`] wraps it to guarantee the no-panic contract.
 fn decode_inner(bytes: &[u8]) -> Result<DecodedTexture, VtfError> {
@@ -391,6 +425,18 @@ mod tests {
             "uncompressed"
         );
         assert!(compressed(b"not a vtf").is_none());
+    }
+
+    #[test]
+    fn still_textures_have_one_frame() {
+        let frames =
+            decode_frames(&synthetic_vtf(4, 4, vtf::ImageFormat::Rgba8888), 16).expect("frames");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0],
+            decode(&synthetic_vtf(4, 4, vtf::ImageFormat::Rgba8888)).expect("decode")
+        );
+        assert!(decode_frames(b"nope", 16).is_err());
     }
 
     #[test]

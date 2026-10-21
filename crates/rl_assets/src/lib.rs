@@ -29,6 +29,7 @@ pub mod model;
 pub mod skeleton;
 pub mod sound;
 pub mod source;
+pub mod sprite;
 pub mod texture;
 pub mod vertex_lighting;
 
@@ -42,6 +43,7 @@ pub use skeleton::{Joint, SequenceClips, Skeleton};
 pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use source_formats::props::PropKind;
+pub use sprite::{SpriteAsset, SpriteLoadError, SpriteLoader};
 pub use texture::{VtfLoadError, VtfLoader};
 pub use vertex_lighting::{VertexLightingAsset, VhvLoadError, VhvLoader};
 
@@ -62,6 +64,7 @@ impl Plugin for SourceLoadersPlugin {
         app.init_asset::<ModelAsset>();
         app.init_asset::<VertexLightingAsset>();
         app.init_asset::<SoundAsset>();
+        app.init_asset::<SpriteAsset>();
         let bc = Arc::new(AtomicBool::new(false));
         app.insert_resource(BlockCompression(Arc::clone(&bc)));
         app.register_asset_loader(VtfLoader { bc });
@@ -70,6 +73,7 @@ impl Plugin for SourceLoadersPlugin {
         app.register_asset_loader(MdlLoader);
         app.register_asset_loader(VhvLoader);
         app.register_asset_loader(SoundLoader);
+        app.register_asset_loader(SpriteLoader);
     }
 
     /// Tells the texture loader, once the GPU is known, whether to keep
