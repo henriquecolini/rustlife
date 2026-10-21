@@ -57,6 +57,8 @@ fn crate_at(origin: Vec3, half: f32, mass: f32, motion: Motion) -> PropDesc {
         start_asleep: false,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     }
 }
 
@@ -353,6 +355,109 @@ fn a_prop_thrown_at_the_player_still_hurts() {
     assert_eq!(impacts.len(), 1, "{impacts:?}");
     assert_eq!(impacts[0].prop, heavy);
     assert!(impacts[0].damage > 0.0);
+}
+
+#[test]
+fn a_dropped_crate_reports_hitting_the_floor_once() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let body = physics.add_prop(&crate_at(
+        Vec3::new(0.0, 0.0, 200.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    let mut hits = Vec::new();
+    for _ in 0..200 {
+        physics.step();
+        hits.extend(physics.take_contacts());
+    }
+    let landing = hits
+        .iter()
+        .filter(|hit| hit.body == body && hit.other.is_none())
+        .max_by(|a, b| a.speed.total_cmp(&b.speed))
+        .expect("the landing was reported");
+    // Falling 184 units at 800 units/s² arrives at about 540 units/s.
+    assert!((450.0..620.0).contains(&landing.speed), "{landing:?}");
+    assert!(landing.position.z.abs() < 3.0, "at the floor: {landing:?}");
+    // The settling bounces are quieter.
+    assert!(
+        hits.iter().filter(|hit| hit.speed > 120.0).count() <= 4,
+        "{hits:?}"
+    );
+}
+
+#[test]
+fn a_prop_striking_a_prop_reports_both_and_not_the_map() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let resting = physics.add_prop(&crate_at(
+        Vec3::new(0.0, 0.0, 0.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    let thrown = physics.add_prop(&crate_at(
+        Vec3::new(120.0, 0.0, 0.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    run(&mut physics, 10);
+    physics.take_contacts();
+    physics.set_velocity(thrown, Vec3::new(-600.0, 0.0, 0.0), Vec3::ZERO);
+    let mut hits = Vec::new();
+    for _ in 0..20 {
+        physics.step();
+        hits.extend(physics.take_contacts());
+    }
+    let hit = hits
+        .iter()
+        .find(|hit| hit.other.is_some())
+        .expect("a crate-on-crate hit");
+    assert_eq!(
+        [hit.body, hit.other.expect("other")]
+            .iter()
+            .filter(|b| **b == resting || **b == thrown)
+            .count(),
+        2
+    );
+    assert!(hit.speed > 400.0, "{hit:?}");
+}
+
+#[test]
+fn a_broken_prop_leaves_the_world_but_keeps_its_id() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let first = physics.add_prop(&crate_at(
+        Vec3::new(0.0, 0.0, 100.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    let second = physics.add_prop(&crate_at(
+        Vec3::new(60.0, 0.0, 100.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    assert!(physics.break_prop(first));
+    assert!(!physics.break_prop(first), "only once");
+    assert!(physics.is_broken(first) && !physics.is_broken(second));
+    assert_eq!(physics.props().collect::<Vec<_>>(), [second]);
+    assert_eq!(physics.broken().collect::<Vec<_>>(), [first]);
+    run(&mut physics, 100);
+    assert!(position(&physics, first).z > 90.0, "it no longer falls");
+    assert!(position(&physics, second).z < 1.0, "the other one does");
+    let hull = Hull::from(&movement_config().hulls.standing);
+    let through = physics.trace_hull(
+        Vec3::new(0.0, 0.0, 120.0),
+        Vec3::new(0.0, 0.0, 60.0),
+        &hull,
+        contents::SOLID,
+        None,
+    );
+    assert!(through.body.is_none(), "players pass through where it was");
 }
 
 #[test]

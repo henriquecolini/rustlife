@@ -78,6 +78,7 @@ impl Plugin for PropsPlugin {
                     spawn_props,
                     attach_models,
                     add_bodies,
+                    show_broken,
                     follow_bodies,
                     relight_moved_props,
                 )
@@ -391,10 +392,27 @@ fn add_bodies(
             .index
             .and_then(|index| bodies.0.get(index).copied().flatten());
         if let Some(body) = body
-            && (physics.is_dynamic(body) || physics.is_grabbable(body))
+            && (physics.is_dynamic(body)
+                || physics.is_grabbable(body)
+                || sim.breakable(body).is_some())
         {
             root.insert((PhysicsBody(body), Moving));
         }
+    }
+}
+
+/// Hides the props the server broke, and shows them again if they respawn.
+fn show_broken(game: Game, mut bodies: Query<(&PhysicsBody, &mut Visibility)>) {
+    let Some(sim) = game.sim() else {
+        return;
+    };
+    for (body, mut visibility) in &mut bodies {
+        let wanted = if sim.physics().is_broken(body.0) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        visibility.set_if_neq(wanted);
     }
 }
 

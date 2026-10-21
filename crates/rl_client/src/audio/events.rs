@@ -242,6 +242,12 @@ fn world_sounds(
     for explosion in &events.explosions {
         player.play(&sounds.explosion, Some(explosion.position), 1.0);
     }
+    for broke in &events.prop_breaks {
+        let material = break_material(sim.physics().surface(broke.body));
+        if let Some(name) = sounds.breaking(material) {
+            player.play(name, Some(broke.position), 1.0);
+        }
+    }
     for &(who, index) in &events.pickups {
         let Some(pickup) = sim.pickups().get(index) else {
             continue;
@@ -293,6 +299,23 @@ fn world_sounds(
             | MapEvent::MoverStopped { .. }
             | MapEvent::Teleported { .. } => {}
         }
+    }
+}
+
+/// The breaking sound's material of a prop made of surface property
+/// `surface`: its name up to the first underscore or digit, with the few
+/// that Source spells differently mapped (`metalpanel` is metal,
+/// `cardboard` breaks like wood).
+fn break_material(surface: &str) -> &str {
+    let name = surface
+        .split(|c: char| c == '_' || c.is_ascii_digit())
+        .next()
+        .unwrap_or(surface);
+    match name {
+        "metalpanel" | "solidmetal" | "metalgrate" | "metalvent" | "canister" => "metal",
+        "cardboard" | "paper" | "wood" | "woodcrate" | "wood_box" => "wood",
+        "ceramic" | "pottery" | "glassbottle" | "glass" => "glass",
+        other => other,
     }
 }
 

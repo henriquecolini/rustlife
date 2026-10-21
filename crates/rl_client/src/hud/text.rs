@@ -53,6 +53,7 @@ pub(crate) fn kill_entry(kill: &Kill, names: &Names, arsenal: &Arsenal) -> KillE
         Cause::Prop => "prop".to_owned(),
         Cause::Fall => "fall".to_owned(),
         Cause::Hazard => "hazard".to_owned(),
+        Cause::Explosion => "explosion".to_owned(),
     };
     let killer = kill.killer.filter(|&killer| killer != kill.victim);
     KillEntry {

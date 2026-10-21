@@ -176,6 +176,8 @@ fn bench_simulation(c: &mut Criterion) {
                 start_asleep: false,
                 grabbable: true,
                 free_on_grab: false,
+                breakable: None,
+                surface: String::new(),
             });
         }
         (sim, player)

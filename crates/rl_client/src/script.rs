@@ -63,6 +63,8 @@ pub struct InputScript {
     pub weapon: Option<String>,
     /// From `.0` for `.1` seconds, shoot the nearest other player.
     pub shoot: Option<(f32, f32)>,
+    /// From `.0` for `.1` seconds, hold primary fire wherever the view is.
+    pub hold_fire: Option<(f32, f32)>,
     /// From this time, look at the nearest pickup.
     pub visit_at: Option<f32>,
     /// From `.0`, go to the nearest mover of class `.1` and use it.
@@ -111,6 +113,14 @@ impl InputScript {
     #[must_use]
     pub fn with_teleport(mut self, teleport: Option<([f32; 3], (f32, f32))>) -> Self {
         self.teleport = teleport;
+        self
+    }
+
+    /// This script, also holding primary fire from `start` for `duration`
+    /// seconds.
+    #[must_use]
+    pub fn with_fire_held(mut self, hold: Option<(f32, f32)>) -> Self {
+        self.hold_fire = hold;
         self
     }
 
@@ -175,6 +185,11 @@ pub(crate) fn apply_input(script: &mut InputScript, now: f32, cmd: &mut UserCmd)
         && (start..start + duration).contains(&now)
     {
         cmd.forward = 1.0;
+    }
+    if let Some((start, duration)) = script.hold_fire
+        && (start..start + duration).contains(&now)
+    {
+        cmd.buttons = cmd.buttons | Buttons::ATTACK;
     }
     if !script.progress.fired && script.fire_at.is_some_and(|at| now >= at) {
         script.progress.fired = true;

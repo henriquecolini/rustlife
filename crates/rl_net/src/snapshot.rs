@@ -24,7 +24,7 @@
 //! same on every machine (see `rl_level`), so the client knows which prop
 //! each pose belongs to.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rl_sim::combat::Vitals;
 use rl_sim::logic::mover::MoverState;
@@ -103,6 +103,8 @@ pub struct WorldState {
     pub players: BTreeMap<PlayerId, PlayerView>,
     /// The pose of every prop that can move.
     pub props: BTreeMap<BodyId, BodyPose>,
+    /// Every prop that has broken.
+    pub broken: BTreeSet<BodyId>,
     /// Whether each pickup is there to take.
     pub pickups: Vec<bool>,
     /// Projectiles in flight.
@@ -143,6 +145,9 @@ pub struct Snapshot {
     pub gone: Vec<PlayerId>,
     /// Props that moved.
     pub props: Vec<(BodyId, BodyPose)>,
+    /// Every prop that is broken, if that changed since the baseline (props
+    /// that respawn leave the set).
+    pub broken: Option<Vec<BodyId>>,
     /// Pickups that were taken or came back: `(index, there)`.
     pub pickups: Vec<(u16, bool)>,
     /// The projectiles in flight, if they changed.
@@ -195,6 +200,7 @@ impl WorldState {
                 .filter(|&body| physics.is_dynamic(body))
                 .filter_map(|body| Some((body, physics.pose(body)?)))
                 .collect(),
+            broken: physics.broken().collect(),
             pickups: sim
                 .pickups()
                 .iter()
@@ -256,6 +262,9 @@ impl WorldState {
             .filter(|&(body, pose)| base_props.get(body) != Some(pose))
             .map(|(&body, &pose)| (body, pose))
             .collect();
+        let broken = baseline
+            .is_none_or(|base| base.broken != self.broken)
+            .then(|| self.broken.iter().copied().collect());
         let pickups = self
             .pickups
             .iter()
@@ -273,6 +282,7 @@ impl WorldState {
             players,
             gone,
             props,
+            broken,
             pickups,
             projectiles: baseline
                 .is_none_or(|base| base.projectiles != self.projectiles)
@@ -344,6 +354,12 @@ impl WorldState {
         }
         let mut props = base.map_or_else(|| initial.clone(), |base| base.props.clone());
         props.extend(snapshot.props.iter().copied());
+        let broken: BTreeSet<BodyId> = match &snapshot.broken {
+            Some(all) => all.iter().copied().collect(),
+            None => base.map(|base| base.broken.clone()).unwrap_or_default(),
+        };
+        // A broken prop is gone from the world, so from its poses.
+        props.retain(|body, _| !broken.contains(body));
         let mut pickups = base.map(|base| base.pickups.clone()).unwrap_or_default();
         for &(index, there) in &snapshot.pickups {
             let index = usize::from(index);
@@ -356,6 +372,7 @@ impl WorldState {
             tick: snapshot.tick,
             players,
             props,
+            broken,
             pickups,
             projectiles: snapshot
                 .projectiles
@@ -410,6 +427,7 @@ impl WorldState {
         if sim.logic_state() != self.logic {
             sim.set_logic_state(&self.logic);
         }
+        sim.set_broken_props(&self.broken);
         // Only props that moved are placed: placing one makes collision
         // look at it again.
         let moved: Vec<(BodyId, BodyPose)> = self
@@ -498,6 +516,8 @@ mod tests {
                 start_asleep: asleep,
                 grabbable: true,
                 free_on_grab: false,
+                breakable: None,
+                surface: String::new(),
             });
         }
         let a = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
@@ -513,6 +533,70 @@ mod tests {
         for _ in 0..ticks {
             sim.tick(&[(player, cmd)]);
         }
+    }
+
+    #[test]
+    fn broken_props_reach_the_replica_and_leave_its_world() {
+        use rl_sim::physics::Breakable;
+
+        let data = rl_data::GameData::builtin().expect("builtin");
+        let world = WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-2048.0, -2048.0, -64.0),
+                Vec3::new(2048.0, 2048.0, 0.0),
+            )
+            .build();
+        let crate_desc = PropDesc {
+            pieces: vec![ConvexHull::from_box(Vec3::splat(-8.0), Vec3::splat(8.0))],
+            origin: Vec3::new(300.0, 0.0, 8.0),
+            rotation: Quat::IDENTITY,
+            motion: BodyMotion::Dynamic,
+            mass: 10.0,
+            material: *data.physics.materials.get("wood"),
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            debris: false,
+            start_asleep: true,
+            grabbable: true,
+            free_on_grab: false,
+            breakable: Some(Breakable {
+                health: 10.0,
+                bullets: 1.0,
+                club: 1.0,
+                explosive: 1.0,
+                explosion: None,
+                gibs: Vec::new(),
+                gib_count: 0,
+                respawn: None,
+            }),
+            surface: String::new(),
+        };
+        let mut server = Simulation::new(Arc::new(world.clone()), &data);
+        let body = server.add_prop(&crate_desc);
+        let mut replica = Simulation::new(Arc::new(world), &data);
+        replica.add_prop(&crate_desc);
+        let initial = initial_props(&server);
+
+        let before = WorldState::capture(&server, None);
+        let events = server.damage_prop(body, 50.0, None);
+        assert_eq!(events.prop_breaks.len(), 1);
+        let after = WorldState::capture(&server, None);
+        assert!(after.broken.contains(&body));
+
+        let delta = after.diff(Some(&before), &initial, 0, 0, Vec::new());
+        assert_eq!(delta.broken, Some(vec![body]));
+        let rebuilt = WorldState::apply(Some(&before), &delta, &initial).expect("delta");
+        assert_eq!(rebuilt, after);
+        // A client that missed the snapshot still learns of it from a full one.
+        let full = after.diff(None, &initial, 0, 0, Vec::new());
+        assert_eq!(full.broken, Some(vec![body]));
+
+        rebuilt.restore(&mut replica);
+        assert!(replica.physics().is_broken(body));
+        assert!(replica.physics().props().next().is_none());
+        // And it is not told again.
+        let again = rebuilt.diff(Some(&after), &initial, 0, 0, Vec::new());
+        assert_eq!(again.broken, None);
     }
 
     #[test]

@@ -56,6 +56,11 @@ struct Cli {
     #[arg(long, requires = "listen")]
     port: Option<u16>,
 
+    /// Hold primary fire for this many seconds after the map has loaded
+    /// (wherever the view points).
+    #[arg(long, value_name = "SECS", hide = true)]
+    fire_for: Option<f32>,
+
     /// Open this menu screen at startup (`main`, `play`, `join`, `games`,
     /// `settings`, `settings-audio`, `settings-controls`, `settings-player`),
     /// for screenshots.
@@ -184,11 +189,13 @@ fn main() -> Result<()> {
     let fire_at = cli.throw_after.map(|secs| LOAD_SECS + secs);
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
     let shoot = cli.shoot_for.map(|secs| (LOAD_SECS, secs));
+    let held_fire = cli.fire_for.map(|secs| (LOAD_SECS, secs));
     let visit = cli.visit_pickup.then_some(LOAD_SECS);
     let use_mover = cli.use_mover.map(|class| (LOAD_SECS, class));
     let scripted = walk.is_some()
         || grab_at.is_some()
         || shoot.is_some()
+        || held_fire.is_some()
         || visit.is_some()
         || use_mover.is_some()
         || cli.teleport.is_some()
@@ -197,6 +204,7 @@ fn main() -> Result<()> {
         InputScript::new(walk, grab_at, fire_at)
             .with_weapon(cli.weapon)
             .with_shooting(shoot)
+            .with_fire_held(held_fire)
             .with_visit(visit)
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
@@ -205,6 +213,9 @@ fn main() -> Result<()> {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,
         (None, Some(grab), _) => grab + GRAB_SECS,
         (None, None, Some((start, secs))) => start + secs,
+        (None, None, None) if held_fire.is_some() => {
+            held_fire.map_or(LOAD_SECS, |(start, secs)| start + secs)
+        }
         (None, None, None) if visit.is_some() => LOAD_SECS + VISIT_SECS,
         (None, None, None) if use_mover.is_some() => LOAD_SECS + VISIT_SECS,
         (None, None, None) => {

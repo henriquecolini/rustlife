@@ -94,6 +94,7 @@ impl Simulation {
                 .weapon_name(weapon)
                 .map_or(points.kill, |name| points.for_weapon(name)),
             Cause::Prop => points.prop,
+            Cause::Explosion => points.barrel,
             Cause::Fall | Cause::Hazard => points.environment,
         }
     }

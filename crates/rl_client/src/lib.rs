@@ -43,6 +43,7 @@ pub mod audio;
 pub mod camera;
 pub mod capture;
 pub mod content;
+pub mod debris;
 pub mod effects;
 pub mod fog;
 pub mod hud;
@@ -171,6 +172,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         SkyPlugin,
         FogPlugin,
     ));
+    app.add_plugins(debris::DebrisPlugin);
     if let Some(script) = options.script {
         app.insert_resource(script);
     }

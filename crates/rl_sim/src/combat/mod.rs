@@ -87,6 +87,8 @@ pub enum Cause {
     Fall,
     /// The map: a `trigger_hurt` volume.
     Hazard,
+    /// A prop blowing up (an explosive barrel).
+    Explosion,
 }
 
 /// One instance of harm to a player.

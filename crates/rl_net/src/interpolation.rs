@@ -255,6 +255,7 @@ mod tests {
                     rotation: Quat::IDENTITY,
                 },
             )]),
+            broken: std::collections::BTreeSet::new(),
             pickups: Vec::new(),
             projectiles: Vec::new(),
             game: Match::new(),

@@ -157,6 +157,8 @@ fn crates_dropped_at_spawns_land_on_the_floor() {
                 start_asleep: false,
                 grabbable: true,
                 free_on_grab: false,
+                breakable: None,
+                surface: String::new(),
             })
         })
         .collect();

@@ -16,9 +16,9 @@ use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::Cause;
 use rl_sim::hazards::Hazard;
 use rl_sim::movement::{Buttons, UserCmd};
-use rl_sim::physics::{Motion, PropDesc};
+use rl_sim::physics::{Breakable, Motion, PropDesc};
 use rl_sim::rules::MatchEvent;
-use rl_sim::simulation::{Life, PlayerId, Simulation, Spawn, TickEvents};
+use rl_sim::simulation::{Life, PlayerId, PropBreak, Simulation, Spawn, TickEvents};
 use rl_sim::weapons::WeaponId;
 use source_formats::entities::MapEntity;
 
@@ -412,6 +412,8 @@ fn a_thrown_prop_kill_is_the_throwers_frag() {
         start_asleep: false,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     });
     arena.arm("manipulator");
     arena
@@ -483,6 +485,8 @@ fn bullets_shove_props() {
         start_asleep: true,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     });
     arena.arm("magnum");
     arena.hold(Buttons::ATTACK, 0.0, 1);
@@ -513,4 +517,245 @@ fn combat_is_deterministic() {
         trail
     };
     assert_eq!(run(), run());
+}
+
+/// A box of half-size `half` and `height` standing at `origin` that breaks
+/// after `health` damage, exploding for `explosion` (damage, radius) if
+/// given.
+fn breakable_box(
+    data: &GameData,
+    origin: Vec3,
+    (half, height): (f32, f32),
+    health: f32,
+    explosion: Option<(f32, f32)>,
+) -> PropDesc {
+    PropDesc {
+        pieces: vec![ConvexHull::from_box(
+            Vec3::new(-half, -half, 0.0),
+            Vec3::new(half, half, height),
+        )],
+        origin,
+        rotation: Quat::IDENTITY,
+        motion: Motion::Dynamic,
+        mass: 20.0,
+        material: *data.physics.materials.get("metal"),
+        linear_damping: 0.0,
+        angular_damping: 0.0,
+        debris: false,
+        start_asleep: false,
+        grabbable: true,
+        free_on_grab: false,
+        breakable: Some(Breakable {
+            health,
+            bullets: 1.0,
+            club: 2.0,
+            explosive: 1.0,
+            explosion,
+            gibs: vec!["models/gibs/metal_gib1.mdl".to_owned()],
+            gib_count: 4,
+            respawn: None,
+        }),
+        surface: "metal".to_owned(),
+    }
+}
+
+/// The breaks among `events`.
+fn breaks(events: &[TickEvents]) -> Vec<&PropBreak> {
+    events.iter().flat_map(|e| &e.prop_breaks).collect()
+}
+
+#[test]
+fn shooting_a_prop_breaks_it_when_its_health_runs_out() {
+    let data = data();
+    let mut arena = Arena::new(&data, 600.0);
+    // Standing at eye height, dead ahead.
+    let crate_ = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(150.0, 0.0, 0.0),
+        (16.0, 90.0),
+        25.0,
+        None,
+    ));
+    arena.arm("magnum");
+    let mut broken = Vec::new();
+    for _ in 0..8 {
+        let events = arena.hold(Buttons::ATTACK, 0.0, 1);
+        broken.extend(breaks(&events).into_iter().copied());
+        arena.idle(40);
+        if !broken.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(broken.len(), 1, "{broken:?}");
+    assert_eq!(broken[0].body, crate_);
+    let spec = arena.sim.breakable(crate_).expect("breakable");
+    assert_eq!(spec.gib_count, 4);
+    assert_eq!(arena.sim.physics().surface(crate_), "metal");
+    assert!(!broken[0].exploded);
+    assert!(arena.sim.physics().is_broken(crate_));
+    assert!(
+        !arena.sim.physics().props().any(|body| body == crate_),
+        "it is no longer listed among the props"
+    );
+}
+
+#[test]
+fn an_explosive_barrel_kills_whoever_is_near_and_credits_who_shot_it() {
+    let data = data();
+    let mut arena = Arena::new(&data, 600.0);
+    arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(200.0, 0.0, 0.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    ));
+    // The target stands next to the barrel, off the line of fire.
+    arena
+        .sim
+        .teleport_player(arena.target, Vec3::new(200.0, 90.0, 1.0));
+    arena.arm("magnum");
+    arena
+        .sim
+        .player_mut(arena.target)
+        .expect("target")
+        .vitals
+        .health = 30.0;
+    let events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    let mut events = events;
+    events.extend(arena.idle(40));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert!(broke[0].exploded);
+    assert_eq!(
+        events.iter().flat_map(|e| &e.explosions).count(),
+        1,
+        "one blast"
+    );
+    let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
+    assert_eq!(kills.len(), 1, "{kills:?}");
+    assert_eq!(kills[0].victim, arena.target);
+    assert_eq!(kills[0].killer, Some(arena.shooter));
+    assert_eq!(kills[0].cause, Cause::Explosion);
+    let points = arena.sim.game().score(arena.shooter).points;
+    assert_eq!(points, i32::try_from(data.rules.points.barrel).unwrap());
+}
+
+#[test]
+fn barrels_set_each_other_off() {
+    let data = data();
+    let mut arena = Arena::new(&data, 900.0);
+    let barrels: Vec<_> = [200.0, 330.0, 460.0]
+        .into_iter()
+        .map(|x| {
+            arena.sim.add_prop(&breakable_box(
+                &data,
+                Vec3::new(x, 0.0, 0.0),
+                (16.0, 90.0),
+                10.0,
+                Some((120.0, 200.0)),
+            ))
+        })
+        .collect();
+    arena.arm("magnum");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(60));
+    let broke: Vec<_> = breaks(&events).iter().map(|b| b.body).collect();
+    for barrel in &barrels {
+        assert!(broke.contains(barrel), "{barrel:?} not in {broke:?}");
+    }
+    assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 3);
+}
+
+#[test]
+fn a_hard_fall_breaks_a_crate() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let crate_ = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(-200.0, 400.0, 500.0),
+        (8.0, 16.0),
+        20.0,
+        None,
+    ));
+    let events = arena.idle(150);
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, crate_);
+    assert!(
+        events
+            .iter()
+            .flat_map(|e| &e.prop_impacts)
+            .any(|impact| impact.body == crate_ && impact.speed > 500.0),
+        "the landing was heard"
+    );
+}
+
+#[test]
+fn a_gentle_drop_leaves_a_crate_whole() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let crate_ = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(-200.0, 400.0, 6.0),
+        (8.0, 16.0),
+        20.0,
+        None,
+    ));
+    let events = arena.idle(150);
+    assert!(breaks(&events).is_empty());
+    assert!(!arena.sim.physics().is_broken(crate_));
+}
+
+#[test]
+fn a_respawnable_barrel_comes_back_where_it_was_unless_someone_stands_there() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let mut desc = breakable_box(
+        &data,
+        Vec3::new(-300.0, 500.0, 0.0),
+        (16.0, 32.0),
+        10.0,
+        None,
+    );
+    if let Some(breakable) = &mut desc.breakable {
+        breakable.respawn = Some(2.0);
+    }
+    let barrel = arena.sim.add_prop(&desc);
+    arena.idle(60);
+    let home = arena.sim.physics().home_position(barrel).expect("home");
+
+    let broke = arena.sim.damage_prop(barrel, 100.0, None);
+    assert_eq!(broke.prop_breaks.len(), 1);
+    assert!(arena.sim.physics().is_broken(barrel));
+
+    // Someone stands on the spot as its time comes.
+    arena.sim.teleport_player(arena.target, home + Vec3::Z);
+    arena.idle(200);
+    assert!(
+        arena.sim.physics().is_broken(barrel),
+        "it waits for the player to move"
+    );
+    arena
+        .sim
+        .teleport_player(arena.target, Vec3::new(1500.0, -1500.0, 1.0));
+    arena.idle(10);
+    assert!(!arena.sim.physics().is_broken(barrel), "it came back");
+    let center = arena.sim.physics().center_of_mass(barrel).expect("barrel");
+    assert!(
+        center.truncate().distance(home.truncate()) < 20.0,
+        "{center}"
+    );
+    // Whole again: it takes the full blow to break it once more.
+    assert!(
+        arena
+            .sim
+            .damage_prop(barrel, 5.0, None)
+            .prop_breaks
+            .is_empty()
+    );
+    assert_eq!(
+        arena.sim.damage_prop(barrel, 100.0, None).prop_breaks.len(),
+        1
+    );
 }

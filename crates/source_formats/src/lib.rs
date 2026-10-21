@@ -36,6 +36,7 @@ pub mod lightmap;
 pub mod lights;
 pub mod mdl;
 pub mod phy;
+pub mod propdata;
 pub mod props;
 pub mod skybox;
 pub mod soundscape;

@@ -92,6 +92,32 @@ impl Simulation {
         self.physics.refresh();
     }
 
+    /// Takes the props the server says are broken out of the world.
+    /// Collision is brought up to date if any was.
+    pub fn set_broken_props(&mut self, broken: &std::collections::BTreeSet<BodyId>) {
+        let mut any = false;
+        let back: Vec<BodyId> = self
+            .physics
+            .broken()
+            .filter(|body| !broken.contains(body))
+            .collect();
+        for body in back {
+            if self.physics.restore_prop(body) {
+                self.breakables.mark_whole(body);
+                any = true;
+            }
+        }
+        for &body in broken {
+            if self.physics.break_prop(body) {
+                self.breakables.mark_broken(body);
+                any = true;
+            }
+        }
+        if any {
+            self.physics.refresh();
+        }
+    }
+
     /// Runs one of a player's commands ahead of the server: their movement
     /// and the weapon in hand. Nothing else happens — nobody is hurt, no
     /// prop is pushed, the Manipulator is left to the server — and the

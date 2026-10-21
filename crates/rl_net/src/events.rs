@@ -13,7 +13,8 @@
 
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{
-    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, RespawnEvent, ShotEvent, TickEvents,
+    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, PropBreak, PropImpactEvent,
+    RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, WeaponId};
@@ -79,6 +80,10 @@ pub enum Event {
     /// The map's logic did something: a door moved, a button was pressed,
     /// glass broke, someone was teleported.
     Map(MapEvent),
+    /// A prop broke.
+    PropBreak(PropBreak),
+    /// A prop struck another prop or the map.
+    PropImpact(PropImpactEvent),
 }
 
 /// The events of a tick that `viewer` should hear of: everything but the
@@ -154,6 +159,18 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
     );
     out.extend(events.match_event.map(Event::Match));
     out.extend(events.map.iter().map(|&event| Event::Map(event)));
+    out.extend(
+        events
+            .prop_breaks
+            .iter()
+            .map(|&broke| Event::PropBreak(broke)),
+    );
+    out.extend(
+        events
+            .prop_impacts
+            .iter()
+            .map(|&impact| Event::PropImpact(impact)),
+    );
     out
 }
 
@@ -184,6 +201,8 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Tool { player, event } => tick.tools.push((player, event)),
             Event::Match(event) => tick.match_event = Some(event),
             Event::Map(event) => tick.map.push(event),
+            Event::PropBreak(broke) => tick.prop_breaks.push(broke),
+            Event::PropImpact(impact) => tick.prop_impacts.push(impact),
         }
     }
     tick
@@ -194,6 +213,7 @@ mod tests {
     use glam::Vec3;
     use rl_sim::combat::hitscan::{ShotTrace, Struck};
     use rl_sim::combat::{Cause, Damage};
+    use rl_sim::physics::BodyId;
 
     use super::*;
 
@@ -231,6 +251,17 @@ mod tests {
                 health_lost: 10.0,
             }],
             pickups: vec![(player(1), 3)],
+            prop_breaks: vec![PropBreak {
+                body: BodyId::from_index(7),
+                position: Vec3::new(1.0, 2.0, 3.0),
+                exploded: true,
+            }],
+            prop_impacts: vec![PropImpactEvent {
+                body: BodyId::from_index(8),
+                position: Vec3::ZERO,
+                speed: 300.0,
+                mass: 20.0,
+            }],
             match_event: Some(MatchEvent::Restarted),
             ..TickEvents::default()
         }

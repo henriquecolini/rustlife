@@ -17,7 +17,7 @@ use glam::{Quat, Vec3};
 use rl_data::ExplosionConfig;
 use serde::{Deserialize, Serialize};
 
-use super::{PlayerId, Simulation, Spawn, TickEvents};
+use super::{BlastSource, PlayerId, Simulation, Spawn, TickEvents};
 use crate::collision::Hull;
 use crate::collision::contents::MASK_PLAYER_SOLID;
 use crate::combat::{Cause, Damage};
@@ -373,7 +373,7 @@ impl Simulation {
                     knockback: damage * tuning.knockback_per_damage,
                     force: damage * tuning.force_per_damage,
                 };
-                self.explode(None, None, position, &explosion, events);
+                self.explode(None, BlastSource::Map, position, &explosion, events);
             }
             Effect::Teleport {
                 player,

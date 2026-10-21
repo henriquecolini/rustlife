@@ -58,12 +58,14 @@ use crate::tools::manipulator::{Manipulator, ToolEvent};
 use crate::weapons::projectile::Projectile;
 use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
 
+mod breakables;
 mod fire;
 mod lag;
 mod life;
 mod map;
 mod replica;
 
+pub use breakables::{PropBreak, PropImpactEvent};
 pub use map::MapEvent;
 
 pub use lag::History;
@@ -234,6 +236,21 @@ pub struct TickEvents {
     /// What the map's logic did that players see or hear: doors moving,
     /// buttons pressed, glass breaking, players teleported.
     pub map: Vec<MapEvent>,
+    /// Props that broke.
+    pub prop_breaks: Vec<PropBreak>,
+    /// Props that struck props or the map.
+    pub prop_impacts: Vec<PropImpactEvent>,
+}
+
+/// What set off an explosion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlastSource {
+    /// A weapon's projectile.
+    Weapon(WeaponId),
+    /// A prop that blew up.
+    Prop,
+    /// The map's own (`env_explosion`).
+    Map,
 }
 
 /// A map's simulation: collision, physics, players, weapons, pickups and
@@ -276,6 +293,10 @@ pub struct Simulation {
     /// Props players threw, punted or dropped: by whom and on which tick,
     /// so the harm they do is credited.
     thrown: Vec<(BodyId, PlayerId, u64)>,
+    /// Props that can break, and the blows waiting to hurt them.
+    breakables: breakables::Breakables,
+    /// Impacts of props on props or the map this tick, for the events.
+    prop_impacts_pending: Vec<PropImpactEvent>,
     game: Match,
 }
 
@@ -309,6 +330,8 @@ impl Simulation {
             projectiles: Vec::new(),
             next_projectile: 0,
             thrown: Vec::new(),
+            breakables: breakables::Breakables::default(),
+            prop_impacts_pending: Vec::new(),
             game: Match::new(),
         }
     }
@@ -388,7 +411,11 @@ impl Simulation {
     /// Adds a prop. Players and shots collide with it from the next tick
     /// (or [`Simulation::refresh_props`]) on.
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
-        self.physics.add_prop(desc)
+        let body = self.physics.add_prop(desc);
+        if let Some(breakable) = &desc.breakable {
+            self.breakables.register(body, breakable);
+        }
+        body
     }
 
     /// Joins props to each other or the world (see
@@ -609,16 +636,29 @@ impl Simulation {
         for impact in self.physics.step() {
             self.prop_impact(impact, &mut events);
         }
+        self.hit_props_by_impacts();
 
         self.advance_projectiles(&mut events);
         self.touch_pickups(&mut events);
         self.apply_hazards(&mut events);
+        self.resolve_prop_hits(&mut events);
+        self.respawn_props();
+        self.forget_old_throws();
         if let Some(event) = self.game.tick(self.dt, &self.data.rules) {
             self.on_match_event(event, &mut events);
         }
         let targets = self.targets();
         self.history.record(self.tick, targets);
         events
+    }
+
+    /// Drops the record of props thrown so long ago that nobody is credited
+    /// for them any more.
+    fn forget_old_throws(&mut self) {
+        let credit = (self.data.rules.prop_credit / self.dt) as u64;
+        let tick = self.tick;
+        self.thrown
+            .retain(|&(_, _, thrown)| tick.saturating_sub(thrown) <= credit);
     }
 
     /// Moves one living player and runs their weapon.

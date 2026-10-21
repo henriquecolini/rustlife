@@ -67,6 +67,32 @@ pub struct PropDesc {
     pub grabbable: bool,
     /// A fixed prop that becomes dynamic when grabbed.
     pub free_on_grab: bool,
+    /// What it takes to break it, if it can be broken.
+    pub breakable: Option<Breakable>,
+    /// The surface property of what it is made of, lower case: it names the
+    /// sounds it makes. Empty if unknown.
+    pub surface: String,
+}
+
+/// How a prop breaks: the damage it takes, what it does when it goes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Breakable {
+    /// Damage the prop takes before breaking.
+    pub health: f32,
+    /// Multiplier on damage from bullets.
+    pub bullets: f32,
+    /// Multiplier on damage from melee weapons.
+    pub club: f32,
+    /// Multiplier on damage from explosions.
+    pub explosive: f32,
+    /// Breaking it sets off an explosion of this damage and radius (units).
+    pub explosion: Option<(f32, f32)>,
+    /// The models it breaks into, for the client to scatter.
+    pub gibs: Vec<String>,
+    /// How many gibs it breaks into.
+    pub gib_count: u32,
+    /// Seconds after breaking that it comes back where it was, if it does.
+    pub respawn: Option<f32>,
 }
 
 /// The physics description of `placement`, given its model's collision
@@ -148,6 +174,8 @@ pub fn prop_desc(
         free_on_grab: is_physics
             && motion_disabled
             && flags & spawnflags::ENABLE_MOTION_ON_GRAB != 0,
+        breakable: None,
+        surface: surface_prop.to_ascii_lowercase(),
     })
 }
 

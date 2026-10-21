@@ -5,7 +5,8 @@
 //! player's box, so a rocket at someone's feet hits them at full strength.
 //! Walls shelter players: a player is reached only if the map does not
 //! block the line from the centre to their box. Props are pushed without
-//! that check (a blast tumbling the crate behind a pillar reads as right).
+//! that check (a blast tumbling the crate behind a pillar reads as right),
+//! but only those the blast can see are damaged.
 
 use glam::Vec3;
 use rl_data::ExplosionConfig;
@@ -42,6 +43,11 @@ pub struct PropReach {
     pub direction: Vec3,
     /// Its centre of mass, where the push is applied.
     pub center: Vec3,
+    /// It moves (rather than being fixed in place): only those are pushed.
+    pub dynamic: bool,
+    /// The map leaves a clear line from the blast to it: only those are
+    /// damaged.
+    pub exposed: bool,
 }
 
 /// The players a blast at `center` reaches.
@@ -75,12 +81,16 @@ pub fn players(
         .collect()
 }
 
-/// The dynamic props a blast at `center` reaches.
+/// The props a blast at `center` reaches.
 #[must_use]
-pub fn props(center: Vec3, explosion: &ExplosionConfig, physics: &PhysicsWorld) -> Vec<PropReach> {
+pub fn props(
+    center: Vec3,
+    explosion: &ExplosionConfig,
+    physics: &PhysicsWorld,
+    world: &CollisionWorld,
+) -> Vec<PropReach> {
     physics
         .props()
-        .filter(|&body| physics.is_dynamic(body))
         .filter_map(|body| {
             let prop_center = physics.center_of_mass(body)?;
             let radius = physics.radius(body).unwrap_or(0.0);
@@ -91,6 +101,8 @@ pub fn props(center: Vec3, explosion: &ExplosionConfig, physics: &PhysicsWorld) 
                 scale,
                 direction: (prop_center - center).normalize_or(Vec3::Z),
                 center: prop_center,
+                dynamic: physics.is_dynamic(body),
+                exposed: !world.trace_ray(center, prop_center, SHELTER_MASK).hit(),
             })
         })
         .collect()

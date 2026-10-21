@@ -90,6 +90,15 @@ pub struct PropPlacement {
     /// The entity's `targetname`, by which map logic and constraints name
     /// it; `None` for static props and unnamed entities.
     pub name: Option<String>,
+    /// The entity's `health`; 0 leaves it to the model's own `prop_data`.
+    pub health: f32,
+    /// The entity's `ExplodeDamage`; 0 leaves it to the model.
+    pub explode_damage: f32,
+    /// The entity's `ExplodeRadius`; 0 leaves it to the model.
+    pub explode_radius: f32,
+    /// Seconds after breaking that a `prop_physics_respawnable` comes back
+    /// where it was; 0 for props that do not.
+    pub respawn: f32,
 }
 
 impl PropPlacement {
@@ -117,6 +126,10 @@ impl PropPlacement {
             spawnflags: 0,
             mass_scale: 1.0,
             name: None,
+            health: 0.0,
+            explode_damage: 0.0,
+            explode_radius: 0.0,
+            respawn: 0.0,
         }
     }
 }
@@ -171,6 +184,10 @@ fn static_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 spawnflags: 0,
                 mass_scale: 1.0,
                 name: None,
+                health: 0.0,
+                explode_damage: 0.0,
+                explode_radius: 0.0,
+                respawn: 0.0,
             })
         })
         .collect()
@@ -180,7 +197,8 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
     bsp.entities
         .iter()
         .filter_map(|entity| {
-            let kind = entity_kind(entity.prop("classname")?)?;
+            let classname = entity.prop("classname")?;
+            let kind = entity_kind(classname)?;
             if entity.prop("rendermode") == Some(RENDER_MODE_NONE) {
                 return None;
             }
@@ -225,6 +243,14 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
                     .prop("targetname")
                     .filter(|name| !name.is_empty())
                     .map(str::to_owned),
+                health: positive("health").unwrap_or(0.0),
+                explode_damage: positive("explodedamage").unwrap_or(0.0),
+                explode_radius: positive("exploderadius").unwrap_or(0.0),
+                respawn: if classname.ends_with("respawnable") {
+                    positive("respawntime").unwrap_or(0.0)
+                } else {
+                    0.0
+                },
             })
         })
         .collect()

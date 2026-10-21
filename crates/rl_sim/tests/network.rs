@@ -56,6 +56,8 @@ fn crate_desc(data: &GameData, origin: Vec3) -> PropDesc {
         start_asleep: true,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     }
 }
 

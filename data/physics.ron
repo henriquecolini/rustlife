@@ -59,6 +59,18 @@ Physics(
         // Largest speed change one tick of pushing gives a prop, units/s.
         max_speed_change: 400.0,
     ),
+    breakables: (
+        // The blast of an exploding prop (a barrel) throws players and props
+        // about like a rocket's does.
+        explosion_knockback: 500.0,
+        explosion_force: 90000.0,
+        // Props striking each other or the map. Closing slower than
+        // report_speed is not even heard; the energy a blow carries beyond
+        // min_energy breaks a prop that can break, at damage_per_joule.
+        // Dropping a 20 kg crate from head height (about 400 units/s) takes
+        // a quarter of a crate's health.
+        impact: (report_speed: 120.0, min_energy: 250.0, damage_per_joule: 0.04),
+    ),
     impact_damage: (
         // Props must hit at least this fast to hurt, units/s.
         min_speed: 200.0,

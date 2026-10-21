@@ -32,9 +32,9 @@
 use glam::{Quat, Vec3};
 use rapier3d::parry::bounding_volume::BoundingVolume;
 use rapier3d::prelude::{
-    ActiveHooks, ColliderBuilder, ColliderHandle, Group, InteractionGroups, InteractionTestMode,
-    PhysicsWorld as RapierWorld, Pose, RigidBodyBuilder, RigidBodyHandle, RigidBodyType,
-    SharedShape,
+    ActiveEvents, ActiveHooks, ColliderBuilder, ColliderHandle, Group, InteractionGroups,
+    InteractionTestMode, PhysicsWorld as RapierWorld, Pose, RigidBodyBuilder, RigidBodyHandle,
+    RigidBodyType, SharedShape,
 };
 use rl_data::PhysicsConfig;
 use serde::{Deserialize, Serialize};
@@ -43,14 +43,16 @@ use crate::collision::clip::ClipPlane;
 use crate::collision::{CollisionWorld, ConvexHull, Hull};
 
 mod contacts;
+mod impacts;
 mod joints;
 mod props;
 mod statics;
 mod trace;
 
 pub use contacts::Impact;
+pub use impacts::ContactImpact;
 pub use joints::{JointDesc, JointKind, MapJoints, map_joints};
-pub use props::{Motion, PropDesc, prop_desc};
+pub use props::{Breakable, Motion, PropDesc, prop_desc};
 
 /// The map's static geometry.
 const GROUP_WORLD: Group = Group::GROUP_1;
@@ -114,6 +116,12 @@ struct PropBody {
     free_on_grab: bool,
     /// The pose the pieces' planes were built for.
     planes_pose: Pose,
+    /// Broken: gone from the world, though its id stays taken.
+    broken: bool,
+    /// What it is made of.
+    surface: String,
+    /// Where it was added, for bringing it back.
+    home: Pose,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +156,8 @@ pub struct PhysicsWorld {
     movers: Vec<statics::MoverBody>,
     /// The fixed body joints hold props to the world by, once one does.
     anchor: Option<RigidBodyHandle>,
+    /// Props that struck props or the map during the last step.
+    contacts: Vec<ContactImpact>,
     config: PhysicsConfig,
 }
 
@@ -190,6 +200,7 @@ impl PhysicsWorld {
             touching: Vec::new(),
             movers,
             anchor: None,
+            contacts: Vec::new(),
             config: config.clone(),
         }
     }
@@ -254,6 +265,7 @@ impl PhysicsWorld {
                 .friction(desc.material.friction)
                 .restitution(desc.material.restitution)
                 .collision_groups(interaction(group))
+                .active_events(ActiveEvents::COLLISION_EVENTS)
                 .user_data(u128::from(id.0)),
             Some(handle),
         );
@@ -281,6 +293,9 @@ impl PhysicsWorld {
                 grabbable: desc.grabbable,
                 free_on_grab: desc.free_on_grab,
                 planes_pose: pose,
+                broken: false,
+                surface: desc.surface.clone(),
+                home: pose,
             }),
         });
         id
@@ -366,11 +381,23 @@ impl PhysicsWorld {
                 .filter_map(|&(player, prop)| Some((self.handle(player)?, self.handle(prop)?)))
                 .collect(),
         };
-        self.rapier.step_with_events(&hooks, &());
+        let collector = impacts::Collector::default();
+        self.rapier.step_with_events(&hooks, &collector);
+        self.contacts = self.contact_impacts(
+            &collector,
+            &before,
+            self.config.breakables.impact.report_speed,
+        );
         self.clamp_velocities();
         self.refresh_planes();
         self.forget_separated();
         self.detect_impacts(&before)
+    }
+
+    /// The props' impacts on props and the map during the last
+    /// [`step`](PhysicsWorld::step).
+    pub fn take_contacts(&mut self) -> Vec<ContactImpact> {
+        std::mem::take(&mut self.contacts)
     }
 
     /// Where a prop is.
@@ -436,7 +463,76 @@ impl PhysicsWorld {
         self.bodies
             .iter()
             .enumerate()
-            .filter(|(_, body)| matches!(body.kind, BodyKind::Prop(_)))
+            .filter(|(_, body)| matches!(&body.kind, BodyKind::Prop(prop) if !prop.broken))
+            .map(|(index, _)| BodyId(index as u32))
+    }
+
+    /// Takes a prop out of the world: it stops colliding, being hit and being
+    /// held, and is no longer listed by [`PhysicsWorld::props`]. Its id stays
+    /// taken, so every other body keeps its own. Returns whether it was
+    /// there to break.
+    pub fn break_prop(&mut self, body: BodyId) -> bool {
+        let Some(BodyKind::Prop(prop)) = self.bodies.get_mut(body.index()).map(|b| &mut b.kind)
+        else {
+            return false;
+        };
+        if std::mem::replace(&mut prop.broken, true) {
+            return false;
+        }
+        self.held.retain(|&(_, held)| held != body);
+        self.released.retain(|&(_, released)| released != body);
+        self.touching.retain(|&(_, touched)| touched != body);
+        if let Some(rigid) = self.rigid_mut(body) {
+            rigid.set_enabled(false);
+        }
+        true
+    }
+
+    /// Where a prop was added: its home.
+    #[must_use]
+    pub fn home_position(&self, body: BodyId) -> Option<Vec3> {
+        self.prop_any(body).map(|prop| prop.home.translation)
+    }
+
+    /// Brings a broken prop back where it was added, at rest. Returns
+    /// whether it was broken.
+    pub fn restore_prop(&mut self, body: BodyId) -> bool {
+        let Some(BodyKind::Prop(prop)) = self.bodies.get_mut(body.index()).map(|b| &mut b.kind)
+        else {
+            return false;
+        };
+        if !std::mem::replace(&mut prop.broken, false) {
+            return false;
+        }
+        let home = prop.home;
+        prop.planes_pose = home;
+        if let Some(rigid) = self.rigid_mut(body) {
+            rigid.set_enabled(true);
+            rigid.set_position(home, true);
+            rigid.set_linvel(Vec3::ZERO, true);
+            rigid.set_angvel(Vec3::ZERO, true);
+        }
+        true
+    }
+
+    /// The surface property a prop is made of, lower case (empty if unknown).
+    #[must_use]
+    pub fn surface(&self, body: BodyId) -> &str {
+        self.prop_any(body).map_or("", |prop| prop.surface.as_str())
+    }
+
+    /// Whether a prop has been broken.
+    #[must_use]
+    pub fn is_broken(&self, body: BodyId) -> bool {
+        self.prop_any(body).is_some_and(|prop| prop.broken)
+    }
+
+    /// Every prop that has been broken.
+    pub fn broken(&self) -> impl Iterator<Item = BodyId> + '_ {
+        self.bodies
+            .iter()
+            .enumerate()
+            .filter(|(_, body)| matches!(&body.kind, BodyKind::Prop(prop) if prop.broken))
             .map(|(index, _)| BodyId(index as u32))
     }
 
@@ -573,7 +669,13 @@ impl PhysicsWorld {
         self.rapier.bodies.get_mut(handle)
     }
 
+    /// A prop that is still in the world.
     fn prop(&self, body: BodyId) -> Option<&PropBody> {
+        self.prop_any(body).filter(|prop| !prop.broken)
+    }
+
+    /// A prop, broken or not.
+    fn prop_any(&self, body: BodyId) -> Option<&PropBody> {
         match &self.bodies.get(body.index())?.kind {
             BodyKind::Prop(prop) => Some(prop),
             BodyKind::Player { .. } => None,

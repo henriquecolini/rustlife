@@ -96,6 +96,9 @@ pub struct ModelHeader {
     pub bounds: ([f32; 3], [f32; 3]),
     /// The model's `$surfaceprop`, as written.
     pub surface_prop: String,
+    /// The model's `$keyvalues` text (`prop_data { ... }` and the like), if
+    /// it has any; see [`crate::propdata`].
+    pub key_values: Option<String>,
 }
 
 /// Reads a model's bounds and surface property from its `.mdl` alone,
@@ -112,6 +115,7 @@ pub fn read_header(mdl: &[u8]) -> Result<ModelHeader, ModelError> {
         Ok(ModelHeader {
             bounds: ([min.x, min.y, min.z], [max.x, max.y, max.z]),
             surface_prop: mdl.surface_prop,
+            key_values: mdl.key_values,
         })
     }))
     .unwrap_or_else(|_| {

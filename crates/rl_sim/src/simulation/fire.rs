@@ -6,7 +6,8 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::{ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, Shot};
 
-use super::{ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEvents};
+use super::breakables::Blow;
+use super::{BlastSource, ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEvents};
 use crate::collision::Hull;
 use crate::combat::hitscan::{self, ShotTrace, Struck};
 use crate::combat::{Cause, Damage, blast};
@@ -115,6 +116,7 @@ impl Simulation {
             self.strike(
                 id,
                 weapon,
+                Blow::Bullet,
                 bullet.trace.struck,
                 bullet.damage,
                 bullet.direction * bullets.force,
@@ -183,6 +185,7 @@ impl Simulation {
         self.strike(
             id,
             weapon,
+            Blow::Club,
             trace.struck,
             swing.damage,
             forward * swing.force,
@@ -224,6 +227,7 @@ impl Simulation {
         &mut self,
         id: PlayerId,
         weapon: WeaponId,
+        blow: Blow,
         struck: Struck,
         damage: f32,
         impulse: Vec3,
@@ -239,7 +243,10 @@ impl Simulation {
                 };
                 self.hurt(victim, damage, events);
             }
-            Struck::Prop(body) => self.physics.apply_impulse(body, impulse, point),
+            Struck::Prop(body) => {
+                self.hit_prop(body, damage, blow, Some(id));
+                self.physics.apply_impulse(body, impulse, point);
+            }
             Struck::Brush(model) => self.brush_damage.push((Some(id), model as usize, damage)),
             Struck::World | Struck::Nothing => {}
         }
@@ -333,7 +340,13 @@ impl Simulation {
                             model as usize,
                             config.hit_damage,
                         )),
-                        Struck::Prop(_) | Struck::World | Struck::Nothing => {}
+                        Struck::Prop(body) => self.hit_prop(
+                            body,
+                            config.hit_damage,
+                            Blow::Bullet,
+                            Some(projectile.owner),
+                        ),
+                        Struck::World | Struck::Nothing => {}
                     }
                 }
                 point
@@ -344,7 +357,7 @@ impl Simulation {
         if let Some(explosion) = &config.explosion {
             self.explode(
                 Some(projectile.owner),
-                Some(projectile.weapon),
+                BlastSource::Weapon(projectile.weapon),
                 center,
                 explosion,
                 events,
@@ -358,20 +371,38 @@ impl Simulation {
     pub(super) fn explode(
         &mut self,
         owner: Option<PlayerId>,
-        weapon: Option<WeaponId>,
+        source: BlastSource,
         center: Vec3,
         explosion: &ExplosionConfig,
         events: &mut TickEvents,
     ) {
+        let (weapon, cause) = match source {
+            BlastSource::Weapon(weapon) => (Some(weapon), Cause::Weapon(weapon)),
+            BlastSource::Prop => (None, Cause::Explosion),
+            BlastSource::Map => (None, Cause::Hazard),
+        };
         events.explosions.push(ExplosionEvent {
             position: center,
             radius: explosion.radius,
             weapon,
         });
-        for reach in blast::props(center, explosion, &self.physics) {
-            let impulse = reach.direction * explosion.force * reach.scale;
-            self.physics
-                .apply_impulse(reach.body, impulse, reach.center);
+        for reach in blast::props(center, explosion, &self.physics, &self.world) {
+            if reach.dynamic {
+                let impulse = reach.direction * explosion.force * reach.scale;
+                self.physics
+                    .apply_impulse(reach.body, impulse, reach.center);
+                if let Some(owner) = owner {
+                    self.thrown.push((reach.body, owner, self.tick));
+                }
+            }
+            if reach.exposed {
+                self.hit_prop(
+                    reach.body,
+                    explosion.damage * reach.scale,
+                    Blow::Explosion,
+                    owner,
+                );
+            }
         }
         for (model, scale) in blast::brushes(center, explosion, &self.world, self.logic.movers()) {
             self.brush_damage
@@ -388,7 +419,7 @@ impl Simulation {
             let damage = Damage {
                 amount: explosion.damage * reach.scale,
                 attacker: owner,
-                cause: weapon.map_or(Cause::Hazard, Cause::Weapon),
+                cause,
             };
             self.hurt(reach.player, damage, events);
         }

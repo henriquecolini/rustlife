@@ -38,6 +38,8 @@ fn crate_at(origin: Vec3, motion: Motion) -> PropDesc {
         start_asleep: false,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     }
 }
 

@@ -15,6 +15,7 @@ use rl_sim::collision::WorldBuilder;
 use rl_sim::simulation::Spawn;
 use source_formats::entities::MapEntity;
 use source_formats::phy;
+use source_formats::propdata::PropDataTable;
 use source_formats::props::{PropKind, PropPlacement, PropSolid};
 use source_fs::{LooseDirectory, MountOrigin, Vfs};
 
@@ -29,6 +30,7 @@ fn crate_model() -> PropModel {
         bounds: ([-16.0, -16.0, 0.0], [16.0, 16.0, 32.0]),
         surface_prop: "wood".to_owned(),
         physics: Some(phy::decode(&bytes).expect("phy")),
+        key_values: None,
     }
 }
 
@@ -78,7 +80,7 @@ fn level(data: &GameData) -> Level {
         props: placements
             .into_iter()
             .map(|placement| LevelProp {
-                desc: model.desc(&placement, &data.physics),
+                desc: model.desc(&placement, &data.physics, &PropDataTable::default()),
                 placement,
             })
             .collect(),
@@ -112,7 +114,7 @@ fn a_named_prop_hangs_on_the_maps_ball_socket() {
     placement.origin = [100.0, 0.0, 200.0];
     placement.name = Some("lamp_1".to_owned());
     level.props[0] = LevelProp {
-        desc: crate_model().desc(&placement, &data.physics),
+        desc: crate_model().desc(&placement, &data.physics, &PropDataTable::default()),
         placement,
     };
     level.entities =
@@ -165,9 +167,96 @@ fn models_without_a_physics_model_collide_as_their_box() {
         ..crate_model()
     };
     let placement = PropPlacement::new("models/box.mdl", [0.0; 3], [0.0; 3], PropKind::Physics);
-    let desc = model.desc(&placement, &data.physics).expect("a box");
+    let desc = model
+        .desc(&placement, &data.physics, &PropDataTable::default())
+        .expect("a box");
     assert_eq!(desc.pieces.len(), 1);
     assert!(desc.mass > 0.0);
+}
+
+/// `propdata.txt` in miniature, and a barrel model that explodes.
+fn explosive_barrel(table: &PropDataTable) -> (PropModel, PropPlacement, PropDataTable) {
+    let _ = table;
+    let table = PropDataTable::parse(
+        r#""PropData.txt" {
+            "Metal.Medium" { "health" "40" "breakable_model" "MetalChunks" "breakable_count" "3" }
+            "BreakableModels" { "MetalChunks" { "models\gibs\metal_gib1.mdl" "1" } }
+        }"#,
+    );
+    let model = PropModel {
+        key_values: Some(
+            "prop_data { \"base\" \"Metal.Medium\" \"health\" \"20\" \"explosive_damage\" \"120\" \"explosive_radius\" \"256\" }"
+                .to_owned(),
+        ),
+        ..crate_model()
+    };
+    let placement = PropPlacement::new("models/barrel.mdl", [0.0; 3], [0.0; 3], PropKind::Physics);
+    (model, placement, table)
+}
+
+#[test]
+fn physics_props_break_as_their_model_says_and_the_entity_overrides() {
+    let data = data();
+    let (model, mut placement, table) = explosive_barrel(&PropDataTable::default());
+    let breakable = model
+        .desc(&placement, &data.physics, &table)
+        .expect("solid")
+        .breakable
+        .expect("breakable");
+    assert_eq!(
+        breakable.health, 20.0,
+        "the model's own value over its class's"
+    );
+    assert_eq!(breakable.explosion, Some((120.0, 256.0)));
+    assert_eq!(breakable.gibs, ["models/gibs/metal_gib1.mdl"]);
+    assert_eq!(breakable.gib_count, 3);
+
+    placement.health = 55.0;
+    placement.explode_radius = 100.0;
+    let breakable = model
+        .desc(&placement, &data.physics, &table)
+        .expect("solid")
+        .breakable
+        .expect("breakable");
+    assert_eq!(breakable.health, 55.0, "the entity's health wins");
+    assert_eq!(breakable.explosion, Some((120.0, 100.0)));
+}
+
+#[test]
+fn props_without_health_or_that_are_not_physics_props_do_not_break() {
+    let data = data();
+    let table = PropDataTable::default();
+    // A model with no prop_data.
+    let plain = crate_model();
+    let placement = PropPlacement::new("models/crate.mdl", [0.0; 3], [0.0; 3], PropKind::Physics);
+    assert!(
+        plain
+            .desc(&placement, &data.physics, &table)
+            .expect("solid")
+            .breakable
+            .is_none()
+    );
+    // The entity's health alone is enough.
+    let mut with_health = placement.clone();
+    with_health.health = 30.0;
+    assert_eq!(
+        plain
+            .desc(&with_health, &data.physics, &table)
+            .expect("solid")
+            .breakable
+            .map(|breakable| breakable.health),
+        Some(30.0)
+    );
+    // A static prop never breaks, whatever its model says.
+    let (barrel, mut fixed, table) = explosive_barrel(&table);
+    fixed.kind = PropKind::Static;
+    assert!(
+        barrel
+            .desc(&fixed, &data.physics, &table)
+            .expect("solid")
+            .breakable
+            .is_none()
+    );
 }
 
 #[test]
@@ -237,5 +326,23 @@ fn every_stock_map_loads_as_a_level() {
         assert!(!level.spawns.is_empty(), "{map} has spawns");
         assert!(dynamic > 0, "{map} has physics props");
         assert!(!built.simulation.pickups().is_empty(), "{map} has pickups");
+
+        let breakables: Vec<_> = level
+            .props
+            .iter()
+            .filter_map(|prop| prop.desc.as_ref()?.breakable.as_ref())
+            .collect();
+        let explosive = breakables
+            .iter()
+            .filter(|breakable| breakable.explosion.is_some())
+            .count();
+        eprintln!(
+            "{map}: {} breakable props, {explosive} explosive",
+            breakables.len()
+        );
+        assert!(!breakables.is_empty(), "{map} has props that break");
+        if map == "dm_lockdown" {
+            assert!(explosive > 0, "dm_lockdown has explosive barrels");
+        }
     }
 }

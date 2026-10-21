@@ -48,6 +48,8 @@ fn crate_desc(origin: Vec3, mass: f32) -> PropDesc {
         start_asleep: false,
         grabbable: true,
         free_on_grab: false,
+        breakable: None,
+        surface: String::new(),
     }
 }
 

@@ -28,13 +28,14 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::{GameData, PhysicsConfig};
 use rl_sim::collision::CollisionWorld;
-use rl_sim::physics::{BodyId, PropDesc, map_joints, prop_desc};
+use rl_sim::physics::{BodyId, Breakable, PropDesc, map_joints, prop_desc};
 use rl_sim::simulation::{Simulation, Spawn};
 use source_formats::bsp::{self, BspError};
 use source_formats::entities::MapEntity;
 use source_formats::mdl;
 use source_formats::phy::{self, PhysicsModel};
-use source_formats::props::PropPlacement;
+use source_formats::propdata::PropDataTable;
+use source_formats::props::{PropKind, PropPlacement};
 use source_fs::{Mount, MountOrigin, Vfs, ZipMount};
 use thiserror::Error;
 
@@ -178,6 +179,10 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
     let pakfile = bsp::pakfile_bytes(&bytes)
         .and_then(|pak| ZipMount::from_bytes(format!("pakfile of {name}"), pak).ok());
     let files = Files { vfs, pakfile };
+    let propdata = files
+        .read("scripts/propdata.txt")
+        .map(|bytes| PropDataTable::parse(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default();
     let mut models = HashMap::new();
     let props = contents
         .props
@@ -188,7 +193,7 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
                 .or_insert_with(|| files.model(&placement.model));
             let desc = model
                 .as_ref()
-                .and_then(|model| model.desc(&placement, physics));
+                .and_then(|model| model.desc(&placement, physics, &propdata));
             LevelProp { placement, desc }
         })
         .collect::<Vec<_>>();
@@ -208,6 +213,14 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
             .props
             .iter()
             .filter(|prop| prop.desc.is_some())
+            .count(),
+        breakable = level
+            .props
+            .iter()
+            .filter(|prop| prop
+                .desc
+                .as_ref()
+                .is_some_and(|desc| desc.breakable.is_some()))
             .count(),
         spawns = level.spawns.len(),
         "loaded level"
@@ -234,20 +247,76 @@ pub struct PropModel {
     pub surface_prop: String,
     /// The model's `.phy`, if it ships a readable one.
     pub physics: Option<PhysicsModel>,
+    /// The model's `$keyvalues` text, which may say how it breaks.
+    pub key_values: Option<String>,
 }
 
 impl PropModel {
     /// The body of a prop of this model placed by `placement`, if it is
-    /// solid.
+    /// solid, with what `propdata` says about how it breaks.
     #[must_use]
-    pub fn desc(&self, placement: &PropPlacement, physics: &PhysicsConfig) -> Option<PropDesc> {
-        prop_desc(
+    pub fn desc(
+        &self,
+        placement: &PropPlacement,
+        physics: &PhysicsConfig,
+        propdata: &PropDataTable,
+    ) -> Option<PropDesc> {
+        let mut desc = prop_desc(
             placement,
             self.physics.as_ref(),
             self.bounds,
             &self.surface_prop,
             physics,
-        )
+        )?;
+        desc.breakable = self.breakable(placement, propdata);
+        Some(desc)
+    }
+
+    /// How a prop of this model placed by `placement` breaks: its `health`
+    /// from the entity, else from the model's `prop_data`; no health, no
+    /// breaking. Only physics props break.
+    fn breakable(&self, placement: &PropPlacement, propdata: &PropDataTable) -> Option<Breakable> {
+        if placement.kind != PropKind::Physics {
+            return None;
+        }
+        let data = self
+            .key_values
+            .as_deref()
+            .and_then(|text| propdata.for_model(text))
+            .unwrap_or_default();
+        let health = if placement.health > 0.0 {
+            placement.health
+        } else {
+            data.health
+        };
+        if health <= 0.0 {
+            return None;
+        }
+        let damage = if placement.explode_damage > 0.0 {
+            placement.explode_damage
+        } else {
+            data.explosive_damage
+        };
+        let radius = if placement.explode_radius > 0.0 {
+            placement.explode_radius
+        } else {
+            data.explosive_radius
+        };
+        let gibs = data
+            .breakable_model
+            .as_deref()
+            .map(|list| propdata.gibs(list).to_vec())
+            .unwrap_or_default();
+        Some(Breakable {
+            health,
+            bullets: data.bullets,
+            club: data.club,
+            explosive: data.explosive,
+            explosion: (damage > 0.0 && radius > 0.0).then_some((damage, radius)),
+            gibs,
+            gib_count: data.breakable_count,
+            respawn: (placement.respawn > 0.0).then_some(placement.respawn),
+        })
     }
 }
 
@@ -292,6 +361,7 @@ impl Files<'_> {
             bounds: header.bounds,
             surface_prop: header.surface_prop.to_ascii_lowercase(),
             physics,
+            key_values: header.key_values,
         })
     }
 }

@@ -42,6 +42,49 @@ pub struct PhysicsConfig {
     pub push: PushConfig,
     /// Damage dealt to players by props hitting them.
     pub impact_damage: ImpactDamageConfig,
+    /// How props break and blow up.
+    pub breakables: BreakablesConfig,
+}
+
+/// How props break: from blows, blasts and hard impacts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BreakablesConfig {
+    /// Speed given to a player at the centre of an exploding prop's blast,
+    /// units/s.
+    pub explosion_knockback: f32,
+    /// Impulse given to props at the centre of such a blast, kg·units/s.
+    pub explosion_force: f32,
+    /// Props striking each other or the map, which make noise and may break
+    /// the prop.
+    pub impact: PropImpactConfig,
+}
+
+/// Props striking props and the map.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PropImpactConfig {
+    /// Slower closing speeds than this, units/s, are not reported at all
+    /// (no sound, no damage).
+    pub report_speed: f32,
+    /// Impact energy, joules, that does the struck prop no harm...
+    pub min_energy: f32,
+    /// ...and the damage per joule beyond it.
+    pub damage_per_joule: f32,
+}
+
+impl PropImpactConfig {
+    /// The damage to a prop when `mass` kg of other prop (or of itself, for
+    /// the map) strikes it at `speed` units/s.
+    #[must_use]
+    pub fn damage(&self, mass: f32, speed: f32) -> f32 {
+        if speed < self.report_speed {
+            return 0.0;
+        }
+        let metres_per_second = speed * ImpactDamageConfig::METRES_PER_UNIT;
+        let energy = 0.5 * mass * metres_per_second * metres_per_second;
+        ((energy - self.min_energy) * self.damage_per_joule).max(0.0)
+    }
 }
 
 /// Surface materials, looked up by a model's `$surfaceprop` (see
@@ -123,7 +166,7 @@ pub struct ImpactDamageConfig {
 
 impl ImpactDamageConfig {
     /// Metres per Source unit (one inch).
-    const METRES_PER_UNIT: f32 = 0.0254;
+    pub(crate) const METRES_PER_UNIT: f32 = 0.0254;
 
     /// The damage of a prop of `mass` kg meeting a player at `speed` units/s
     /// along the contact normal.
@@ -186,6 +229,22 @@ impl PhysicsConfig {
         check.non_negative("impact_damage.min_energy", damage.min_energy);
         check.non_negative("impact_damage.damage_per_joule", damage.damage_per_joule);
         check.non_negative("impact_damage.max_damage", damage.max_damage);
+
+        let breakables = &self.breakables;
+        check.non_negative(
+            "breakables.explosion_knockback",
+            breakables.explosion_knockback,
+        );
+        check.non_negative("breakables.explosion_force", breakables.explosion_force);
+        check.positive(
+            "breakables.impact.report_speed",
+            breakables.impact.report_speed,
+        );
+        check.non_negative("breakables.impact.min_energy", breakables.impact.min_energy);
+        check.non_negative(
+            "breakables.impact.damage_per_joule",
+            breakables.impact.damage_per_joule,
+        );
     }
 }
 
