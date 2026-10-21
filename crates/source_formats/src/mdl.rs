@@ -7,9 +7,10 @@
 //! mesh, with the material table needed to texture them.
 //!
 //! Positions and normals stay in Source space (Z up, inches), in the model's
-//! own frame. For models that are not flagged as static props, the model's
-//! root bone transform is applied so that they rest the way they appear in the
-//! game; animation proper arrives with M7.
+//! own frame. A single-bone model (a prop) has its bone's idle placement
+//! applied, so it rests the way it appears in the game; a skeletal model
+//! stays in its reference pose, each vertex with the bones that move it and
+//! their weights, to be skinned by its skeleton ([`crate::anim`]).
 
 use thiserror::Error;
 use vmdl::{Mdl, Model, Vtx, Vvd};
@@ -28,6 +29,10 @@ pub struct ModelMesh {
     /// Per-vertex index into the model's vertex list (the `.vvd` vertices),
     /// which baked per-vertex data such as [`crate::vhv`] lighting refers to.
     pub vertex_ids: Vec<u32>,
+    /// Per-vertex bones (up to three, padded with bone 0) that move it.
+    pub joints: Vec<[u16; 4]>,
+    /// Per-vertex weights of [`ModelMesh::joints`], summing to 1.
+    pub weights: Vec<[f32; 4]>,
 }
 
 /// The renderable contents of a model.
@@ -170,6 +175,8 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
             let mut normals = Vec::new();
             let mut uvs = Vec::new();
             let mut vertex_ids = Vec::new();
+            let mut joints = Vec::new();
+            let mut weights = Vec::new();
             let vertices: Vec<_> = mesh
                 .vertex_strip_indices()
                 .flatten()
@@ -186,6 +193,9 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
                     positions.push([position.x, position.y, position.z]);
                     normals.push([normal.x, normal.y, normal.z]);
                     uvs.push(vertex.texture_coordinates);
+                    let (joint, weight) = skin_weights(vertex);
+                    joints.push(joint);
+                    weights.push(weight);
                 }
             }
             ModelMesh {
@@ -194,6 +204,8 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
                 normals,
                 uvs,
                 vertex_ids,
+                joints,
+                weights,
             }
         })
         .filter(|mesh| !mesh.positions.is_empty())
@@ -240,6 +252,29 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
         checksum,
         strip_vertex_ids,
     })
+}
+
+/// A vertex's bones and their weights, normalised to sum to 1; a vertex
+/// with no bones follows bone 0. (`vmdl` hands out each weight divided by
+/// the vertex's bone count, which is undone here.)
+fn skin_weights(vertex: &vmdl::vvd::Vertex) -> ([u16; 4], [f32; 4]) {
+    let found: Vec<(u16, f32)> = vertex
+        .bone_weights
+        .weights()
+        .map(|weight| (u16::from(weight.bone_id), weight.weight))
+        .collect();
+    let mut joints = [0u16; 4];
+    let mut weights = [0.0f32; 4];
+    let total: f32 = found.iter().map(|&(_, weight)| weight.max(0.0)).sum();
+    if total <= 0.0 {
+        weights[0] = 1.0;
+        return (joints, weights);
+    }
+    for (slot, &(bone, weight)) in found.iter().take(4).enumerate() {
+        joints[slot] = bone;
+        weights[slot] = weight.max(0.0) / total;
+    }
+    (joints, weights)
 }
 
 /// The model vertex index of each highest-detail strip-group vertex, in the

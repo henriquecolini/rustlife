@@ -4,7 +4,8 @@
 //! Deathmatch install (see the `source_fs` crate). This crate turns the raw
 //! bytes those mounts hand back into typed, engine-independent values: decoded
 //! textures ([`vtf`]), parsed materials ([`vmt`]), map geometry ([`bsp`]),
-//! models ([`mdl`]) and their collision ([`phy`]), their placements
+//! models ([`mdl`]), their skeletons and animations ([`anim`]) and their
+//! collision ([`phy`]), their placements
 //! ([`props`]), the baked light that models are lit by ([`ambient`],
 //! [`lights`], [`vhv`]), what players collide with ([`collision`]) and the
 //! map's entities ([`entities`]), and the game's sounds ([`wav`],
@@ -26,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ambient;
+pub mod anim;
 pub mod bsp;
 pub mod collision;
 pub mod entities;
