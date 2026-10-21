@@ -11,6 +11,7 @@ use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, ReadAssetBytesError};
 use bevy_image::Image;
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
+pub use source_formats::vmt::WaterFog;
 use source_formats::vmt::{self, MaterialDesc, VmtError};
 use thiserror::Error;
 
@@ -33,6 +34,8 @@ pub struct SourceMaterial {
     pub alpha_test: Option<f32>,
     /// Whether back-face culling is disabled (`$nocull`).
     pub no_cull: bool,
+    /// A water material's fog (its colour tints the surface).
+    pub water_fog: Option<WaterFog>,
 }
 
 /// Errors from [`VmtLoader`].
@@ -86,6 +89,7 @@ impl AssetLoader for VmtLoader {
             translucent: desc.translucent,
             alpha_test: desc.alpha_test,
             no_cull: desc.no_cull,
+            water_fog: desc.water_fog,
         })
     }
 

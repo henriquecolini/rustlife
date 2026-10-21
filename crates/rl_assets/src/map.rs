@@ -30,6 +30,7 @@ use source_formats::entities::MapEntity;
 use source_formats::lightmap::LightmapAtlas;
 use source_formats::props::{PropKind, PropPlacement};
 use source_formats::skybox::{self, Cubemap};
+use source_formats::visibility::Visibility;
 use source_formats::vmt;
 use source_formats::vtf::{self, DecodedTexture};
 use thiserror::Error;
@@ -49,6 +50,19 @@ pub struct MapMesh {
     pub material: String,
     /// Handle to the sub-mesh built for this material.
     pub mesh: Handle<Mesh>,
+    /// The visibility clusters its faces lie in; empty: always drawn.
+    pub clusters: Vec<u16>,
+    /// Whether it is part of the 3D skybox.
+    pub skybox: bool,
+}
+
+/// The 3D skybox's camera, in Bevy space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkyCameraData {
+    /// Where the skybox's miniature of the map's centre is, metres.
+    pub origin: Vec3,
+    /// How many times smaller than the map the skybox is.
+    pub scale: f32,
 }
 
 /// A player spawn point, in Bevy space for rendering and in Source space for
@@ -102,6 +116,8 @@ pub struct PlacedProp {
     pub vertex_lighting: Option<String>,
     /// The placement in Source space, for the simulation.
     pub source: PropPlacement,
+    /// Whether it stands in the 3D skybox.
+    pub skybox: bool,
 }
 
 /// The map's ambient light as an irradiance volume, placed over the world.
@@ -141,6 +157,10 @@ pub struct MapAsset {
     /// What players collide with, in Source space; `None` if it could not be
     /// read (the map is then only viewable, not playable).
     pub collision: Option<Arc<MapCollision>>,
+    /// What can be seen from where, if the map has visibility data.
+    pub visibility: Option<Arc<Visibility>>,
+    /// The 3D skybox's camera, if the map has one.
+    pub sky_camera: Option<SkyCameraData>,
     /// Every entity of the map, Source space, for the simulation to
     /// interpret (pickups, hazards).
     pub entities: Arc<[MapEntity]>,
@@ -162,6 +182,8 @@ impl Default for MapAsset {
             irradiance: None,
             lighting: None,
             collision: None,
+            visibility: None,
+            sky_camera: None,
             entities: Arc::new([]),
             center: Vec3::ZERO,
             radius: 1.0,
@@ -281,10 +303,19 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
         spawns,
         lightmap,
         skybox: None,
-        props: geometry.props.iter().map(placed_prop).collect(),
+        props: geometry
+            .props
+            .iter()
+            .map(|prop| placed_prop(prop, in_skybox(geometry, prop.origin)))
+            .collect(),
         irradiance,
         lighting: geometry.ambient.clone().map(Arc::new),
         collision: None,
+        visibility: geometry.visibility.clone().map(Arc::new),
+        sky_camera: geometry.sky_camera.map(|camera| SkyCameraData {
+            origin: coords::position(camera.origin),
+            scale: camera.scale,
+        }),
         entities: geometry.entities.clone().into(),
         center,
         radius: radius.max(1.0),
@@ -304,6 +335,8 @@ fn add_meshes(
         .map(|(index, surface)| MapMesh {
             material: surface.material.clone(),
             mesh: load_context.add_labeled_asset(format!("{prefix}{index}"), mesh_of(surface)),
+            clusters: surface.clusters.clone(),
+            skybox: surface.skybox,
         })
         .collect()
 }
@@ -325,8 +358,18 @@ fn brush_entity(
     }
 }
 
+/// Whether `point` (Source space) lies in the map's 3D skybox.
+fn in_skybox(geometry: &MapGeometry, point: [f32; 3]) -> bool {
+    let sky = geometry.sky_camera.and_then(|camera| camera.area);
+    let area = geometry
+        .visibility
+        .as_ref()
+        .and_then(|visibility| visibility.area_at(point));
+    sky.is_some() && area == sky
+}
+
 /// Converts a Source-space placement into a [`PlacedProp`].
-fn placed_prop(prop: &PropPlacement) -> PlacedProp {
+fn placed_prop(prop: &PropPlacement, skybox: bool) -> PlacedProp {
     PlacedProp {
         model: format!("{SOURCE}://{}", prop.model),
         translation: coords::position(prop.origin),
@@ -339,6 +382,7 @@ fn placed_prop(prop: &PropPlacement) -> PlacedProp {
             .as_ref()
             .map(|path| format!("{SOURCE}://{path}")),
         source: prop.clone(),
+        skybox,
     }
 }
 
@@ -479,6 +523,8 @@ mod tests {
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
             lightmap_uvs: Vec::new(),
             blend: vec![0.0; 3],
+            clusters: Vec::new(),
+            skybox: false,
         };
         let mesh = mesh_of(&surface);
         assert_eq!(mesh.count_vertices(), 3);
@@ -507,20 +553,24 @@ mod tests {
 
     #[test]
     fn placements_become_bevy_space_props() {
-        let prop = placed_prop(&PropPlacement {
-            model: "models/props_c17/oildrum001.mdl".to_owned(),
-            origin: [64.0, 0.0, 0.0],
-            angles: [0.0, 90.0, 0.0],
-            skin: 1,
-            scale: 2.0,
-            kind: PropKind::Physics,
-            static_index: None,
-            vertex_lighting: None,
-            lighting_origin: None,
-            solid: PropSolid::Hull,
-            spawnflags: 0,
-            mass_scale: 1.0,
-        });
+        let prop = placed_prop(
+            &PropPlacement {
+                model: "models/props_c17/oildrum001.mdl".to_owned(),
+                origin: [64.0, 0.0, 0.0],
+                angles: [0.0, 90.0, 0.0],
+                skin: 1,
+                scale: 2.0,
+                kind: PropKind::Physics,
+                static_index: None,
+                vertex_lighting: None,
+                lighting_origin: None,
+                solid: PropSolid::Hull,
+                spawnflags: 0,
+                mass_scale: 1.0,
+            },
+            true,
+        );
+        assert!(prop.skybox);
         assert_eq!(prop.model, "source://models/props_c17/oildrum001.mdl");
         assert_eq!(prop.translation, coords::position([64.0, 0.0, 0.0]));
         // Yaw 90° turns the model's forward (+X) to Source +Y, Bevy -Z.
