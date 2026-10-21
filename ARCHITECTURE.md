@@ -73,8 +73,8 @@ its connection's replica holds.
    materials have no specular (reflectance 0) and the camera does no
    tone-mapping.
 
-The client is a state machine (`AppState::Browser` / `Connecting` /
-`InGame`); everything a map creates is torn down on leaving it, so maps can
+The client is a state machine (`AppState::MainMenu` / `Connecting` /
+`InGame` / `ChangingMap`); everything a map creates is torn down on leaving it, so maps can
 be switched freely.
 
 ## Props, brush entities and model lighting (M2)
@@ -179,7 +179,7 @@ See [docs/physics.md](docs/physics.md).
 4. **The client** sends weapon choices and reload with each command, draws
    pickups, projectiles and other players from the simulation (`actors`),
    effects from the tick's events (`effects`, with sprites since M7) and
-   the HUD laid out by `hud.ron` (`hud`).
+   the HUD, drawn with the UI theme and tuned by `hud.ron` (`hud`).
 
 See [docs/combat.md](docs/combat.md).
 

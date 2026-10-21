@@ -175,10 +175,8 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         app.insert_resource(script);
     }
     if options.log_fps {
-        app.add_plugins((
-            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
-            bevy::diagnostic::LogDiagnosticsPlugin::default(),
-        ));
+        // The HUD's plugin already measures frame times.
+        app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
     }
     if let Some(capture) = options.capture {
         app.add_plugins(CapturePlugin(capture));

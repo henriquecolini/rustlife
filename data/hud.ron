@@ -1,28 +1,14 @@
-// The HUD's layout and style, read by `rl_client::hud`.
+// The HUD's tunables, read by `rl_client::hud`. How the HUD looks (fonts,
+// colours, layout) is the client's theme, not data.
 //
-// Elements are placed from a screen anchor (TopLeft, Top, TopRight, Left,
-// Center, Right, BottomLeft, Bottom, BottomRight), offset in logical pixels
-// towards the centre. Colours are sRGB with alpha, channels 0..1.
+// Colours are sRGB with alpha, channels 0..1.
 Hud(
-    font_size: 34.0,
-    small_font_size: 16.0,
-    colors: (
-        text: (0.93, 0.86, 0.62, 0.95),
-        warning: (1.0, 0.32, 0.22, 1.0),
-        highlight: (1.0, 0.97, 0.85, 1.0),
-        panel: (0.0, 0.0, 0.0, 0.38),
-    ),
+    // Health at or below this is shown as a warning.
     low_health: 25.0,
     crosshair: (length: 7.0, thickness: 2.0, gap: 4.0, color: (1.0, 1.0, 1.0, 0.85)),
-    health: (anchor: BottomLeft, offset: (24.0, 24.0)),
-    armor: (anchor: BottomLeft, offset: (190.0, 24.0)),
-    ammo: (anchor: BottomRight, offset: (24.0, 24.0)),
-    weapons: (anchor: TopLeft, offset: (24.0, 24.0)),
     kill_feed: (
-        place: (anchor: TopRight, offset: (24.0, 24.0)),
+        // Most kills listed, and how long each stays.
         lines: 5,
         seconds: 6.0,
     ),
-    score: (anchor: Top, offset: (0.0, 18.0)),
-    messages: (anchor: Center, offset: (0.0, 90.0)),
 )

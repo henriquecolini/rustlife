@@ -180,13 +180,18 @@ An emptied server forgets the match and goes back to waiting.
 
 ## The HUD
 
-`hud.ron` places each element by a screen anchor and an offset: health and
-armor, the ammo of the weapon in hand (clip / carried, plus the carried
-rounds of a secondary fire with its own ammo), the carried weapons by slot,
-points and the clock, the kill feed, and messages (who killed you, the
-respawn countdown, pickups, the match result). The crosshair turns to the
-warning colour when your shot lands, the screen flashes red when you are
-hurt, and `Tab` shows the scoreboard (always shown between matches).
+The HUD is drawn with the client's UI theme (see [presentation.md](presentation.md)):
+health and armor with bars that drain behind a pale ghost of what was lost,
+the ammo of the weapon in hand (clip, carried rounds and the carried rounds of
+a secondary fire with its own ammo), the strip of carried weapons, your
+points and the clock with the match phase (waiting for players, the
+countdown), the kill feed, and a message in the middle (who killed you, the
+respawn countdown, the match result). The screen edges glow red when you are
+hurt and the crosshair turns red when your shot lands. The scoreboard shows
+while the scoreboard key (`Tab`) is held and between matches, when it is
+joined by the vote for the next map (click a map, or press its number).
+`hud.ron` holds only the tunables: when health counts as low, the crosshair
+and the kill feed's length and duration.
 
 Muzzle flashes, tracers, sparks and explosions are drawn with the game's
 own sprites (`effects.ron`, see [presentation.md](presentation.md)).

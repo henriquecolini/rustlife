@@ -26,7 +26,7 @@ use rl_level::maps::MapEntry;
 
 use crate::camera::CursorGrab;
 use crate::content::Content;
-use crate::net::{NetSettings, NetStatus};
+use crate::net::{Game, NetSettings, NetStatus};
 use crate::ui::{Curtain, Fonts, theme};
 use crate::{AppState, GameVfs};
 
@@ -339,13 +339,18 @@ fn sync_cursor(
     menu: Res<Menu>,
     state: Res<State<AppState>>,
     grab: Option<Res<CursorGrab>>,
+    game: Game,
     mut cursor: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     let Ok(mut options) = cursor.single_mut() else {
         return;
     };
-    let want_grab =
-        *state.get() == AppState::InGame && !menu.is_open() && grab.is_none_or(|grab| grab.0);
+    // Between matches nobody moves, and the players vote with the mouse.
+    let between_matches = game.sim().is_some_and(|sim| sim.game().intermission());
+    let want_grab = *state.get() == AppState::InGame
+        && !menu.is_open()
+        && !between_matches
+        && grab.is_none_or(|grab| grab.0);
     let grabbed = options.grab_mode != CursorGrabMode::None;
     if want_grab != grabbed {
         options.grab_mode = if want_grab {

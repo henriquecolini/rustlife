@@ -71,11 +71,15 @@ port, the player limit, the match length and the respawn delay.
 ## Running
 
 ```sh
-cargo run --release -p rustlife                          # opens the map browser
-cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map
+cargo run --release -p rustlife                          # the main menu
+cargo run --release -p rustlife -- --map dm_lockdown     # straight into a map (a developer shortcut)
 ```
 
-In the map browser, click a map to load it. In a map you play a
+The main menu is how players start: **Play** (pick a map to host, optionally
+open to others), **Join a server**, **Mounted games** (which Source games
+supply content, and where they are) and **Settings** (video, audio, controls
+with rebindable keys, your name). `Esc` in a game opens the pause menu; the
+match keeps running behind it. In a map you play a
 free-for-all deathmatch from a spawn point, with Source-style movement
 ([docs/movement.md](docs/movement.md)), rustlife's own arsenal and pickups
 ([docs/combat.md](docs/combat.md)) and the Manipulator, a tool that grabs
@@ -86,7 +90,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Mouse | Look |
 | W A S D | Move |
 | Space | Jump (swim up in water) |
-| Left Ctrl / C | Crouch |
+| Left Ctrl | Crouch |
 | Left Shift | Walk |
 | E | Use: press a button, open a door, draw from a wall charger; grab or let go of a ladder |
 | Left / right mouse | Primary / secondary fire |
@@ -97,10 +101,12 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Right mouse (Manipulator) | Grab a prop (hold to pull a distant one in); press again to drop it |
 | Left mouse (Manipulator) | Throw the held prop, or punt the one under the crosshair |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
-| Esc | Free or recapture the mouse |
-| M | Back to the map browser |
+| Esc | Pause menu: resume, settings, leave the match |
+| 1 – 4 | Vote for the next map while the scoreboard is up |
 
-Every game runs on a server. Playing a map from the browser or with
+Keys are the defaults; rebind them in Settings.
+
+Every game runs on a server. Playing a map from the menu or with
 `--map` hosts it in-process; to play with others:
 
 ```sh

@@ -31,7 +31,7 @@
 //! | `entity_map.ron` | [`EntityMapConfig`] | Map entity classes → rustlife pickups. |
 //! | `player.ron` | [`PlayerConfig`] | Health, armor, player models. |
 //! | `rules/deathmatch.ron` | [`RulesConfig`] | Limits, respawning, loadout, fall damage. |
-//! | `hud.ron` | [`HudConfig`] | HUD layout and colours. |
+//! | `hud.ron` | [`HudConfig`] | HUD tunables. |
 //! | `net.ron` | [`NetConfig`] | Ports, snapshot rate, interpolation, lag compensation. |
 //! | `map_logic.ron` | [`MapLogicConfig`] | Using doors and buttons, map explosions, the event budget. |
 //! | `sounds.ron` | [`SoundsConfig`] | Footsteps, deaths, explosions, impacts, breakage, buttons. |
@@ -67,7 +67,7 @@ pub use effects::{
     EffectsConfig, ExplosionEffectConfig, MuzzleFlashConfig, SpriteEffectConfig, TracerConfig,
 };
 pub use entity_map::{EntityMapConfig, MappedEntity};
-pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
+pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};
 pub use items::{ITEM_SOUNDS, ItemConfig, ItemEffect, StationConfig};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use map_logic::{MapExplosionConfig, MapLogicConfig};

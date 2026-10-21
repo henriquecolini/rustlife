@@ -60,9 +60,9 @@ impl Look {
                 pressed: theme::CONTROL_PRESSED,
             },
             ButtonStyle::Danger => Self {
-                idle: theme::DANGER.with_alpha(0.16),
-                hover: theme::DANGER.with_alpha(0.34),
-                pressed: theme::DANGER.with_alpha(0.12),
+                idle: theme::DANGER.with_alpha(0.09),
+                hover: theme::DANGER.with_alpha(0.2),
+                pressed: theme::DANGER.with_alpha(0.06),
             },
             ButtonStyle::Ghost => Self {
                 idle: Color::NONE,
