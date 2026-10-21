@@ -57,8 +57,8 @@ const GROUP_DEBRIS: Group = Group::GROUP_3;
 /// Players' kinematic boxes.
 const GROUP_PLAYER: Group = Group::GROUP_4;
 
-/// Squared distance and angle below which a body has not moved since its
-/// clip planes were last built.
+/// Squared distance below which a body has not moved since its clip planes
+/// were last built.
 const MOVED_EPSILON: f32 = 1e-8;
 
 /// A body in the [`PhysicsWorld`]: a prop or a player's box.
@@ -638,9 +638,14 @@ fn piece_at(hull: ConvexHull, pose: &Pose) -> Piece {
 }
 
 /// Whether two poses differ.
+///
+/// Rotations are compared exactly: a body at rest (fixed, or asleep) keeps
+/// its pose bit for bit, while any tolerance on the dot product of two
+/// rotations would drown in `f32` rounding (`1.0 - 1e-8` *is* `1.0`), so
+/// every rotated prop whose rotation is not exactly unit length would seem
+/// to move every tick and have its planes rebuilt for nothing.
 fn moved(a: &Pose, b: &Pose) -> bool {
-    a.translation.distance_squared(b.translation) > MOVED_EPSILON
-        || a.rotation.dot(b.rotation).abs() < 1.0 - MOVED_EPSILON
+    a.translation.distance_squared(b.translation) > MOVED_EPSILON || a.rotation != b.rotation
 }
 
 /// The interaction groups of a collider in `group`: who it collides with.
@@ -674,5 +679,31 @@ pub(crate) mod testing {
     /// The built-in physics data.
     pub(crate) fn physics_config() -> PhysicsConfig {
         GameData::builtin().expect("builtin data").physics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pose_at_rest_has_not_moved() {
+        // Not exactly unit length, as rotations built from a map's angles
+        // often are: its dot product with itself rounds below 1.
+        let rotation = Quat::from_xyzw(0.5, 0.5, 0.5, 0.499_999_9);
+        assert!(rotation.dot(rotation) < 1.0);
+        let pose = Pose::from_parts(Vec3::new(10.0, -4.0, 2.0), rotation);
+        assert!(!moved(&pose, &pose));
+    }
+
+    #[test]
+    fn moving_or_turning_at_all_is_moving() {
+        let pose = Pose::from_parts(Vec3::ZERO, Quat::IDENTITY);
+        let slid = Pose::from_parts(Vec3::new(0.01, 0.0, 0.0), Quat::IDENTITY);
+        let turned = Pose::from_parts(Vec3::ZERO, Quat::from_rotation_z(1e-3));
+        let crept = Pose::from_parts(Vec3::new(1e-5, 0.0, 0.0), Quat::IDENTITY);
+        assert!(moved(&pose, &slid));
+        assert!(moved(&pose, &turned));
+        assert!(!moved(&pose, &crept));
     }
 }
