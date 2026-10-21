@@ -98,8 +98,8 @@ middle (`model_center`) laid on the body's, so it is drawn where it collides.
 
 The throw is the *player's* action, not the weapon's: a fire mode with
 `on_release` is **primed** while its button is held (the weapon is in
-`Phase::Priming`: the arm is drawn back, nothing is used up, the weapon
-cannot be put away) and goes off when the button is let go, from where the
+`Phase::Priming`: the arm is drawn back, nothing is used up; switching
+away cancels the throw) and goes off when the button is let go, from where the
 player then looks. Primary throws overhand (`speed`, `lift`); secondary,
 whose body is `rolled`, sets the grenade down at the feet and sends it along
 the floor on its side at the flat view's heading, turning as it goes: a
