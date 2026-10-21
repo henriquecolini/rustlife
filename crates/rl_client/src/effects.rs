@@ -9,7 +9,7 @@
 //! - a **tracer** flying from the muzzle to where each bullet stopped, a
 //!   streak turned about its line to face the camera;
 //! - **sparks** where a bullet or swing strikes anything but a player;
-//! - an **explosion**'s fireball, played through the sprite's frames once.
+//! - an **explosion**, which [`crate::particles`] draws.
 //!
 //! A sprite's frames lie side by side in one image (see
 //! [`rl_assets::SpriteAsset`]); a material shows one by shifting its
@@ -21,9 +21,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
-use rl_data::{
-    EffectsConfig, ExplosionEffectConfig, MuzzleFlashConfig, Shot, SpriteEffectConfig, TracerConfig,
-};
+use rl_data::{EffectsConfig, MuzzleFlashConfig, Shot, SpriteEffectConfig, TracerConfig};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::view_direction;
 use rl_sim::rng::Rng;
@@ -35,6 +33,7 @@ use crate::actors::PlayerView;
 use crate::animation::Attachment;
 use crate::camera::FlyCam;
 use crate::net::Game;
+use crate::particles::Blast;
 use crate::player::{LocalPlayer, Ticked};
 use crate::viewmodel::{VIEW_FOV_DEGREES, VIEW_LAYER, ViewModel};
 use crate::world::MapScoped;
@@ -61,7 +60,6 @@ impl Plugin for EffectsPlugin {
                 load_sprites,
                 spawn_effects,
                 fly_tracers,
-                play_sprites,
                 follow_attachments,
                 face_camera,
                 expire,
@@ -111,18 +109,6 @@ impl Sprites {
         self.materials.insert(name.to_owned(), material.clone());
         Some(material)
     }
-
-    /// A material of its own for sprite `name`, to play its frames, with
-    /// how many there are.
-    fn animated(
-        &self,
-        name: &str,
-        sprites: &Assets<SpriteAsset>,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Option<(Handle<StandardMaterial>, u32)> {
-        let sprite = sprites.get(self.handles.get(name)?)?;
-        Some((materials.add(sprite_material(sprite)), sprite.frames))
-    }
 }
 
 /// How a sprite is drawn: unlit, both sides, added to what is behind it or
@@ -169,15 +155,6 @@ struct FacesCamera {
 #[derive(Component)]
 struct AtAttachment(Entity);
 
-/// A sprite playing through its frames once.
-#[derive(Component)]
-struct Playing {
-    born: f32,
-    fps: f32,
-    frames: u32,
-    material: Handle<StandardMaterial>,
-}
-
 /// A tracer in flight, metres.
 #[derive(Component)]
 struct Tracer {
@@ -219,11 +196,7 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
         .muzzle_flash
         .sprites
         .iter()
-        .chain([
-            &effects.tracer.sprite,
-            &effects.impact.sprite,
-            &effects.explosion.sprite,
-        ])
+        .chain([&effects.tracer.sprite, &effects.impact.sprite])
         .map(String::as_str)
 }
 
@@ -438,36 +411,6 @@ impl Painter<'_, '_> {
             FacesCamera { roll },
         ));
     }
-
-    /// A blast's fireball at `at`, of `radius` units.
-    fn explosion(
-        &mut self,
-        quad: &Handle<Mesh>,
-        blast: &ExplosionEffectConfig,
-        at: Vec3,
-        radius: f32,
-    ) {
-        let Some((material, frames)) =
-            self.sprites
-                .animated(&blast.sprite, &self.sprite_assets, &mut self.materials)
-        else {
-            return;
-        };
-        let size = Vec2::splat(radius * blast.size_per_radius * coords::METERS_PER_UNIT);
-        let at = at + Vec3::Y * size.y * blast.rise;
-        let now = self.time.elapsed_secs();
-        let until = now + frames.max(1) as f32 / blast.fps;
-        self.commands.spawn((
-            quad_bundle(quad, material.clone(), at, size, until),
-            FacesCamera { roll: 0.0 },
-            Playing {
-                born: now,
-                fps: blast.fps,
-                frames,
-                material,
-            },
-        ));
-    }
 }
 
 /// Whether a weapon fires bullets (some fire mode of it is hitscan).
@@ -484,6 +427,7 @@ fn spawn_effects(
     mut ticks: MessageReader<Ticked>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
+    mut blasts: MessageWriter<Blast>,
     mut painter: Painter,
     scene: Scene,
 ) {
@@ -525,8 +469,10 @@ fn spawn_effects(
             }
         }
         for explosion in &events.explosions {
-            let at = coords::position(explosion.position.to_array());
-            painter.explosion(&quad, &effects.explosion, at, explosion.radius);
+            blasts.write(Blast {
+                at: coords::position(explosion.position.to_array()),
+                radius: explosion.radius,
+            });
         }
     }
 }
@@ -572,25 +518,6 @@ fn tracer_pose(tracer: &Tracer, eye: Vec3) -> Option<(Vec3, Quat, f32)> {
     let side = along.cross(facing);
     let rotation = Quat::from_mat3(&Mat3::from_cols(side, along, facing));
     Some((middle, rotation, head - tail))
-}
-
-/// Plays animated sprites' frames.
-fn play_sprites(
-    time: Res<Time>,
-    playing: Query<&Playing>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let now = time.elapsed_secs();
-    for sprite in &playing {
-        let frame =
-            (((now - sprite.born) * sprite.fps) as u32).min(sprite.frames.saturating_sub(1));
-        let uv = frame_uv(frame, sprite.frames);
-        if let Some(mut material) = materials.get_mut(&sprite.material)
-            && material.uv_transform != uv
-        {
-            material.uv_transform = uv;
-        }
-    }
 }
 
 /// Keeps muzzle flashes on their guns.
@@ -683,6 +610,5 @@ mod tests {
         let data = rl_data::GameData::builtin().expect("builtin data");
         let names: Vec<&str> = sprite_names(&data.effects).collect();
         assert!(names.contains(&"effects/muzzleflash1"));
-        assert!(names.contains(&data.effects.explosion.sprite.as_str()));
     }
 }

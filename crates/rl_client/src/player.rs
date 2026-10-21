@@ -434,6 +434,8 @@ fn place_camera(
     game: Game,
     angles: Res<ViewAngles>,
     movement: Res<Movement>,
+    shake: Res<crate::particles::Shake>,
+    clock: Res<Time>,
     mut camera: Query<&mut Transform, With<FlyCam>>,
 ) {
     let (Some(player), Ok(mut transform)) = (player, camera.single_mut()) else {
@@ -458,7 +460,7 @@ fn place_camera(
     };
     let position = eye(&player.previous).lerp(eye(&player.current), alpha) + error;
     transform.translation = coords::position(position.to_array());
-    transform.rotation = view_rotation(*angles);
+    transform.rotation = view_rotation(*angles) * shake.rotation(clock.elapsed_secs());
 }
 
 /// The camera rotation for Source view angles.

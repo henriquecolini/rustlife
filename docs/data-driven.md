@@ -27,7 +27,7 @@ through adding a weapon and an item. How the game then uses them is in
 | `net.ron` | Port, snapshot rate, interpolation delay, command redundancy and backlog, lag-compensation window ([netcode.md](netcode.md)) |
 | `map_logic.ron` | Use range, wall chargers' aim cone, map explosions, the per-tick event cap ([map-logic.md](map-logic.md)) |
 | `sounds.ron` | Footsteps, landings, deaths, explosions, impacts, breakables, buttons ([presentation.md](presentation.md)) |
-| `effects.ron` | Muzzle flash, tracer, spark and explosion sprites ([presentation.md](presentation.md)) |
+| `effects.ron` | Muzzle flash, tracer and spark sprites, and how explosions are drawn ([presentation.md](presentation.md)) |
 
 Every file documents its fields in comments, and every type in `rl_data`
 documents them in Rust.

@@ -23,13 +23,20 @@ Effects(
         size: 10.0,
         duration: 0.12,
     ),
-    // A blast's fireball, played through its frames once, its size a
-    // share of the blast's radius, its centre lifted by a share of its size
-    // (fireballs rise, and the floor would cut one centred on it in half).
+    // A blast, drawn as particles the game makes itself: a fireball of
+    // overlapping puffs (its size a share of the blast's radius, its centre
+    // lifted by a share of its size, since fireballs rise and the floor
+    // would cut one centred on it in half), smoke, sparks and a shockwave.
+    // The view shakes for those near it, `shake` right at the blast down to
+    // nothing at three times its radius.
     explosion: (
-        sprite: "sprites/zerogxplode",
-        fps: 20.0,
         size_per_radius: 0.8,
         rise: 0.35,
+        fireballs: 9,
+        smoke: 12,
+        sparks: 28,
+        duration: 0.8,
+        smoke_duration: 3.5,
+        shake: 0.7,
     ),
 )

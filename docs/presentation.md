@@ -123,14 +123,27 @@ coverage, so fine holes stay smooth rather than shimmering.
 ## Effects
 
 Combat effects draw the game's own sprite materials, named in
-`effects.ron`, on quads facing the camera:
+`effects.ron`, on quads facing the camera (explosions excepted):
 
 | Effect | When | Drawn |
 |--------|------|-------|
 | Muzzle flash | a gun fires | one of `muzzle_flash.sprites` at random, briefly, rolled at random, at the gun's `muzzle` attachment: the view model's for the local player (on the view model's layer), the held world model's for others |
 | Tracer | a bullet flies | a streak of `tracer.length` flying at `tracer.speed` from the muzzle to where the bullet stopped, turned about its line to face the camera |
 | Sparks | a bullet or swing strikes the map or a prop | the `impact` sprite just off the surface |
-| Explosion | something blows up | the `explosion` sprite played through its frames at `fps`, sized by the blast's radius and lifted by `rise` |
+| Explosion | something blows up | particles the game makes itself (below) |
+
+### Explosions
+
+An explosion uses no mounted-game content. `rl_client::particles` makes the
+textures itself (a ragged puff, a bright dot, a thin ring) and draws a blast
+as quads facing the camera whose size and colour change over their life: a
+white flash, an expanding shockwave ring, a fireball of overlapping puffs
+and sparks that fly, fall and bounce off the map are added to what is
+behind them; smoke is blended over it and rises as it thins. The view also
+shakes for anyone near, fading to nothing at three times the blast's
+radius. `effects.ron`'s `explosion` sets the fireball's size (a share of the
+radius) and lift, how many puffs of each kind, how long fire and smoke
+last, and how hard the shake is. At most 700 particles live at once.
 
 `rl_assets::SpriteLoader` loads a sprite material with every frame of its
 texture, laid side by side in one image, and whether it adds its colour to

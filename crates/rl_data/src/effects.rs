@@ -23,6 +23,9 @@ pub struct EffectsConfig {
     pub explosion: ExplosionEffectConfig,
 }
 
+/// Most particles of one kind an explosion may ask for.
+const MAX_PARTICLES: u32 = 200;
+
 /// A muzzle flash: one of several sprites, briefly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -63,20 +66,31 @@ pub struct SpriteEffectConfig {
     pub duration: f32,
 }
 
-/// An explosion: an animated sprite, sized by the blast.
+/// An explosion, drawn as particles the client makes itself: a flash, a
+/// fireball of overlapping puffs, rising smoke, flying sparks and a
+/// shockwave, with a shake of the view for those nearby.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExplosionEffectConfig {
-    /// The sprite, played through its frames once.
-    pub sprite: String,
-    /// Frames per second.
-    pub fps: f32,
-    /// The sprite's size as a share of the blast's radius.
+    /// The fireball's size as a share of the blast's radius.
     pub size_per_radius: f32,
     /// How far above the blast its centre is drawn, as a share of its size:
-    /// fireballs rise, and a sprite centred on a blast on the floor would
-    /// be cut in half by it.
+    /// fireballs rise, and one centred on a blast on the floor would be
+    /// cut in half by it.
     pub rise: f32,
+    /// Puffs of fire.
+    pub fireballs: u32,
+    /// Puffs of smoke.
+    pub smoke: u32,
+    /// Sparks thrown out.
+    pub sparks: u32,
+    /// Seconds the fireball burns.
+    pub duration: f32,
+    /// Seconds the smoke lingers.
+    pub smoke_duration: f32,
+    /// How hard the view shakes right at the blast, `0..=1`. It fades
+    /// with distance, reaching nothing at three times the blast's radius.
+    pub shake: f32,
 }
 
 impl EffectsConfig {
@@ -103,11 +117,20 @@ impl EffectsConfig {
         named(check, "impact.sprite", &self.impact.sprite);
         check.positive("impact.size", self.impact.size);
         check.positive("impact.duration", self.impact.duration);
-        named(check, "explosion.sprite", &self.explosion.sprite);
-        check.positive("explosion.fps", self.explosion.fps);
-        check.positive("explosion.size_per_radius", self.explosion.size_per_radius);
-        if !(0.0..=1.0).contains(&self.explosion.rise) {
-            check.fail("explosion.rise", "must be within 0..=1");
+        let blast = &self.explosion;
+        check.positive("explosion.size_per_radius", blast.size_per_radius);
+        check.range("explosion.rise", blast.rise, 0.0, 1.0);
+        check.positive("explosion.duration", blast.duration);
+        check.positive("explosion.smoke_duration", blast.smoke_duration);
+        check.range("explosion.shake", blast.shake, 0.0, 1.0);
+        for (field, count) in [
+            ("explosion.fireballs", blast.fireballs),
+            ("explosion.smoke", blast.smoke),
+            ("explosion.sparks", blast.sparks),
+        ] {
+            if count > MAX_PARTICLES {
+                check.fail(field, &format!("at most {MAX_PARTICLES}"));
+            }
         }
     }
 }
@@ -136,10 +159,14 @@ mod tests {
                 duration: 0.1,
             },
             explosion: ExplosionEffectConfig {
-                sprite: "sprites/zerogxplode".to_owned(),
-                fps: 15.0,
                 size_per_radius: 1.2,
                 rise: 0.3,
+                fireballs: 8,
+                smoke: 10,
+                sparks: 24,
+                duration: 0.9,
+                smoke_duration: 3.0,
+                shake: 0.6,
             },
         }
     }
@@ -157,10 +184,11 @@ mod tests {
         bad.muzzle_flash.sprites.clear();
         bad.tracer.speed = 0.0;
         bad.impact.sprite.clear();
-        bad.explosion.fps = -1.0;
+        bad.explosion.duration = -1.0;
+        bad.explosion.sparks = 5000;
         bad.explosion.rise = 2.0;
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 5);
+        assert_eq!(check.finish().len(), 6);
     }
 }

@@ -51,6 +51,7 @@ pub mod input;
 pub mod menu;
 pub mod movers;
 pub mod net;
+pub mod particles;
 pub mod player;
 pub mod props;
 pub mod script;
@@ -172,7 +173,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         SkyPlugin,
         FogPlugin,
     ));
-    app.add_plugins(debris::DebrisPlugin);
+    app.add_plugins((debris::DebrisPlugin, particles::ParticlesPlugin));
     if let Some(script) = options.script {
         app.insert_resource(script);
     }
