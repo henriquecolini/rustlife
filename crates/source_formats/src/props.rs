@@ -87,6 +87,9 @@ pub struct PropPlacement {
     pub spawnflags: u32,
     /// Multiplier on the model's mass (`massScale`), positive.
     pub mass_scale: f32,
+    /// The entity's `targetname`, by which map logic and constraints name
+    /// it; `None` for static props and unnamed entities.
+    pub name: Option<String>,
 }
 
 impl PropPlacement {
@@ -113,6 +116,7 @@ impl PropPlacement {
             solid: PropSolid::Hull,
             spawnflags: 0,
             mass_scale: 1.0,
+            name: None,
         }
     }
 }
@@ -166,6 +170,7 @@ fn static_props(bsp: &Bsp) -> Vec<PropPlacement> {
                 solid: static_solid(prop.solid),
                 spawnflags: 0,
                 mass_scale: 1.0,
+                name: None,
             })
         })
         .collect()
@@ -216,6 +221,10 @@ fn entity_props(bsp: &Bsp) -> Vec<PropPlacement> {
                     .unwrap_or(0),
                 // Hammer writes `massScale`; key lookups ignore case.
                 mass_scale: positive("massscale").unwrap_or(1.0),
+                name: entity
+                    .prop("targetname")
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned),
             })
         })
         .collect()

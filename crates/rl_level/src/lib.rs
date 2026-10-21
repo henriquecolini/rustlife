@@ -26,7 +26,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::{GameData, PhysicsConfig};
 use rl_sim::collision::CollisionWorld;
-use rl_sim::physics::{BodyId, PropDesc, prop_desc};
+use rl_sim::physics::{BodyId, PropDesc, map_joints, prop_desc};
 use rl_sim::simulation::{Simulation, Spawn};
 use source_formats::bsp::{self, BspError};
 use source_formats::entities::MapEntity;
@@ -107,18 +107,37 @@ pub struct LevelSimulation {
 
 impl Level {
     /// Builds the level's simulation under `data`: spawn points, the
-    /// entities' pickups and hazards, and every solid prop's body, added in
-    /// placement order so the bodies are numbered alike on every machine.
+    /// entities' pickups and hazards, every solid prop's body, added in
+    /// placement order so the bodies are numbered alike on every machine,
+    /// and the joints the map's constraints hold them by.
     #[must_use]
     pub fn simulation(&self, data: &GameData) -> LevelSimulation {
         let mut simulation = Simulation::new(Arc::clone(&self.world), data);
         simulation.set_spawns(self.spawns.clone());
         simulation.add_entities(&self.entities);
-        let bodies = self
+        let bodies: Vec<Option<BodyId>> = self
             .props
             .iter()
             .map(|prop| prop.desc.as_ref().map(|desc| simulation.add_prop(desc)))
             .collect();
+        let joints = map_joints(&self.entities, |name| {
+            self.props
+                .iter()
+                .zip(&bodies)
+                .find(|(prop, _)| prop.placement.name.as_deref() == Some(name))
+                .and_then(|(_, body)| *body)
+        });
+        for skipped in &joints.skipped {
+            tracing::debug!("constraint left out: {skipped}");
+        }
+        let joined = joints
+            .joints
+            .iter()
+            .filter(|joint| simulation.add_joint(joint))
+            .count();
+        if joined > 0 {
+            tracing::debug!(joined, "joined the map's props");
+        }
         simulation.refresh_props();
         LevelSimulation { simulation, bodies }
     }

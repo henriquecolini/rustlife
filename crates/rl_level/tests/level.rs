@@ -13,6 +13,7 @@ use rl_data::GameData;
 use rl_level::{Level, LevelError, LevelProp, PropModel};
 use rl_sim::collision::WorldBuilder;
 use rl_sim::simulation::Spawn;
+use source_formats::entities::MapEntity;
 use source_formats::phy;
 use source_formats::props::{PropKind, PropPlacement, PropSolid};
 use source_fs::{LooseDirectory, MountOrigin, Vfs};
@@ -100,6 +101,37 @@ fn solid_props_get_bodies_in_placement_order() {
     assert_eq!(physics.mass(first), Some(20.0));
     let pose = physics.pose(first).expect("pose");
     assert_eq!(pose.position, Vec3::new(100.0, 0.0, 0.0));
+}
+
+#[test]
+fn a_named_prop_hangs_on_the_maps_ball_socket() {
+    let data = data();
+    let mut level = level(&data);
+    // Lift the physics crate and name it, as a map names a lamp it hangs.
+    let mut placement = level.props[0].placement.clone();
+    placement.origin = [100.0, 0.0, 200.0];
+    placement.name = Some("lamp_1".to_owned());
+    level.props[0] = LevelProp {
+        desc: crate_model().desc(&placement, &data.physics),
+        placement,
+    };
+    level.entities =
+        vec![MapEntity::new("phys_ballsocket", [100.0, 0.0, 260.0]).with("attach1", "lamp_1")];
+    let mut built = level.simulation(&data);
+    let lamp = built.bodies[0].expect("a body");
+    for _ in 0..300 {
+        built.simulation.tick(&[]);
+    }
+    let hangs = built
+        .simulation
+        .physics()
+        .pose(lamp)
+        .expect("pose")
+        .position;
+    assert!(
+        hangs.distance(Vec3::new(100.0, 0.0, 200.0)) < 1.0,
+        "{hangs}"
+    );
 }
 
 #[test]

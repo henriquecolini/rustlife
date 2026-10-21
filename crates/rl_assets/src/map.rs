@@ -567,6 +567,7 @@ mod tests {
                 solid: PropSolid::Hull,
                 spawnflags: 0,
                 mass_scale: 1.0,
+                name: None,
             },
             true,
         );

@@ -12,6 +12,8 @@
 //! - **Players**, as kinematic boxes the simulation moves to wherever
 //!   movement put them, so props land on and bump into players rather than
 //!   passing through them.
+//! - **Joints** the map's constraints hold props by: lamps hanging from
+//!   the ceiling, hinged props (`joints`).
 //!
 //! Players are not simulated by the physics engine: they move with
 //! rustlife's own Source-like movement, which collides with props through
@@ -41,11 +43,13 @@ use crate::collision::clip::ClipPlane;
 use crate::collision::{CollisionWorld, ConvexHull, Hull};
 
 mod contacts;
+mod joints;
 mod props;
 mod statics;
 mod trace;
 
 pub use contacts::Impact;
+pub use joints::{JointDesc, JointKind, MapJoints, map_joints};
 pub use props::{Motion, PropDesc, prop_desc};
 
 /// The map's static geometry.
@@ -142,6 +146,8 @@ pub struct PhysicsWorld {
     touching: Vec<(BodyId, BodyId)>,
     /// The map's movers' kinematic bodies.
     movers: Vec<statics::MoverBody>,
+    /// The fixed body joints hold props to the world by, once one does.
+    anchor: Option<RigidBodyHandle>,
     config: PhysicsConfig,
 }
 
@@ -179,6 +185,7 @@ impl PhysicsWorld {
             released: Vec::new(),
             touching: Vec::new(),
             movers,
+            anchor: None,
             config: config.clone(),
         }
     }

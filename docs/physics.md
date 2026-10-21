@@ -52,6 +52,30 @@ Dynamic props use continuous collision detection, so a thrown prop does not
 tunnel through thin walls. After each step every prop's speed is clamped to
 `max_speed` and `max_angular_speed`.
 
+### Constraints
+
+Maps hang and hinge props with constraint entities. The lamps of
+`dm_steamlab` and `dm_powerhouse` hang from the ceiling on ball sockets.
+Each constraint joins the props named by its `attach1` and `attach2`
+(their `targetname`). A name that is empty, or that names something other
+than a simulated prop, stands for the world. `Level::simulation` adds them
+as joints once the props have their bodies, so the server and every
+replica hold the same props the same way:
+
+| Entity | Joint |
+|--------|-------|
+| `phys_ballsocket` | the two turn freely about `origin` |
+| `phys_hinge` | they turn only about the line from `origin` to `hingeaxis` |
+| `phys_lengthconstraint` | `origin` on the first and `attachpoint` on the second stay at most their distance plus `addlength` apart |
+| `phys_constraint` | welded as placed |
+
+A joint holds the bodies as the map placed them, and `No collision until
+break` stops the joined pair colliding with each other. Not simulated yet:
+constraints that start inactive, breaking under `forcelimit` /
+`torquelimit`, `phys_motor`, and anything joined to a `func_physbox`
+(which is not simulated at all). Those are logged at debug level when a
+level is built.
+
 ## Players and props
 
 Players are not simulated by rapier. They move with rustlife's own
@@ -181,7 +205,9 @@ the throw. These scripts move the player on the hosted server.
 
 | Test | Covers |
 |------|--------|
-| `rl_sim/tests/physics.rs` | Props settling, sliding off a ramp, blocking and carrying players, pushing light vs heavy props, a falling prop hurting a player once, held props, release without self-hits, debris, rotated props, freeing on grab, speed caps |
+| `rl_sim/tests/physics.rs` | Props settling, sliding off a ramp, blocking and carrying players, pushing light vs heavy props, a falling prop hurting a player once, held props, release without self-hits, debris, rotated props, freeing on grab, speed caps, a lamp hanging on a ball socket and swinging back when hit, a rope's length, joints to missing bodies refused |
+| `rl_sim/src/physics/joints.rs` | Reading ball sockets (attached to the world either way), hinges, length constraints, and what is left out |
+| `rl_level/tests/level.rs` | A named prop hanging on the map's ball socket through `Level::simulation` |
 | `rl_sim/tests/manipulator.rs` | Grabbing within range and mass, pulling, carrying and turning, launching and punting at the configured speeds, dropping, the grip breaking, a thrown prop hurting another player |
 | `rl_sim/tests/simulation.rs` | Spawning clear of props, walking while carrying, repeatable runs |
 | `rl_sim/tests/real_map.rs` | A real map's physics world, with crates dropped at every spawn landing on the floor (`RUSTLIFE_TEST_BSP`) |

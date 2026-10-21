@@ -50,7 +50,7 @@ use crate::combat::{Cause, Damage, Target, Vitals};
 use crate::hazards::{self, Hazard};
 use crate::logic::{LogicState, MapLogic};
 use crate::movement::{Buttons, MoveEvents, PlayerState, UserCmd, simulate};
-use crate::physics::{BodyId, Impact, PhysicsWorld, PropDesc};
+use crate::physics::{BodyId, Impact, JointDesc, PhysicsWorld, PropDesc};
 use crate::pickups::{self, Pickup};
 use crate::rules::{Match, MatchEvent};
 use crate::scene::Scene;
@@ -389,6 +389,13 @@ impl Simulation {
     /// (or [`Simulation::refresh_props`]) on.
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
         self.physics.add_prop(desc)
+    }
+
+    /// Joins props to each other or the world (see
+    /// [`map_joints`](crate::physics::map_joints)). Returns `false` if the
+    /// joint names a body that does not exist.
+    pub fn add_joint(&mut self, joint: &JointDesc) -> bool {
+        self.physics.add_joint(joint)
     }
 
     /// Brings collision up to date with props just added, without

@@ -59,6 +59,12 @@ impl MapEntity {
         self.property(key)?.trim().parse().ok()
     }
 
+    /// Property `key` parsed as a vector, `"x y z"`.
+    #[must_use]
+    pub fn vector(&self, key: &str) -> Option<[f32; 3]> {
+        parse_vector(self.property(key)?)
+    }
+
     /// The BSP model of a brush entity (`model` is `*<n>`).
     #[must_use]
     pub fn brush_model(&self) -> Option<usize> {

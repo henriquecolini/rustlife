@@ -6,7 +6,7 @@ use glam::{Quat, Vec3};
 use rl_data::{GameData, MovementConfig, PhysicsConfig};
 use rl_sim::collision::{ConvexHull, Hull, WorldBuilder, contents};
 use rl_sim::movement::{PlayerState, UserCmd, simulate};
-use rl_sim::physics::{BodyId, Motion, PhysicsWorld, PropDesc};
+use rl_sim::physics::{BodyId, JointDesc, JointKind, Motion, PhysicsWorld, PropDesc};
 use rl_sim::scene::Scene;
 
 /// One 66 Hz tick.
@@ -413,4 +413,86 @@ fn speeds_are_capped() {
     let (linear, angular) = physics.velocity(body).expect("body");
     assert!(linear.length() <= config.max_speed * 1.001);
     assert!(angular.length() <= config.max_angular_speed.to_radians() * 1.001);
+}
+
+/// A ball socket joining `body` to the world at `pivot`.
+fn hung_from(body: BodyId, pivot: Vec3) -> JointDesc {
+    JointDesc {
+        kind: JointKind::Ball,
+        body1: Some(body),
+        body2: None,
+        anchor1: pivot,
+        anchor2: pivot,
+        collide: true,
+    }
+}
+
+#[test]
+fn a_lamp_on_a_ball_socket_hangs_where_the_map_put_it() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let spawn = Vec3::new(0.0, 0.0, 200.0);
+    let lamp = physics.add_prop(&crate_at(spawn, 8.0, 10.0, Motion::Dynamic));
+    let loose = physics.add_prop(&crate_at(
+        Vec3::new(100.0, 0.0, 200.0),
+        8.0,
+        10.0,
+        Motion::Dynamic,
+    ));
+    // Hung by a point above its top, as dm_steamlab's lamps are.
+    assert!(physics.add_joint(&hung_from(lamp, spawn + Vec3::Z * 40.0)));
+    run(&mut physics, 300);
+    assert!(
+        position(&physics, lamp).distance(spawn) < 1.0,
+        "the lamp hangs at {}",
+        position(&physics, lamp)
+    );
+    assert!(position(&physics, loose).z < 1.0, "an unhung one falls");
+}
+
+#[test]
+fn a_hung_lamp_swings_when_hit_and_comes_back() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let spawn = Vec3::new(0.0, 0.0, 200.0);
+    let pivot = spawn + Vec3::Z * 40.0;
+    let lamp = physics.add_prop(&crate_at(spawn, 8.0, 10.0, Motion::Dynamic));
+    assert!(physics.add_joint(&hung_from(lamp, pivot)));
+    physics.push(lamp, Vec3::X, 300.0);
+    run(&mut physics, 10);
+    let swung = position(&physics, lamp);
+    assert!(swung.x.abs() > 2.0, "pushed aside to {swung}");
+    // On its tether: the pivot stays as far from it as it was.
+    assert!((swung.distance(pivot) - 40.0).abs() < 1.0);
+    run(&mut physics, 1200);
+    assert!(position(&physics, lamp).distance(spawn) < 4.0);
+}
+
+#[test]
+fn a_rope_lets_a_prop_fall_only_its_length() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let spawn = Vec3::new(0.0, 0.0, 200.0);
+    let weight = physics.add_prop(&crate_at(spawn, 8.0, 10.0, Motion::Dynamic));
+    let joint = JointDesc {
+        kind: JointKind::Rope { length: 60.0 },
+        body1: Some(weight),
+        body2: None,
+        anchor1: spawn,
+        anchor2: spawn + Vec3::Z * 20.0,
+        collide: true,
+    };
+    assert!(physics.add_joint(&joint));
+    run(&mut physics, 300);
+    let z = position(&physics, weight).z;
+    assert!((z - 160.0).abs() < 2.0, "dangles at z {z}");
+}
+
+#[test]
+fn joints_to_missing_bodies_are_refused() {
+    let world = floor().build();
+    let mut elsewhere = PhysicsWorld::new(&world, &physics_config(), DT);
+    let body = elsewhere.add_prop(&crate_at(Vec3::ZERO, 8.0, 10.0, Motion::Dynamic));
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    assert!(!physics.add_joint(&hung_from(body, Vec3::ZERO)));
 }
