@@ -301,11 +301,15 @@ fn prepare(
     }
 }
 
+/// How far short of a clip's end the last frame is sampled, seconds.
+const CLIP_END_MARGIN: f32 = 1e-3;
+
 /// Carries out every sequence player: advances it and sets its clips'
 /// weights and times in the animation player.
 fn drive(
     time: Res<Time>,
     graphs: Res<Graphs>,
+    clips: Res<Assets<AnimationClip>>,
     mut roots: Query<(&Animated, &mut SequencePlayer, &mut AnimationPlayer)>,
 ) {
     let dt = time.delta_secs();
@@ -328,6 +332,11 @@ fn drive(
         }
         for (clip, weight, at) in wanted {
             if let Some(&node) = model.nodes.get(&clip) {
+                // A clip sought to its very end counts as played out and
+                // snaps to its first frame: stop just short of it.
+                let at = clips.get(clip).map_or(at, |clip| {
+                    at.min((clip.duration() - CLIP_END_MARGIN).max(0.0))
+                });
                 player
                     .play(node)
                     .set_speed(0.0)
