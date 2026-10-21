@@ -323,7 +323,7 @@ fn attach_models(
         // A skeletal model's joints, which its meshes are skinned to.
         let skin = model.animation.as_ref().map(|animation| {
             let joints = spawn_skeleton(&mut commands, entity, animation);
-            commands.entity(entity).insert((
+            commands.entity(entity).try_insert((
                 Animated {
                     model: prop.model.clone(),
                     animation: Arc::clone(animation),

@@ -280,7 +280,9 @@ fn prepare(
                 nodes,
             }
         });
-        commands.entity(entity).insert((
+        // The root may be despawned (a player leaving, a prop going) before
+        // this is applied.
+        commands.entity(entity).try_insert((
             AnimationPlayer::default(),
             AnimationGraphHandle(model.graph.clone()),
         ));
