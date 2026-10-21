@@ -1,0 +1,35 @@
+// What shots and blasts look like, read by the client. Sprites are the
+// mounted game's materials (relative to materials/, without extension),
+// drawn on quads facing the camera. Sizes are units.
+Effects(
+    // A gun going off: one of these at random, briefly, at the muzzle.
+    muzzle_flash: (
+        sprites: ["effects/muzzleflash1", "effects/muzzleflash2", "effects/muzzleflash3"],
+        size: 16.0,
+        // At the view model's muzzle, which is much nearer the eye.
+        view_size: 5.0,
+        duration: 0.05,
+    ),
+    // A streak flying from the gun to where the bullet stopped.
+    tracer: (
+        sprite: "effects/tracer_middle",
+        width: 1.5,
+        length: 140.0,
+        speed: 7000.0,
+    ),
+    // Sparks where a bullet or swing strikes.
+    impact: (
+        sprite: "effects/spark",
+        size: 10.0,
+        duration: 0.12,
+    ),
+    // A blast's fireball, played through its frames once, its size a
+    // share of the blast's radius, its centre lifted by a share of its size
+    // (fireballs rise, and the floor would cut one centred on it in half).
+    explosion: (
+        sprite: "sprites/zerogxplode",
+        fps: 20.0,
+        size_per_radius: 0.8,
+        rise: 0.35,
+    ),
+)

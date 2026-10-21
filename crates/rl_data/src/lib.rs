@@ -35,6 +35,7 @@
 //! | `net.ron` | [`NetConfig`] | Ports, snapshot rate, interpolation, lag compensation. |
 //! | `map_logic.ron` | [`MapLogicConfig`] | Using doors and buttons, map explosions, the event budget. |
 //! | `sounds.ron` | [`SoundsConfig`] | Footsteps, deaths, explosions, impacts, breakage, buttons. |
+//! | `effects.ron` | [`EffectsConfig`] | Muzzle flashes, tracers, impacts, explosions. |
 
 #![forbid(unsafe_code)]
 
@@ -45,6 +46,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 
 pub mod ammo;
+pub mod effects;
 pub mod entity_map;
 pub mod hud;
 pub mod items;
@@ -61,6 +63,9 @@ mod validate;
 pub mod weapons;
 
 pub use ammo::{AmmoConfig, AmmoType};
+pub use effects::{
+    EffectsConfig, ExplosionEffectConfig, MuzzleFlashConfig, SpriteEffectConfig, TracerConfig,
+};
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{Anchor, CrosshairConfig, HudColors, HudConfig, KillFeedConfig, Placement, Rgba};
 pub use items::{ITEM_SOUNDS, ItemConfig, ItemEffect, StationConfig};
@@ -108,6 +113,8 @@ pub const NET_FILE: &str = "net.ron";
 pub const MAP_LOGIC_FILE: &str = "map_logic.ron";
 /// File name of the sound data.
 pub const SOUNDS_FILE: &str = "sounds.ron";
+/// File name of the effects data.
+pub const EFFECTS_FILE: &str = "effects.ron";
 pub use rules::DEATHMATCH_FILE;
 
 /// Pairs each data file's path (relative to `data/`) with its built-in text.
@@ -131,6 +138,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "net.ron",
     "map_logic.ron",
     "sounds.ron",
+    "effects.ron",
     "weapons/bar.ron",
     "weapons/boltcaster.ron",
     "weapons/frag.ron",
@@ -235,6 +243,8 @@ pub struct GameData {
     pub map_logic: MapLogicConfig,
     /// Sounds beyond weapons and items.
     pub sounds: SoundsConfig,
+    /// What shots and blasts look like.
+    pub effects: EffectsConfig,
 }
 
 /// Where data files come from.
@@ -319,6 +329,7 @@ impl GameData {
         put(NET_FILE.to_owned(), ron::to_string(&self.net))?;
         put(MAP_LOGIC_FILE.to_owned(), ron::to_string(&self.map_logic))?;
         put(SOUNDS_FILE.to_owned(), ron::to_string(&self.sounds))?;
+        put(EFFECTS_FILE.to_owned(), ron::to_string(&self.effects))?;
         Ok(files)
     }
 
@@ -339,6 +350,7 @@ impl GameData {
             net: load_file(files, NET_FILE, NetConfig::validate)?,
             map_logic: load_file(files, MAP_LOGIC_FILE, MapLogicConfig::validate)?,
             sounds: load_file(files, SOUNDS_FILE, SoundsConfig::validate)?,
+            effects: load_file(files, EFFECTS_FILE, EffectsConfig::validate)?,
         };
         let problems = data.reference_problems();
         if problems.is_empty() {
