@@ -21,7 +21,10 @@ use rl_sim::scene::Scene;
 use rl_sim::simulation::{PlayerId, Simulation};
 
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 /// A big floor with its top at z = 0.
@@ -103,7 +106,7 @@ fn a_player_who_leaves_gives_their_id_to_the_next() {
 
     let third = sim.spawn_player(Vec3::new(-100.0, 0.0, 1.0));
     assert_eq!(third, first, "the free slot is reused");
-    assert_eq!(sim.game().score(third).frags, 0);
+    assert_eq!(sim.game().score(third).points, 0);
     assert_eq!(sim.players().count(), 2);
     let ids: Vec<PlayerId> = sim.game().scores().map(|(id, _)| id).collect();
     assert_eq!(ids, [first, second]);
@@ -115,6 +118,7 @@ fn several_commands_in_a_tick_move_a_player_several_times() {
     let run = |batches: &[usize]| {
         let mut sim = Simulation::new(floor(), &data);
         let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+        sim.tick(&[]);
         let walk = UserCmd {
             forward: 1.0,
             ..UserCmd::default()
@@ -252,6 +256,9 @@ impl Pair {
             sim.refresh_props();
         }
         let player = server.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+        // The match starts on the first tick, putting the player back at
+        // their spawn.
+        server.tick(&[]);
         let mut pair = Self {
             server,
             client,

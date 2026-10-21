@@ -57,13 +57,15 @@ aside first.
 
 ## Joining
 
-1. The client connects and says **Hello**: protocol version, name, and a
-   hash (`rl_data::content_hash`) of its gameplay data.
+1. The client connects and says **Hello**: protocol version, name, the ids
+   of the games it has mounted, and a hash (`rl_data::content_hash`) of its
+   gameplay data.
 2. The server answers **Welcome**: the map's name, the CRC-32 of its BSP
    and, for a workshop map, the item id. It includes its own gameplay data
    as RON files, unless the client's hash shows it already has the same.
-   The current roster comes too. A client of another protocol version, or
-   one beyond `max_players`, is **Refused** with a reason instead.
+   The current roster comes too. A client of another protocol version,
+   one missing a game the server requires (`ServerConfig::games`), or one
+   beyond `max_players`, is **Refused** with a reason instead.
 3. The client loads the map from its own content. The map file itself is
    never sent: it is Valve's or a workshop author's content. A missing map,
    or one whose checksum differs, ends the attempt with a message naming
@@ -73,6 +75,16 @@ aside first.
 4. The server joins the player into the simulation and sends them
    **Spawned** with their id. Everyone hears **Joined**, and snapshots
    begin.
+
+## Changing map
+
+When a match ends the server opens a vote (**VoteOpen**: up to four maps from
+its pool, never the current one), clients vote with **Vote(index)** and
+everyone hears the running **VoteTally**. When the scoreboard time is up the
+server picks the winner (ties and empty votes are settled at random), loads
+it with its `MapLoader`, replaces the simulation and sends every client a new
+**Welcome**; clients load the map and say **Ready** again, as when joining.
+A map that cannot be loaded leaves the server where it is.
 
 Both sides build the simulation with `rl_level`, which adds the map's
 props in placement order. Every prop therefore has the same `BodyId` on

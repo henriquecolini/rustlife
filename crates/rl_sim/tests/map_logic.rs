@@ -21,7 +21,10 @@ use rl_sim::simulation::{Life, MapEvent, PlayerId, Simulation, TickEvents};
 use source_formats::entities::MapEntity;
 
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 fn entity(classname: &str, origin: Vec3, keys: &[(&str, &str)]) -> MapEntity {
@@ -298,7 +301,9 @@ fn map_logic_switches_a_trap_on() {
         room.sim.player(room.player).expect("player").alive(),
         "off for 1.5 s"
     );
-    room.idle(66);
+    // The map resets as the match starts, so the trap's clock starts a
+    // tick later than the room's, and it doses twice a second.
+    room.idle(100);
     assert!(
         !room.sim.player(room.player).expect("player").alive(),
         "then lethal"

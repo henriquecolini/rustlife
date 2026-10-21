@@ -76,11 +76,25 @@ impl Simulation {
             killer: damage.attacker,
             cause: damage.cause,
         });
-        if let Some(event) = self
-            .game
-            .record_death(victim, damage.attacker, &self.data.rules)
+        let points = self.kill_points(damage);
+        if let Some(event) =
+            self.game
+                .record_death(victim, damage.attacker, points, &self.data.rules)
         {
             self.on_match_event(event, events);
+        }
+    }
+
+    /// What killing with `damage` is worth to the killer, by the rules.
+    fn kill_points(&self, damage: &Damage) -> u32 {
+        let points = &self.data.rules.points;
+        match damage.cause {
+            Cause::Weapon(weapon) => self
+                .arsenal
+                .weapon_name(weapon)
+                .map_or(points.kill, |name| points.for_weapon(name)),
+            Cause::Prop => points.prop,
+            Cause::Fall | Cause::Hazard => points.environment,
         }
     }
 
@@ -198,7 +212,7 @@ impl Simulation {
         for pickup in &mut self.pickups {
             pickup.tick(self.dt);
         }
-        if !self.game.playing() {
+        if self.game.intermission() {
             return;
         }
         self.use_stations(events);
@@ -318,7 +332,7 @@ impl Simulation {
     /// point with the map reset.
     pub(super) fn on_match_event(&mut self, event: MatchEvent, events: &mut TickEvents) {
         events.match_event = Some(event);
-        if event != MatchEvent::Restarted {
+        if !matches!(event, MatchEvent::Started | MatchEvent::Restarted) {
             return;
         }
         self.projectiles.clear();

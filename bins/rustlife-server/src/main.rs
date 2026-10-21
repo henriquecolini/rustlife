@@ -17,6 +17,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -24,7 +25,7 @@ use clap::Parser;
 use rl_config::{ContentArgs, ServerConfig};
 use rl_data::GameData;
 use rl_level::maps::deathmatch_maps;
-use rl_server::{Server, ServerOptions};
+use rl_server::{MapLoader, Server, ServerOptions};
 use source_fs::Vfs;
 use source_fs::content::mount_games;
 use tracing_subscriber::EnvFilter;
@@ -77,7 +78,7 @@ fn main() -> Result<()> {
     let config = ServerConfig::load_or_create(&config_path)?;
     tracing::info!(config = %config_path.display(), name = config.name, "configuration loaded");
 
-    let vfs = Vfs::new();
+    let vfs = Arc::new(Vfs::new());
     mount_configured_games(&vfs, &config, &cli.content)?;
 
     let mut data = GameData::load(cli.data_dir.as_deref())?;
@@ -94,6 +95,12 @@ fn main() -> Result<()> {
         .context("no maps to serve: configure `maps` or mount a game that has some")?;
     let level =
         rl_level::load(&vfs, &map, &data.physics).with_context(|| format!("loading {map}"))?;
+    let loader = {
+        let (vfs, physics) = (Arc::clone(&vfs), data.physics.clone());
+        MapLoader::new(move |name| {
+            rl_level::load(&vfs, name, &physics).map_err(|error| error.to_string())
+        })
+    };
     let port = config.port;
     let tick = Duration::from_secs_f32(data.simulation.tick_interval());
     let mut server = Server::new(
@@ -103,6 +110,8 @@ fn main() -> Result<()> {
             games: config.games.clone(),
             listen: Some(SocketAddr::from((config.bind, port))),
             dummies: cli.dummies,
+            maps,
+            loader: Some(loader),
         },
     )?;
     tracing::info!(map, addresses = ?server.addresses(), "serving");

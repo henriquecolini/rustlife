@@ -80,6 +80,17 @@ pub enum ClientEvent {
     Disconnected(String),
 }
 
+/// The vote for the next map, as the server last described it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Vote {
+    /// The maps to choose from.
+    pub options: Vec<String>,
+    /// Votes so far for each.
+    pub tally: Vec<u16>,
+    /// The option this client voted for.
+    pub chosen: Option<u16>,
+}
+
 /// A client in a map: the replica, prediction and interpolation.
 #[derive(Debug)]
 pub struct Session {
@@ -250,6 +261,7 @@ pub struct NetClient {
     said_hello: bool,
     disconnected: bool,
     roster: BTreeMap<PlayerId, String>,
+    vote: Option<Vote>,
     session: Option<Session>,
     /// What happened, for the owner to show.
     events: Vec<TickEvents>,
@@ -286,6 +298,7 @@ impl NetClient {
             said_hello: false,
             disconnected: false,
             roster: BTreeMap::new(),
+            vote: None,
             session: None,
             events: Vec::new(),
         }
@@ -384,6 +397,7 @@ impl NetClient {
         match message {
             ServerMessage::Welcome(welcome) => {
                 self.roster = welcome.roster.iter().cloned().collect();
+                self.vote = None;
                 out.push(ClientEvent::Welcome(welcome));
             }
             ServerMessage::Refused(reason) => {
@@ -403,6 +417,20 @@ impl NetClient {
                 self.roster.remove(&player);
             }
             ServerMessage::Kill(kill) => kills.push(kill),
+            ServerMessage::VoteOpen { options } => {
+                self.vote = Some(Vote {
+                    tally: vec![0; options.len()],
+                    options,
+                    chosen: None,
+                });
+            }
+            ServerMessage::VoteTally(tally) => {
+                if let Some(vote) = &mut self.vote
+                    && tally.len() == vote.options.len()
+                {
+                    vote.tally = tally;
+                }
+            }
         }
     }
 
@@ -452,6 +480,28 @@ impl NetClient {
     pub fn exchange_local(&mut self, from_server: Vec<Bytes>) -> Option<Vec<Bytes>> {
         self.transport
             .exchange_local(&mut self.renet, from_server, self.now)
+    }
+
+    /// The open vote for the next map, if the match is over.
+    #[must_use]
+    pub fn vote(&self) -> Option<&Vote> {
+        self.vote.as_ref()
+    }
+
+    /// Votes for option `index` of the open vote; the latest vote counts.
+    pub fn cast_vote(&mut self, index: u16) {
+        let Some(vote) = &mut self.vote else {
+            return;
+        };
+        if usize::from(index) >= vote.options.len() {
+            return;
+        }
+        vote.chosen = Some(index);
+        self.send(
+            Channel::Control,
+            protocol::encode(&ClientMessage::Vote(index)),
+        );
+        self.flush();
     }
 
     /// Leaves the server.

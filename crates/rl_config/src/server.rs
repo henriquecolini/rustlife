@@ -24,8 +24,15 @@ const TEMPLATE: &str = r#"// rustlife dedicated server configuration. Every fiel
     bind: "0.0.0.0",
     // Most players at once.
     max_players: 16,
+    // Players needed before a match starts; until then the server waits.
+    min_players: 2,
+    // Countdown before a match, once there are enough players, in seconds.
+    warmup_seconds: 10.0,
     // How long a match lasts, in seconds.
     match_seconds: 600.0,
+    // How long the scoreboard and the vote for the next map stay up after a
+    // match, in seconds.
+    vote_seconds: 20.0,
     // How long a dead player waits before respawning, in seconds.
     respawn_seconds: 1.5,
     // Where the games are installed (see the game's own config for the
@@ -51,8 +58,15 @@ pub struct ServerConfig {
     pub bind: Ipv4Addr,
     /// Most players at once.
     pub max_players: u32,
+    /// Players needed before a match starts.
+    pub min_players: u32,
+    /// Countdown before a match, once there are enough players, in seconds.
+    pub warmup_seconds: f32,
     /// How long a match lasts, in seconds.
     pub match_seconds: f32,
+    /// How long the scoreboard and the vote for the next map stay up after a
+    /// match, in seconds.
+    pub vote_seconds: f32,
     /// How long a dead player waits before respawning, in seconds.
     pub respawn_seconds: f32,
     /// Where the games are installed.
@@ -68,7 +82,10 @@ impl Default for ServerConfig {
             port: 27015,
             bind: Ipv4Addr::UNSPECIFIED,
             max_players: 16,
+            min_players: 2,
+            warmup_seconds: 10.0,
             match_seconds: 600.0,
+            vote_seconds: 20.0,
             respawn_seconds: 1.5,
             content: ContentConfig::default(),
         }
@@ -121,8 +138,13 @@ impl ServerConfig {
     /// is enforced.
     pub fn apply_to(&self, data: &mut GameData) {
         data.net.max_players = self.max_players;
+        data.rules.min_players = self.min_players;
+        data.rules.warmup = self.warmup_seconds;
         data.rules.time_limit = self.match_seconds;
+        data.rules.intermission = self.vote_seconds;
         data.rules.respawn.delay = self.respawn_seconds;
+        // Players are respawned for them no sooner than they may ask.
+        data.rules.respawn.force = data.rules.respawn.force.max(self.respawn_seconds);
     }
 }
 
@@ -168,7 +190,10 @@ mod tests {
         let mut data = GameData::builtin().unwrap();
         let config = ServerConfig {
             max_players: 3,
+            min_players: 3,
+            warmup_seconds: 7.0,
             match_seconds: 90.0,
+            vote_seconds: 12.0,
             respawn_seconds: 4.0,
             ..ServerConfig::default()
         };
@@ -176,5 +201,8 @@ mod tests {
         assert_eq!(data.net.max_players, 3);
         assert!((data.rules.time_limit - 90.0).abs() < f32::EPSILON);
         assert!((data.rules.respawn.delay - 4.0).abs() < f32::EPSILON);
+        assert_eq!(data.rules.min_players, 3);
+        assert!((data.rules.warmup - 7.0).abs() < f32::EPSILON);
+        assert!((data.rules.intermission - 12.0).abs() < f32::EPSILON);
     }
 }

@@ -171,7 +171,7 @@ fn main() -> Result<()> {
     // Logging is set up by Bevy's `LogPlugin`; `RUST_LOG` still applies.
     let mut config = cli.content.load_config()?;
     cli.content.apply(&mut config.content);
-    let data = GameData::load(cli.data_dir.as_deref())?;
+    let mut data = GameData::load(cli.data_dir.as_deref())?;
     let vfs = Arc::new(Vfs::new());
     let content = Content::mount(config, cli.content.config_path(), &vfs);
     let grab_at = cli.grab_prop.then_some(LOAD_SECS);
@@ -205,6 +205,10 @@ fn main() -> Result<()> {
             LOAD_SECS + cli.walk_forward.map_or(0.0, |secs| (secs - 0.2).max(0.0))
         }
     } + cli.wait;
+    if scripted || cli.screenshot.is_some() {
+        // Captures and scripts act at fixed times: no countdown to wait out.
+        data.rules.warmup = 0.0;
+    }
     let capture = cli.screenshot.map(|path| Capture {
         path,
         warmup_secs: shot_secs,

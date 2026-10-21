@@ -22,8 +22,12 @@
 
 #![forbid(unsafe_code)]
 
+mod vote;
+
 use std::collections::{BTreeMap, VecDeque};
+use std::fmt;
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use renet::{ClientId, RenetServer, ServerEvent};
@@ -39,9 +43,13 @@ use rl_net::protocol::{
 use rl_net::snapshot::{self, WorldState};
 use rl_sim::movement::UserCmd;
 use rl_sim::physics::{BodyId, BodyPose};
+use rl_sim::rng::Rng;
+use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
 use source_fs::MountOrigin;
 use thiserror::Error;
+
+use crate::vote::Vote;
 
 /// States sent kept per client, to send later snapshots against.
 const STATES_KEPT: usize = 64;
@@ -87,6 +95,31 @@ pub struct ServerOptions {
     pub listen: Option<SocketAddr>,
     /// Training dummies to add: players who stand still and respawn.
     pub dummies: usize,
+    /// The maps players vote between when a match ends, by name. With none
+    /// (or one) the server replays its map.
+    pub maps: Vec<String>,
+    /// How to load a map by name, to change to the one voted for. Without
+    /// it the server stays on its map.
+    pub loader: Option<MapLoader>,
+}
+
+/// Loads a map by name, with the error to log if it cannot.
+#[derive(Clone)]
+pub struct MapLoader(Arc<LoadFn>);
+
+type LoadFn = dyn Fn(&str) -> Result<Level, String> + Send + Sync;
+
+impl MapLoader {
+    /// A loader running `load`.
+    pub fn new(load: impl Fn(&str) -> Result<Level, String> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(load))
+    }
+}
+
+impl fmt::Debug for MapLoader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MapLoader")
+    }
 }
 
 /// Where a connected client is in joining.
@@ -146,6 +179,20 @@ impl Client {
         }
     }
 
+    /// Forgets the map the client was in: they load the next one and join
+    /// it afresh.
+    fn start_over(&mut self) {
+        self.stage = Stage::Loading;
+        self.commands.clear();
+        self.received = 0;
+        self.ran = 0;
+        self.credits = 0;
+        self.queued = 0;
+        self.acked = None;
+        self.sent.clear();
+        self.events.clear();
+    }
+
     fn player(&self) -> Option<PlayerId> {
         match self.stage {
             Stage::Playing(player) => Some(player),
@@ -165,6 +212,11 @@ pub struct Server {
     data_hash: u64,
     games: Vec<String>,
     map: MapInfo,
+    dummies: usize,
+    maps: Vec<String>,
+    loader: Option<MapLoader>,
+    /// The vote for the next map, while the scoreboard is up.
+    vote: Option<Vote>,
     /// Where the level placed its moving props.
     initial: BTreeMap<BodyId, BodyPose>,
     clients: BTreeMap<ClientId, Client>,
@@ -195,10 +247,6 @@ impl Server {
             .listen
             .map(|addr| udp_transport(addr, &options.data))
             .transpose()?;
-        let workshop = match level.origin {
-            Some(MountOrigin::Workshop { item_id, .. }) => Some(item_id),
-            _ => None,
-        };
         Ok(Self {
             renet: RenetServer::new(protocol::connection_config()),
             netcode,
@@ -206,14 +254,14 @@ impl Server {
             sim: built.simulation,
             data_hash: rl_data::content_hash(&data_files),
             games: options.games,
+            dummies: options.dummies,
+            maps: options.maps,
+            loader: options.loader,
+            vote: None,
             data_files,
             tick_interval: Duration::from_secs_f32(options.data.simulation.tick_interval()),
             data: options.data,
-            map: MapInfo {
-                name: level.name.clone(),
-                checksum: level.checksum,
-                workshop,
-            },
+            map: map_info(level),
             clients: BTreeMap::new(),
             next_local: FIRST_LOCAL_ID,
             local_outbox: BTreeMap::new(),
@@ -368,6 +416,93 @@ impl Server {
             tracing::info!(name = client.name, "player left");
             self.broadcast(&ServerMessage::Left(player));
         }
+        if self.vote.as_mut().is_some_and(|vote| vote.withdraw(id)) {
+            self.send_tally();
+        }
+    }
+
+    /// The match is over: offers the players a choice of the next map.
+    fn open_vote(&mut self) {
+        if self.loader.is_none() {
+            return;
+        }
+        let mut rng = Rng::seeded(&[self.sim.tick_count(), 0x766f_7465]);
+        self.vote = Vote::open(&self.map.name, &self.maps, &mut rng);
+        if let Some(vote) = &self.vote {
+            let options = vote.options().to_vec();
+            tracing::info!(?options, "voting for the next map");
+            self.broadcast(&ServerMessage::VoteOpen { options });
+        }
+    }
+
+    fn cast_vote(&mut self, id: ClientId, option: u16) {
+        if self.vote.as_mut().is_some_and(|vote| vote.cast(id, option)) {
+            self.send_tally();
+        }
+    }
+
+    fn send_tally(&mut self) {
+        if let Some(vote) = &self.vote {
+            let tally = vote.tally();
+            self.broadcast(&ServerMessage::VoteTally(tally));
+        }
+    }
+
+    /// The scoreboard time is up: plays the map voted for, which may be
+    /// the one already running.
+    fn close_vote(&mut self) {
+        let Some(vote) = self.vote.take() else {
+            return;
+        };
+        let mut rng = Rng::seeded(&[self.sim.tick_count(), 0x7769_6e6e]);
+        let winner = vote.winner(&mut rng).to_owned();
+        if winner != self.map.name {
+            self.change_map(&winner);
+        }
+    }
+
+    /// Replaces the map with `name`, loaded by the [`MapLoader`]: every
+    /// client is welcomed to it afresh and rejoins once it has loaded.
+    /// Stays on the current map if the new one cannot be loaded.
+    fn change_map(&mut self, name: &str) {
+        let Some(loader) = &self.loader else {
+            return;
+        };
+        let level = match (loader.0)(name) {
+            Ok(level) => level,
+            Err(error) => {
+                tracing::warn!(map = name, %error, "cannot load the next map; staying put");
+                return;
+            }
+        };
+        tracing::info!(map = name, "changing map");
+        let mut built = level.simulation(&self.data);
+        for _ in 0..self.dummies {
+            built.simulation.join();
+        }
+        self.initial = snapshot::initial_props(&built.simulation);
+        self.sim = built.simulation;
+        self.map = map_info(&level);
+        let welcoming: Vec<ClientId> = self
+            .clients
+            .iter()
+            .filter(|(_, client)| matches!(client.stage, Stage::Loading | Stage::Playing(_)))
+            .map(|(&id, _)| id)
+            .collect();
+        for id in &welcoming {
+            if let Some(client) = self.clients.get_mut(id) {
+                client.start_over();
+            }
+        }
+        for id in welcoming {
+            let welcome = Welcome {
+                games: self.games.clone(),
+                map: self.map.clone(),
+                data: None,
+                roster: Vec::new(),
+            };
+            self.send(id, &ServerMessage::Welcome(Box::new(welcome)));
+        }
     }
 
     /// Disconnects clients silent for longer than the timeout, and refused
@@ -433,6 +568,7 @@ impl Server {
                 Stage::Connected,
             ) => self.hello(id, version, &name, data_hash, &games),
             (ClientMessage::Ready, Stage::Loading) => self.ready(id),
+            (ClientMessage::Vote(option), Stage::Playing(_)) => self.cast_vote(id, option),
             (message, stage) => {
                 tracing::debug!(client = id, ?message, ?stage, "message out of turn ignored");
             }
@@ -540,6 +676,11 @@ impl Server {
             client.credits -= run as u32;
         }
         let events = self.sim.tick(&commands);
+        match events.match_event {
+            Some(MatchEvent::Ended(_)) => self.open_vote(),
+            Some(MatchEvent::Restarted) => self.close_vote(),
+            _ => {}
+        }
         for kill in &events.kills {
             self.broadcast(&ServerMessage::Kill(*kill));
         }
@@ -598,6 +739,19 @@ impl Server {
                 self.renet.send_message(id, Channel::Control, bytes.clone());
             }
         }
+    }
+}
+
+/// What clients need to know to find `level` in their own content.
+fn map_info(level: &Level) -> MapInfo {
+    let workshop = match level.origin {
+        Some(MountOrigin::Workshop { item_id, .. }) => Some(item_id),
+        _ => None,
+    };
+    MapInfo {
+        name: level.name.clone(),
+        checksum: level.checksum,
+        workshop,
     }
 }
 

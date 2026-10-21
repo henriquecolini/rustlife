@@ -24,7 +24,10 @@ use rl_sim::tools::manipulator::ToolEvent;
     reason = "broken built-in data must fail the test"
 )]
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 /// A crate of half-size 8 (centre 8 above its origin).
@@ -77,6 +80,9 @@ impl Room {
         let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
         let prop = sim.add_prop(&crate_desc(Vec3::new(distance, 0.0, height), mass));
         let mut room = Self { sim, player, prop };
+        // The match starts on the first tick, which puts the player back
+        // at their spawn with a fresh loadout.
+        room.run(1, &UserCmd::default());
         // Take the Manipulator in hand (players spawn holding the
         // loadout's gun) while the crate settles.
         let manipulator = room.sim.arsenal().find_weapon("manipulator");

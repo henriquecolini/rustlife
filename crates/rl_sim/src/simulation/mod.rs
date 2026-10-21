@@ -513,7 +513,7 @@ impl Simulation {
     /// score.
     fn put_player(&mut self, id: PlayerId, player: Player) {
         self.store_player(id, player);
-        self.game.add_player(id);
+        self.game.add_player(id, &self.data.rules);
     }
 
     /// Puts `player` in slot `id`, growing the list as needed.
@@ -535,7 +535,7 @@ impl Simulation {
         manipulator.drop_held(&mut self.physics);
         self.physics.set_player_enabled(player.body, false);
         self.spare_bodies.push(player.body);
-        self.game.remove_player(id);
+        self.game.remove_player(id, &self.data.rules);
         true
     }
 
@@ -589,7 +589,7 @@ impl Simulation {
     pub fn tick(&mut self, commands: &[(PlayerId, UserCmd)]) -> TickEvents {
         self.tick += 1;
         let mut events = TickEvents::default();
-        if self.game.playing() {
+        if !self.game.intermission() {
             for (id, cmd) in commands {
                 self.run_player(*id, cmd, &mut events);
             }

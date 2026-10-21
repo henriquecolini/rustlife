@@ -34,6 +34,6 @@ pub mod protocol;
 pub mod snapshot;
 mod transport;
 
-pub use client::{ClientConfig, ClientEvent, NetClient, Session};
+pub use client::{ClientConfig, ClientEvent, NetClient, Session, Vote};
 pub use conditioner::NetConditions;
 pub use transport::ConnectError;

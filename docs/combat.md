@@ -158,20 +158,32 @@ for the map's logic to switch them on, which is how traps are built (see
 
 ## The match
 
-`rules::Match` keeps every player's frags and deaths and the clock. A kill
-scores the killer a frag; a death with no other killer (your own blast, a
-fall, a hazard, your own prop) costs the victim `suicide_penalty`. The match
-ends when someone reaches `frag_limit` or `time_limit` runs out; the player
-alone at the top wins (a tie has no winner). During the `intermission` the
-scores show and nothing moves; then scores reset, everyone respawns,
-pickups return and projectiles vanish.
+`rules::Match` keeps every player's points, kills and deaths, and the clock,
+through the match's life:
+
+1. **Waiting** until `min_players` have joined. Everyone may move and shoot,
+   but nobody is hurt and nothing scores.
+2. **Warmup**: a `warmup` countdown with the same freedom.
+3. **Playing**: a kill scores the killer points by how it was done
+   (`points` in `rules/deathmatch.ron`: a default per kill, a value per
+   weapon id, and values for props, barrels and the environment); a death
+   with no other killer (your own blast, a fall, a hazard, your own prop)
+   costs the victim `suicide_penalty`. The match ends when someone reaches
+   `score_limit` or `time_limit` runs out; the player alone at the top wins
+   (a tie has no winner).
+4. **Intermission**: the scoreboard shows and the players vote for the next
+   map (see [netcode.md](netcode.md)); nothing moves. Then the next match
+   starts: scores reset, everyone respawns, pickups return and projectiles
+   vanish.
+
+An emptied server forgets the match and goes back to waiting.
 
 ## The HUD
 
 `hud.ron` places each element by a screen anchor and an offset: health and
 armor, the ammo of the weapon in hand (clip / carried, plus the carried
 rounds of a secondary fire with its own ammo), the carried weapons by slot,
-frags and the clock, the kill feed, and messages (who killed you, the
+points and the clock, the kill feed, and messages (who killed you, the
 respawn countdown, pickups, the match result). The crosshair turns to the
 warning colour when your shot lands, the screen flashes red when you are
 hurt, and `Tab` shows the scoreboard (always shown between matches).

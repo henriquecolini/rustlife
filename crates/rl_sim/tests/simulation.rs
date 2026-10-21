@@ -15,7 +15,10 @@ use rl_sim::simulation::Simulation;
     reason = "broken built-in data must fail the test"
 )]
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 fn crate_at(origin: Vec3, motion: Motion) -> PropDesc {
@@ -70,7 +73,9 @@ fn a_carried_prop_does_not_block_its_holder() {
     let mut sim = room();
     let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
     let prop = sim.add_prop(&crate_at(Vec3::new(60.0, 0.0, 0.0), Motion::Dynamic));
-    // Take the Manipulator in hand while the crate settles.
+    // The match starts on the first tick, which resets the player; then
+    // take the Manipulator in hand while the crate settles.
+    sim.tick(&[]);
     let select = UserCmd {
         select: sim.arsenal().find_weapon("manipulator"),
         ..UserCmd::default()

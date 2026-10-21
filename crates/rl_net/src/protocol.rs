@@ -43,7 +43,7 @@ use thiserror::Error;
 pub const PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustlife");
 
 /// Bumped whenever a message changes shape: client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Longest player name kept, in characters.
 pub const MAX_NAME_CHARS: usize = 32;
@@ -126,6 +126,9 @@ pub enum ClientMessage {
     },
     /// The map is loaded: put the player in the game.
     Ready,
+    /// Votes for the map to play next, by its index in the current
+    /// [`ServerMessage::VoteOpen`]; the latest vote counts.
+    Vote(u16),
 }
 
 /// A map a server runs, as clients must find it in their own content.
@@ -174,6 +177,13 @@ pub enum ServerMessage {
     Left(PlayerId),
     /// Someone died, for the kill feed.
     Kill(Kill),
+    /// The match is over and the next map is up for a vote.
+    VoteOpen {
+        /// The maps to choose from, by name.
+        options: Vec<String>,
+    },
+    /// The votes so far for each of the open vote's options.
+    VoteTally(Vec<u16>),
 }
 
 /// A client's latest commands, sent unreliably every tick.
@@ -271,6 +281,22 @@ mod tests {
         assert_eq!(
             decode::<ServerMessage>(&encode(&welcome)).expect("decode"),
             welcome
+        );
+        for message in [
+            ServerMessage::VoteOpen {
+                options: vec!["dm_a".to_owned(), "dm_b".to_owned()],
+            },
+            ServerMessage::VoteTally(vec![2, 0]),
+        ] {
+            assert_eq!(
+                decode::<ServerMessage>(&encode(&message)).expect("decode"),
+                message
+            );
+        }
+        let vote = ClientMessage::Vote(1);
+        assert_eq!(
+            decode::<ClientMessage>(&encode(&vote)).expect("decode"),
+            vote
         );
     }
 

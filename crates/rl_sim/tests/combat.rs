@@ -23,7 +23,10 @@ use rl_sim::weapons::WeaponId;
 use source_formats::entities::MapEntity;
 
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 /// A big floor (top at z = 0) with a shooter at the origin facing +X and a
@@ -62,6 +65,13 @@ impl Arena {
             shooter,
             target,
         };
+        // The match starts on the first tick and puts everyone at a spawn
+        // point; put them back.
+        arena.idle(1);
+        arena.sim.teleport_player(shooter, Vec3::new(0.0, 0.0, 1.0));
+        arena
+            .sim
+            .teleport_player(target, Vec3::new(distance, 0.0, 1.0));
         arena.idle(10);
         arena
     }
@@ -140,7 +150,7 @@ fn bullets_hurt_the_player_they_hit_and_kills_score() {
     assert_eq!(kills[0].victim, arena.target);
     assert_eq!(kills[0].killer, Some(arena.shooter));
     assert_eq!(kills[0].cause, Cause::Weapon(arena.weapon("smg")));
-    assert_eq!(arena.sim.game().score(arena.shooter).frags, 1);
+    assert_eq!(arena.sim.game().score(arena.shooter).kills, 1);
     assert_eq!(arena.sim.game().score(arena.target).deaths, 1);
 }
 
@@ -231,7 +241,7 @@ fn a_rocket_at_your_feet_is_a_rocket_jump() {
     // Half damage to yourself: about 50 of a rocket's 110.
     assert!((35.0..80.0).contains(&health), "{health}");
     let scores = arena.sim.game().score(arena.shooter);
-    assert_eq!(scores.frags, 0);
+    assert_eq!(scores.kills, 0);
 }
 
 #[test]
@@ -314,7 +324,11 @@ fn pressing_fire_respawns_once_the_delay_is_over() {
     let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
     assert_eq!(kills.len(), 1);
     assert_eq!((kills[0].killer, kills[0].cause), (None, Cause::Hazard));
-    assert_eq!(arena.sim.game().score(arena.shooter).frags, -1, "a suicide");
+    assert_eq!(
+        arena.sim.game().score(arena.shooter).points,
+        -i32::try_from(arena.sim.data().rules.suicide_penalty).unwrap(),
+        "a suicide"
+    );
     let Some(Life::Dead { since, .. }) = arena.sim.player(arena.shooter).map(|p| p.life) else {
         panic!("dead");
     };
@@ -420,9 +434,9 @@ fn a_thrown_prop_kill_is_the_throwers_frag() {
 }
 
 #[test]
-fn the_frag_limit_ends_the_match_and_it_restarts() {
+fn the_score_limit_ends_the_match_and_it_restarts() {
     let mut data = data();
-    data.rules.frag_limit = 1;
+    data.rules.score_limit = 1;
     data.rules.intermission = 1.0;
     let mut arena = Arena::new(&data, 100.0);
     arena.arm("magnum");
@@ -445,7 +459,7 @@ fn the_frag_limit_ends_the_match_and_it_restarts() {
             .any(|e| e.match_event == Some(MatchEvent::Restarted))
     );
     assert!(arena.sim.game().playing());
-    assert_eq!(arena.sim.game().score(arena.shooter).frags, 0);
+    assert_eq!(arena.sim.game().score(arena.shooter).points, 0);
     assert!(arena.alive(arena.target), "everyone is back");
 }
 

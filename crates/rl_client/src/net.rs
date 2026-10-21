@@ -28,11 +28,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use rl_data::GameData;
 use rl_level::Level;
-use rl_net::client::{ClientConfig, ClientEvent, NetClient, Session};
+use rl_net::client::{ClientConfig, ClientEvent, NetClient, Session, Vote};
 use rl_net::conditioner::NetConditions;
 use rl_net::interpolation::Interpolated;
 use rl_net::protocol::Welcome;
-use rl_server::{Server, ServerOptions};
+use rl_server::{MapLoader, Server, ServerOptions};
 use rl_sim::physics::BodyId;
 use rl_sim::simulation::{PlayerId, Simulation};
 use source_formats::entities::MapEntity;
@@ -135,6 +135,48 @@ impl Game<'_> {
     pub fn local(&self) -> Option<PlayerId> {
         self.session()?.player()
     }
+
+    /// The vote for the next map, once the match is over.
+    #[must_use]
+    pub fn vote(&self) -> Option<&Vote> {
+        self.connection.as_ref()?.0.vote()
+    }
+}
+
+/// Set while the server moves a running game to another map, so leaving
+/// [`AppState::InGame`] to load it does not end the connection.
+#[derive(Resource, Default)]
+struct ReloadingMap(bool);
+
+/// The old map is unloaded; load the new one.
+fn finish_map_change(mut next: ResMut<NextState<AppState>>) {
+    next.set(AppState::InGame);
+}
+
+/// While a vote is open, the number keys vote for the maps on offer.
+fn vote_keys(keys: Res<ButtonInput<KeyCode>>, connection: Option<ResMut<Connection>>) {
+    const DIGITS: [KeyCode; 9] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    let Some(mut connection) = connection else {
+        return;
+    };
+    if connection.0.vote().is_none() {
+        return;
+    }
+    if let Some(index) = DIGITS.iter().position(|&key| keys.just_pressed(key)) {
+        connection
+            .0
+            .cast_vote(u16::try_from(index).unwrap_or(u16::MAX));
+    }
 }
 
 /// The system set receiving from the server, before the fixed ticks.
@@ -156,11 +198,13 @@ impl Plugin for NetPlugin {
             .init_resource::<LevelBodies>()
             .init_resource::<LevelEntities>()
             .init_resource::<NetStatus>()
+            .init_resource::<ReloadingMap>()
             .add_systems(OnEnter(AppState::Connecting), connect)
+            .add_systems(OnEnter(AppState::ChangingMap), finish_map_change)
             .add_systems(OnEnter(AppState::InGame), host)
             .add_systems(OnExit(AppState::InGame), leave)
             .add_systems(PreUpdate, receive.in_set(Receive).run_if(playing))
-            .add_systems(Update, pace.run_if(in_state(AppState::InGame)));
+            .add_systems(Update, (pace, vote_keys).run_if(in_state(AppState::InGame)));
     }
 }
 
@@ -237,9 +281,17 @@ fn host(
     };
     let listen = port.map(|port| SocketAddr::from(([0, 0, 0, 0], port)));
     let games = content.mounted_ids();
+    let loader = {
+        let (vfs, physics) = (vfs.0.clone(), data.physics.clone());
+        MapLoader::new(move |name| {
+            rl_level::load(&vfs, name, &physics).map_err(|error| error.to_string())
+        })
+    };
     let options = ServerOptions {
         data: data.clone(),
         games: games.clone(),
+        maps: rl_level::maps::deathmatch_maps(&vfs.0),
+        loader: Some(loader),
         listen,
         dummies: settings.dummies,
     };
@@ -263,9 +315,13 @@ fn host(
 /// Leaving a map: disconnects, and shuts the hosted server down.
 fn leave(
     mut commands: Commands,
+    mut reloading: ResMut<ReloadingMap>,
     host: Option<ResMut<Host>>,
     connection: Option<ResMut<Connection>>,
 ) {
+    if std::mem::take(&mut reloading.0) {
+        return;
+    }
     if let Some(mut connection) = connection {
         connection.0.disconnect();
     }
@@ -329,6 +385,7 @@ struct WelcomeParams<'w> {
     bodies: ResMut<'w, LevelBodies>,
     entities: ResMut<'w, LevelEntities>,
     map: ResMut<'w, CurrentMap>,
+    reloading: ResMut<'w, ReloadingMap>,
     status: ResMut<'w, NetStatus>,
     state: Res<'w, State<AppState>>,
     next: ResMut<'w, NextState<AppState>>,
@@ -383,6 +440,11 @@ impl WelcomeParams<'_> {
         if *self.state.get() != AppState::InGame {
             self.map.0.clone_from(&map.name);
             self.next.set(AppState::InGame);
+        } else if self.map.0 != map.name {
+            // The server moved the running game to another map.
+            self.map.0.clone_from(&map.name);
+            self.reloading.0 = true;
+            self.next.set(AppState::ChangingMap);
         }
         info!("entered {}", map.name);
     }

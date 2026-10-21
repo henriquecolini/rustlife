@@ -16,7 +16,7 @@ use rl_data::GameData;
 use rl_level::{Level, LevelProp};
 use rl_net::client::{ClientConfig, ClientEvent, NetClient};
 use rl_net::conditioner::NetConditions;
-use rl_server::{Server, ServerOptions};
+use rl_server::{MapLoader, Server, ServerOptions};
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::{Buttons, UserCmd};
@@ -28,12 +28,20 @@ use source_formats::props::{PropKind, PropPlacement};
 const GAME: &str = "hl2dm";
 
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the first player is there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 /// A big floor with two spawn points facing each other 400 units apart and
 /// a crate between them, off to the side.
 fn level(data: &GameData) -> Level {
+    named_level(data, "test_arena", 0x1234_5678)
+}
+
+/// [`level`] under another name and checksum.
+fn named_level(data: &GameData, name: &str, checksum: u32) -> Level {
     let world = WorldBuilder::new()
         .solid_box(
             Vec3::new(-4096.0, -4096.0, -64.0),
@@ -58,8 +66,8 @@ fn level(data: &GameData) -> Level {
         free_on_grab: false,
     };
     Level {
-        name: "test_arena".to_owned(),
-        checksum: 0x1234_5678,
+        name: name.to_owned(),
+        checksum,
         origin: None,
         world: Arc::new(world),
         spawns: vec![
@@ -99,6 +107,11 @@ struct Game {
 
 impl Game {
     fn new(data: GameData) -> Self {
+        Self::with_maps(data, Vec::new(), None)
+    }
+
+    /// A game whose players vote between `maps` when a match ends.
+    fn with_maps(data: GameData, maps: Vec<String>, loader: Option<MapLoader>) -> Self {
         let level = level(&data);
         let server = Server::new(
             &level,
@@ -107,6 +120,8 @@ impl Game {
                 games: vec![GAME.to_owned()],
                 listen: None,
                 dummies: 0,
+                maps,
+                loader,
             },
         )
         .expect("server");
@@ -626,6 +641,8 @@ fn a_game_over_udp_shared_with_an_in_process_player() {
             games: vec![GAME.to_owned()],
             listen: Some("127.0.0.1:0".parse().expect("address")),
             dummies: 1,
+            maps: Vec::new(),
+            loader: None,
         },
     )
     .expect("server");
@@ -668,4 +685,61 @@ fn a_game_over_udp_shared_with_an_in_process_player() {
     assert!(joined(&remote), "the UDP player sees everyone");
     assert_eq!(server.players().count(), 2, "the dummy is not a client");
     server.shut_down();
+}
+
+#[test]
+fn players_vote_for_the_next_map_and_move_to_it() {
+    let mut data = data();
+    data.rules.time_limit = 1.0;
+    data.rules.intermission = 2.0;
+    let loader_data = data.clone();
+    let loader = MapLoader::new(move |name| Ok(named_level(&loader_data, name, 0xabcd)));
+    let maps = vec!["test_arena".to_owned(), "other_arena".to_owned()];
+    let mut game = Game::with_maps(data.clone(), maps, Some(loader));
+    let alice = game.join("Alice", "0ms", local_hash(&data));
+    let bob = game.join("Bob", "0ms", local_hash(&data));
+
+    // The match ends and the vote opens for both.
+    for _ in 0..200 {
+        game.step_with(|_, _| Some(UserCmd::default()));
+        if game.clients.iter().all(|client| client.vote().is_some()) {
+            break;
+        }
+    }
+    for client in &game.clients {
+        let vote = client.vote().expect("a vote is open");
+        assert_eq!(
+            vote.options,
+            ["other_arena"],
+            "the current map is not offered"
+        );
+    }
+    game.clients[alice].cast_vote(0);
+    game.clients[bob].cast_vote(0);
+    game.run(10, UserCmd::default());
+    assert_eq!(game.clients[alice].vote().expect("vote").tally, [2]);
+    assert_eq!(game.clients[alice].vote().expect("vote").chosen, Some(0));
+
+    // The scoreboard ends: the server changes map and welcomes everyone.
+    let mut welcomed = [false; 2];
+    for _ in 0..400 {
+        for (index, event) in game.step_with(|_, _| Some(UserCmd::default())) {
+            if let ClientEvent::Welcome(welcome) = event {
+                assert_eq!(welcome.map.name, "other_arena");
+                assert!(welcome.data.is_none(), "the data is already there");
+                let built = game.level.simulation(&game.data);
+                game.clients[index].enter(built.simulation, game.data.clone());
+                welcomed[index] = true;
+            }
+        }
+        if welcomed == [true; 2] && game.server.players().count() == 2 {
+            break;
+        }
+    }
+    assert_eq!(welcomed, [true; 2], "both players were welcomed to the map");
+    assert_eq!(game.server.map().name, "other_arena");
+    assert_eq!(game.server.players().count(), 2, "both rejoined");
+    assert!(game.clients[alice].vote().is_none(), "the vote is over");
+    game.run(30, UserCmd::default());
+    assert!(game.player(alice).is_some() && game.player(bob).is_some());
 }

@@ -2,12 +2,36 @@
 //
 // Times are seconds, speeds units/s.
 Rules(
-    // The match ends when someone reaches this many frags (0: no limit)...
-    frag_limit: 25,
+    // The match ends when someone reaches this many points (0: no limit)...
+    score_limit: 250,
     // ...or after this long (0: no limit).
     time_limit: 600.0,
-    // Pause between matches, scores on show.
-    intermission: 8.0,
+    // Pause between matches: the scoreboard, and the vote for the next map.
+    intermission: 20.0,
+    // Players needed before a match starts. Until then everyone can move and
+    // shoot, but nobody is hurt and nothing scores.
+    min_players: 1,
+    // Countdown, once there are enough players.
+    warmup: 5.0,
+    // What kills are worth. The showier the kill, the more it pays.
+    points: (
+        // Any weapon not listed below.
+        kill: 10,
+        weapons: {
+            // Up close and personal.
+            "bar": 20,
+            // Thrown and bounced.
+            "frag": 15,
+            "boltcaster": 15,
+            "magnum": 12,
+        },
+        // Killing with a prop you threw, punted or dropped.
+        prop: 25,
+        // Killing with an exploding barrel.
+        barrel: 30,
+        // Pushing someone into a fall or a hazard.
+        environment: 5,
+    ),
     respawn: (
         // The dead may respawn (fire or jump) after this long...
         delay: 1.5,
@@ -26,8 +50,8 @@ Rules(
     // Your own blasts hurt you this much (they still throw you as hard:
     // rocket jumps cost about 50 health).
     self_damage: 0.5,
-    // Frags lost for dying by your own hand, a fall or the map.
-    suicide_penalty: 1,
+    // Points lost for dying by your own hand, a fall or the map.
+    suicide_penalty: 5,
     // A prop thrown, punted or dropped by a player is theirs for this long:
     // a kill with it is their frag.
     prop_credit: 5.0,

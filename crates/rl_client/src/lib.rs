@@ -66,6 +66,9 @@ pub enum AppState {
     Connecting,
     /// Playing [`CurrentMap`].
     InGame,
+    /// The server moved a running game to another map: for a moment the old
+    /// map is unloaded, then [`AppState::InGame`] loads [`CurrentMap`].
+    ChangingMap,
 }
 
 /// The map to load on entering [`AppState::InGame`], without path or extension.

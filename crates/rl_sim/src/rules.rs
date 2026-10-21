@@ -1,8 +1,17 @@
 //! The rules of a free-for-all deathmatch (`rules/deathmatch.ron`).
 //!
-//! [`Match`] keeps the score and the clock: a kill earns the killer a frag,
-//! dying by your own hand (or a fall, or the map) costs one, and the match
-//! ends at the frag or time limit. After the intermission it starts over.
+//! [`Match`] keeps the score and the clock through a match's life:
+//!
+//! 1. [`MatchState::Waiting`] until there are enough players. Everyone may
+//!    move and shoot, but nobody is hurt and nothing scores.
+//! 2. [`MatchState::Warmup`], a short countdown with the same freedom.
+//! 3. [`MatchState::Playing`]: a kill earns the killer points (more for some
+//!    ways to kill, see [`rl_data::PointsConfig`]), dying by your own hand
+//!    (or a fall, or the map) costs some, and the match ends at the score or
+//!    time limit.
+//! 4. [`MatchState::Intermission`]: the scoreboard, and the vote for the next
+//!    map. Afterwards the next match starts.
+//!
 //! [`choose_spawn`] picks where the dead come back: away from everyone
 //! else, with a little chance thrown in so spawns are not predictable.
 
@@ -16,8 +25,10 @@ use crate::simulation::PlayerId;
 /// One player's score.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Score {
-    /// Kills, less suicides.
-    pub frags: i32,
+    /// Points earned by kills, less the cost of suicides.
+    pub points: i32,
+    /// Players killed.
+    pub kills: u32,
     /// Times died.
     pub deaths: u32,
 }
@@ -25,11 +36,18 @@ pub struct Score {
 /// Where the match is.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum MatchState {
+    /// Waiting for enough players to start.
+    Waiting,
+    /// Enough players; the match starts when the countdown ends.
+    Warmup {
+        /// Seconds until the match starts.
+        left: f32,
+    },
     /// Under way.
     Playing,
     /// Over, showing the scores; the next match starts in `left` seconds.
     Intermission {
-        /// The player with the most frags, if one stands alone at the top.
+        /// The player with the most points, if one stands alone at the top.
         winner: Option<PlayerId>,
         /// Seconds until the next match.
         left: f32,
@@ -39,6 +57,9 @@ pub enum MatchState {
 /// A change in the match's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchEvent {
+    /// The warmup is over: the match begins, with everyone back at a spawn
+    /// point and the scores at nothing.
+    Started,
     /// The match ended, won by this player (`None` for a tie).
     Ended(Option<PlayerId>),
     /// The intermission is over: a new match begins.
@@ -62,28 +83,49 @@ impl Default for Match {
 }
 
 impl Match {
-    /// A match just started, with no players.
+    /// A match waiting for its first players.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            state: MatchState::Playing,
+            state: MatchState::Waiting,
             elapsed: 0.0,
             scores: Vec::new(),
         }
     }
 
-    /// Starts a newly joined player's score at nothing.
-    pub fn add_player(&mut self, player: PlayerId) {
+    /// Starts a newly joined player's score at nothing, and starts the
+    /// countdown if there are now enough players.
+    pub fn add_player(&mut self, player: PlayerId, rules: &RulesConfig) {
         if self.scores.len() <= player.index() {
             self.scores.resize(player.index() + 1, None);
         }
         self.scores[player.index()] = Some(Score::default());
+        self.population_changed(rules);
     }
 
-    /// Forgets the score of a player who left.
-    pub fn remove_player(&mut self, player: PlayerId) {
+    /// Forgets the score of a player who left. The match goes back to
+    /// waiting if too few players are left to start one, or none to play it.
+    pub fn remove_player(&mut self, player: PlayerId, rules: &RulesConfig) {
         if let Some(score) = self.scores.get_mut(player.index()) {
             *score = None;
+        }
+        self.population_changed(rules);
+    }
+
+    fn population_changed(&mut self, rules: &RulesConfig) {
+        let players = self.scores().count();
+        let enough = players >= rules.min_players.max(1) as usize;
+        match self.state {
+            MatchState::Waiting if enough => {
+                self.state = MatchState::Warmup { left: rules.warmup };
+            }
+            MatchState::Warmup { .. } if !enough => self.state = MatchState::Waiting,
+            MatchState::Playing | MatchState::Intermission { .. } if players == 0 => {
+                // An empty server forgets the match that was.
+                self.state = MatchState::Waiting;
+                self.elapsed = 0.0;
+            }
+            _ => {}
         }
     }
 
@@ -93,10 +135,17 @@ impl Match {
         self.state
     }
 
-    /// Whether the match is under way.
+    /// Whether the match is under way: kills hurt and score.
     #[must_use]
     pub fn playing(&self) -> bool {
         self.state == MatchState::Playing
+    }
+
+    /// Whether the match is over and the scoreboard is on show. Nobody
+    /// moves or fires then.
+    #[must_use]
+    pub fn intermission(&self) -> bool {
+        matches!(self.state, MatchState::Intermission { .. })
     }
 
     /// Seconds played.
@@ -129,13 +178,14 @@ impl Match {
             .filter_map(|(index, score)| Some((PlayerId::from_index(index), (*score)?)))
     }
 
-    /// Scores a death: a frag for the killer, or the suicide penalty when
+    /// Scores a death: `points` for the killer, or the suicide penalty when
     /// there is no other killer. Ends the match if the killer reached the
-    /// frag limit.
+    /// score limit.
     pub fn record_death(
         &mut self,
         victim: PlayerId,
         killer: Option<PlayerId>,
+        points: u32,
         rules: &RulesConfig,
     ) -> Option<MatchEvent> {
         if !self.playing() {
@@ -146,20 +196,33 @@ impl Match {
         }
         let Some(killer) = killer.filter(|&killer| killer != victim) else {
             if let Some(score) = self.score_mut(victim) {
-                score.frags -= i32::try_from(rules.suicide_penalty).unwrap_or(i32::MAX);
+                score.points -= i32::try_from(rules.suicide_penalty).unwrap_or(i32::MAX);
             }
             return None;
         };
         let score = self.score_mut(killer)?;
-        score.frags += 1;
-        let limit = i64::from(rules.frag_limit);
-        (limit > 0 && i64::from(score.frags) >= limit).then(|| self.end(rules))
+        score.kills += 1;
+        score.points = score
+            .points
+            .saturating_add(i32::try_from(points).unwrap_or(i32::MAX));
+        let limit = i64::from(rules.score_limit);
+        (limit > 0 && i64::from(score.points) >= limit).then(|| self.end(rules))
     }
 
-    /// Advances the clock by `dt` seconds: ends the match at the time
-    /// limit, and starts the next once the intermission is over.
+    /// Advances the clock by `dt` seconds: counts down the warmup, ends the
+    /// match at the time limit, and starts the next once the intermission is
+    /// over.
     pub fn tick(&mut self, dt: f32, rules: &RulesConfig) -> Option<MatchEvent> {
         match self.state {
+            MatchState::Waiting => None,
+            MatchState::Warmup { left } => {
+                if left > dt {
+                    self.state = MatchState::Warmup { left: left - dt };
+                    return None;
+                }
+                self.begin();
+                Some(MatchEvent::Started)
+            }
             MatchState::Playing => {
                 self.elapsed += dt;
                 (rules.time_limit > 0.0 && self.elapsed >= rules.time_limit)
@@ -173,13 +236,18 @@ impl Match {
                     };
                     return None;
                 }
-                self.state = MatchState::Playing;
-                self.elapsed = 0.0;
-                for score in self.scores.iter_mut().flatten() {
-                    *score = Score::default();
-                }
+                self.begin();
                 Some(MatchEvent::Restarted)
             }
+        }
+    }
+
+    /// Starts a match from scratch.
+    fn begin(&mut self) {
+        self.state = MatchState::Playing;
+        self.elapsed = 0.0;
+        for score in self.scores.iter_mut().flatten() {
+            *score = Score::default();
         }
     }
 
@@ -188,9 +256,11 @@ impl Match {
     }
 
     fn end(&mut self, rules: &RulesConfig) -> MatchEvent {
-        let best = self.scores().map(|(_, score)| score.frags).max();
+        let best = self.scores().map(|(_, score)| score.points).max();
         let winner = {
-            let mut leaders = self.scores().filter(|(_, score)| Some(score.frags) == best);
+            let mut leaders = self
+                .scores()
+                .filter(|(_, score)| Some(score.points) == best);
             match (leaders.next(), leaders.next()) {
                 (Some((player, _)), None) => Some(player),
                 _ => None,
@@ -241,92 +311,177 @@ mod tests {
         GameData::builtin().expect("builtin").rules
     }
 
+    /// Rules that start the match as soon as someone joins.
+    fn instant() -> RulesConfig {
+        RulesConfig {
+            warmup: 0.0,
+            ..rules()
+        }
+    }
+
     fn player(index: usize) -> PlayerId {
         PlayerId::from_index(index)
     }
 
-    #[test]
-    fn kills_score_frags_and_suicides_cost_one() {
-        let rules = rules();
+    /// A match with players `0..count` already playing.
+    fn playing(count: usize, rules: &RulesConfig) -> Match {
         let mut game = Match::new();
-        game.add_player(player(0));
-        game.add_player(player(1));
-        game.record_death(player(1), Some(player(0)), &rules);
-        game.record_death(player(0), Some(player(0)), &rules);
-        game.record_death(player(1), None, &rules);
+        for index in 0..count {
+            game.add_player(player(index), rules);
+        }
+        assert_eq!(game.tick(1.0 / 66.0, rules), Some(MatchEvent::Started));
+        game
+    }
+
+    fn run(game: &mut Match, seconds: f32, rules: &RulesConfig) -> Vec<MatchEvent> {
+        let ticks = (seconds * 66.0).ceil() as usize + 1;
+        (0..ticks)
+            .filter_map(|_| game.tick(1.0 / 66.0, rules))
+            .collect()
+    }
+
+    #[test]
+    fn kills_score_their_points_and_suicides_cost_some() {
+        let rules = instant();
+        let mut game = playing(2, &rules);
+        game.record_death(player(1), Some(player(0)), 20, &rules);
+        game.record_death(player(0), Some(player(0)), 20, &rules);
+        game.record_death(player(1), None, 20, &rules);
+        let penalty = i32::try_from(rules.suicide_penalty).unwrap();
         assert_eq!(
             game.score(player(0)),
             Score {
-                frags: 0,
+                points: 20 - penalty,
+                kills: 1,
                 deaths: 1
             }
         );
         assert_eq!(
             game.score(player(1)),
             Score {
-                frags: -1,
+                points: -penalty,
+                kills: 0,
                 deaths: 2
             }
         );
     }
 
     #[test]
-    fn the_frag_limit_ends_the_match_and_the_next_one_starts_clean() {
+    fn the_match_waits_for_enough_players_then_counts_down() {
         let rules = RulesConfig {
-            frag_limit: 2,
+            min_players: 2,
+            warmup: 3.0,
             ..rules()
         };
         let mut game = Match::new();
-        game.add_player(player(0));
-        game.add_player(player(1));
-        assert_eq!(game.record_death(player(1), Some(player(0)), &rules), None);
+        assert_eq!(game.state(), MatchState::Waiting);
+        game.add_player(player(0), &rules);
+        assert_eq!(run(&mut game, 5.0, &rules), []);
         assert_eq!(
-            game.record_death(player(1), Some(player(0)), &rules),
-            Some(MatchEvent::Ended(Some(player(0))))
+            game.state(),
+            MatchState::Waiting,
+            "one player is not enough"
         );
+
+        game.add_player(player(1), &rules);
+        assert!(matches!(game.state(), MatchState::Warmup { .. }));
+        assert_eq!(run(&mut game, 2.0, &rules), []);
+        assert!(!game.playing());
+        assert_eq!(run(&mut game, 1.5, &rules), [MatchEvent::Started]);
+        assert!(game.playing());
+    }
+
+    #[test]
+    fn nothing_scores_before_the_match_starts() {
+        let rules = rules();
+        let mut game = Match::new();
+        game.add_player(player(0), &rules);
+        game.add_player(player(1), &rules);
         assert!(!game.playing());
         assert_eq!(
-            game.record_death(player(0), Some(player(1)), &rules),
+            game.record_death(player(1), Some(player(0)), 10, &rules),
+            None
+        );
+        assert_eq!(game.score(player(0)), Score::default());
+        assert_eq!(game.score(player(1)), Score::default());
+    }
+
+    #[test]
+    fn losing_players_cancels_the_countdown_and_an_empty_game_resets() {
+        let rules = RulesConfig {
+            min_players: 2,
+            ..rules()
+        };
+        let mut game = Match::new();
+        game.add_player(player(0), &rules);
+        game.add_player(player(1), &rules);
+        game.remove_player(player(1), &rules);
+        assert_eq!(game.state(), MatchState::Waiting);
+
+        let rules = instant();
+        let mut game = playing(1, &rules);
+        game.record_death(player(0), None, 0, &rules);
+        game.remove_player(player(0), &rules);
+        assert_eq!(game.state(), MatchState::Waiting);
+        assert_eq!(game.elapsed(), 0.0);
+        game.add_player(player(0), &rules);
+        assert_eq!(game.score(player(0)), Score::default(), "a fresh match");
+    }
+
+    #[test]
+    fn the_score_limit_ends_the_match_and_the_next_one_starts_clean() {
+        let rules = RulesConfig {
+            score_limit: 30,
+            ..instant()
+        };
+        let mut game = playing(2, &rules);
+        assert_eq!(
+            game.record_death(player(1), Some(player(0)), 20, &rules),
+            None
+        );
+        assert_eq!(
+            game.record_death(player(1), Some(player(0)), 20, &rules),
+            Some(MatchEvent::Ended(Some(player(0))))
+        );
+        assert!(game.intermission());
+        assert_eq!(
+            game.record_death(player(0), Some(player(1)), 20, &rules),
             None,
             "no scoring in the intermission"
         );
-        let ticks = (rules.intermission * 66.0).ceil() as usize + 1;
-        let events: Vec<_> = (0..ticks)
-            .filter_map(|_| game.tick(1.0 / 66.0, &rules))
-            .collect();
-        assert_eq!(events, [MatchEvent::Restarted]);
+        assert_eq!(
+            run(&mut game, rules.intermission, &rules),
+            [MatchEvent::Restarted]
+        );
+        assert!(game.playing());
         assert_eq!(game.score(player(0)), Score::default());
-        assert_eq!(game.elapsed(), 0.0);
+        assert!(game.elapsed() < 0.1, "the clock restarted");
     }
 
     #[test]
     fn the_time_limit_ends_the_match_in_a_tie() {
         let rules = RulesConfig {
             time_limit: 1.0,
-            ..rules()
+            ..instant()
         };
-        let mut game = Match::new();
-        game.add_player(player(0));
-        game.add_player(player(1));
-        let events: Vec<_> = (0..70)
-            .filter_map(|_| game.tick(1.0 / 66.0, &rules))
-            .collect();
-        assert_eq!(events, [MatchEvent::Ended(None)]);
+        let mut game = playing(2, &rules);
+        assert_eq!(run(&mut game, 1.1, &rules), [MatchEvent::Ended(None)]);
         assert_eq!(game.time_left(&rules), Some(0.0));
     }
 
     #[test]
     fn players_who_left_neither_score_nor_win() {
         let rules = RulesConfig {
-            frag_limit: 1,
-            ..rules()
+            score_limit: 10,
+            ..instant()
         };
         let mut game = Match::new();
-        game.add_player(player(0));
-        game.add_player(player(2));
-        game.remove_player(player(0));
+        game.add_player(player(0), &rules);
+        game.add_player(player(2), &rules);
+        game.tick(1.0, &rules);
+        game.remove_player(player(0), &rules);
         assert_eq!(
-            game.record_death(player(0), Some(player(2)), &rules),
+            game.record_death(player(0), Some(player(2)), 10, &rules),
             Some(MatchEvent::Ended(Some(player(2))))
         );
         let scores: Vec<_> = game.scores().collect();
@@ -335,7 +490,8 @@ mod tests {
             [(
                 player(2),
                 Score {
-                    frags: 1,
+                    points: 10,
+                    kills: 1,
                     deaths: 0
                 }
             )]

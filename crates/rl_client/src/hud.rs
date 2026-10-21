@@ -14,6 +14,7 @@ use std::fmt::Write as _;
 
 use bevy::prelude::*;
 use rl_data::{Anchor, FireAmmo, HudConfig, Placement, Rgba};
+use rl_net::client::Vote;
 use rl_sim::combat::Cause;
 use rl_sim::rules::MatchState;
 use rl_sim::simulation::{Kill, Life, PlayerId, Simulation};
@@ -439,11 +440,11 @@ fn update_status(
         roster: &roster.0,
     };
     let now = time.elapsed_secs();
-    let over = !sim.game().playing();
+    let over = sim.game().intermission();
     for (readout, mut text, parent) in &mut texts {
         let line = match readout {
             Readout::Score => score_line(sim, local),
-            Readout::Message => message_line(sim, &names, &log, now),
+            Readout::Message => message_line(sim, &names, &log, now, game.vote()),
             Readout::KillFeed => log
                 .kills
                 .iter()
@@ -604,13 +605,13 @@ fn clock(secs: f32) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// The local player's frags, their place and the match clock.
+/// The local player's points and the match clock.
 fn score_line(sim: &Simulation, local: PlayerId) -> String {
     let rules = &sim.data().rules;
-    let mine = sim.game().score(local).frags;
-    let mut line = format!("Frags {mine}");
-    if rules.frag_limit > 0 {
-        let _ = write!(line, " / {}", rules.frag_limit);
+    let mine = sim.game().score(local).points;
+    let mut line = format!("Points {mine}");
+    if rules.score_limit > 0 {
+        let _ = write!(line, " / {}", rules.score_limit);
     }
     if let Some(left) = sim.game().time_left(rules) {
         let _ = write!(line, "    {}", clock(left));
@@ -620,14 +621,43 @@ fn score_line(sim: &Simulation, local: PlayerId) -> String {
 
 /// The message in the middle of the screen: the match's end, the player's
 /// death and respawn, or the last pickup.
-fn message_line(sim: &Simulation, names: &Names, log: &HudLog, now: f32) -> String {
+fn message_line(
+    sim: &Simulation,
+    names: &Names,
+    log: &HudLog,
+    now: f32,
+    vote: Option<&Vote>,
+) -> String {
     let local = names.local;
-    if let MatchState::Intermission { winner, left } = sim.game().state() {
-        let result = winner.map_or_else(
-            || "Match over: a draw".to_owned(),
-            |winner| format!("Match over: {} won", names.of(winner)),
-        );
-        return format!("{result}\nNext match in {}", clock(left));
+    match sim.game().state() {
+        MatchState::Intermission { winner, left } => {
+            let result = winner.map_or_else(
+                || "Match over: a draw".to_owned(),
+                |winner| format!("Match over: {} won", names.of(winner)),
+            );
+            let mut message = format!("{result}\nNext match in {}", clock(left));
+            if let Some(vote) = vote {
+                message.push_str("\n\nVote for the next map (press its number):");
+                for (index, map) in vote.options.iter().enumerate() {
+                    let marker = if vote.chosen == Some(index as u16) {
+                        '*'
+                    } else {
+                        ' '
+                    };
+                    let votes = vote.tally.get(index).copied().unwrap_or(0);
+                    let _ = write!(message, "\n{marker}[{}] {map}  ({votes})", index + 1);
+                }
+            }
+            return message;
+        }
+        MatchState::Waiting => {
+            let needed = sim.data().rules.min_players;
+            return format!("Waiting for players ({needed} needed)");
+        }
+        MatchState::Warmup { left } => {
+            return format!("Match starts in {}", clock(left));
+        }
+        MatchState::Playing => {}
     }
     let Some(player) = sim.player(local) else {
         return String::new();
@@ -658,13 +688,17 @@ fn scoreboard(sim: &Simulation, names: &Names) -> String {
         .players()
         .map(|(id, _)| (id, sim.game().score(id)))
         .collect();
-    rows.sort_by(|a, b| b.1.frags.cmp(&a.1.frags).then(a.0.cmp(&b.0)));
-    let mut lines = vec![format!("{:<12}{:>7}{:>8}", "Player", "Frags", "Deaths")];
+    rows.sort_by(|a, b| b.1.points.cmp(&a.1.points).then(a.0.cmp(&b.0)));
+    let mut lines = vec![format!(
+        "{:<12}{:>7}{:>7}{:>8}",
+        "Player", "Points", "Kills", "Deaths"
+    )];
     for (id, score) in rows {
         lines.push(format!(
-            "{:<12}{:>7}{:>8}",
+            "{:<12}{:>7}{:>7}{:>8}",
             names.of(id),
-            score.frags,
+            score.points,
+            score.kills,
             score.deaths
         ));
     }
@@ -779,11 +813,15 @@ mod tests {
                 Vec3::splat(2000.0).with_z(0.0),
             )
             .build();
-        let mut sim = Simulation::new(std::sync::Arc::new(world), data);
+        let mut data = data.clone();
+        data.rules.warmup = 0.0;
+        let mut sim = Simulation::new(std::sync::Arc::new(world), &data);
         let (you, them) = (
             sim.spawn_player(Vec3::new(0.0, 0.0, 1.0)),
             sim.spawn_player(Vec3::new(200.0, 0.0, 1.0)),
         );
+        // The match starts on the first tick, resetting both players.
+        sim.tick(&[]);
         let arsenal = sim.arsenal().clone();
         let magnum = arsenal.find_weapon("magnum").expect("magnum");
         sim.player_mut(you)
@@ -814,34 +852,69 @@ mod tests {
         let (you, them) = (PlayerId::from_index(0), PlayerId::from_index(1));
         let log = HudLog::default();
         // Seen by the victim (as if they were the local player).
-        let message = message_line(&sim, &names(them), &log, 0.0);
+        let message = message_line(&sim, &names(them), &log, 0.0, None);
         assert!(
             message.starts_with("Killed by Player 1\nRespawn in"),
             "{message}"
         );
-        assert_eq!(message_line(&sim, &names(you), &log, 0.0), "");
+        assert_eq!(message_line(&sim, &names(you), &log, 0.0, None), "");
         let board = scoreboard(&sim, &names(you));
         let rows: Vec<&str> = board.lines().collect();
         assert_eq!(rows.len(), 3);
         assert!(
-            rows[1].starts_with("You") && rows[1].contains(" 1 "),
+            rows[1].starts_with("You") && rows[1].contains(" 12 "),
             "{board}"
         );
         assert!(rows[2].starts_with("Player 2"), "{board}");
-        assert_eq!(score_line(&sim, you), "Frags 1 / 25    10:00");
+        assert_eq!(score_line(&sim, you), "Points 12 / 250    10:00");
     }
 
     #[test]
     fn the_end_of_a_match_names_the_winner() {
         let mut data = GameData::builtin().expect("builtin");
-        data.rules.frag_limit = 1;
+        data.rules.score_limit = 1;
         let sim = duel(10.0, &data);
         let message = message_line(
             &sim,
             &names(PlayerId::from_index(1)),
             &HudLog::default(),
             0.0,
+            None,
         );
         assert!(message.starts_with("Match over: Player 1 won"), "{message}");
+    }
+
+    #[test]
+    fn the_end_of_a_match_offers_the_vote() {
+        let mut data = GameData::builtin().expect("builtin");
+        data.rules.score_limit = 1;
+        let sim = duel(10.0, &data);
+        let vote = Vote {
+            options: vec!["dm_a".to_owned(), "dm_b".to_owned()],
+            tally: vec![0, 3],
+            chosen: Some(1),
+        };
+        let message = message_line(
+            &sim,
+            &names(PlayerId::from_index(1)),
+            &HudLog::default(),
+            0.0,
+            Some(&vote),
+        );
+        assert!(message.contains(" [1] dm_a  (0)"), "{message}");
+        assert!(message.contains("*[2] dm_b  (3)"), "{message}");
+    }
+
+    #[test]
+    fn the_wait_for_players_and_the_countdown_are_announced() {
+        let data = GameData::builtin().expect("builtin");
+        let sim = Simulation::new(
+            std::sync::Arc::new(rl_sim::collision::WorldBuilder::new().build()),
+            &data,
+        );
+        let you = PlayerId::from_index(0);
+        let log = HudLog::default();
+        let message = message_line(&sim, &names(you), &log, 0.0, None);
+        assert!(message.starts_with("Waiting for players"), "{message}");
     }
 }

@@ -17,7 +17,10 @@ const DT: f32 = 1.0 / 66.0;
     reason = "broken built-in data must fail the test"
 )]
 fn data() -> GameData {
-    GameData::builtin().expect("builtin data")
+    let mut data = GameData::builtin().expect("builtin data");
+    // Matches start the moment the players are there.
+    data.rules.warmup = 0.0;
+    data
 }
 
 fn physics_config() -> PhysicsConfig {

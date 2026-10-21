@@ -59,7 +59,7 @@ impl Simulation {
         let player = if let Some(player) = self.players.get_mut(id.index()).and_then(Option::take) {
             player
         } else {
-            self.game.add_player(id);
+            self.game.add_player(id, &self.data.rules);
             self.new_player(Spawn {
                 origin: Vec3::ZERO,
                 yaw: 0.0,
@@ -98,7 +98,7 @@ impl Simulation {
     /// dead, and everyone between matches, stay as they are.
     pub fn predict(&mut self, id: PlayerId, cmd: &UserCmd) -> Prediction {
         let mut prediction = Prediction::default();
-        if !self.game.playing() {
+        if self.game.intermission() {
             return prediction;
         }
         let arsenal = Arc::clone(&self.arsenal);

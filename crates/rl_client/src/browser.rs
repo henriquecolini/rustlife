@@ -19,6 +19,7 @@ impl Plugin for BrowserPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::Browser), spawn_browser)
             .add_systems(OnEnter(AppState::Connecting), spawn_connecting)
+            .add_systems(OnEnter(AppState::ChangingMap), spawn_changing_map)
             .add_systems(Update, scroll_list.run_if(in_state(AppState::Browser)));
     }
 }
@@ -37,14 +38,27 @@ const LINE_HEIGHT: f32 = 40.0;
 struct MapList;
 
 /// The screen shown while joining a server.
-fn spawn_connecting(mut commands: Commands, status: Res<NetStatus>) {
+fn spawn_connecting(commands: Commands, status: Res<NetStatus>) {
     let line = match &*status {
         NetStatus::Connecting(server) => format!("Connecting to {server}..."),
         _ => "Connecting...".to_owned(),
     };
+    spawn_message(commands, AppState::Connecting, &line);
+}
+
+fn spawn_changing_map(commands: Commands, map: Res<CurrentMap>) {
+    spawn_message(
+        commands,
+        AppState::ChangingMap,
+        &format!("Loading {}...", map.0),
+    );
+}
+
+/// A screen with one line of text, until `state` is left.
+fn spawn_message(mut commands: Commands, state: AppState, line: &str) {
     commands
         .spawn((
-            DespawnOnExit(AppState::Connecting),
+            DespawnOnExit(state),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -55,7 +69,7 @@ fn spawn_connecting(mut commands: Commands, status: Res<NetStatus>) {
             BackgroundColor(BACKGROUND),
         ))
         .with_children(|root| {
-            root.spawn(label(&line, 28.0, TEXT));
+            root.spawn(label(line, 28.0, TEXT));
         });
 }
 
