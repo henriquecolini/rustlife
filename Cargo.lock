@@ -5574,6 +5574,7 @@ dependencies = [
  "bevy_app",
  "bevy_asset",
  "bevy_audio",
+ "bevy_ecs",
  "bevy_image",
  "bevy_math",
  "bevy_mesh",

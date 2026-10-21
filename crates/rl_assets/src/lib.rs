@@ -15,6 +15,9 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use bevy_app::{App, Plugin};
 use bevy_asset::AssetApp;
 
@@ -59,11 +62,38 @@ impl Plugin for SourceLoadersPlugin {
         app.init_asset::<ModelAsset>();
         app.init_asset::<VertexLightingAsset>();
         app.init_asset::<SoundAsset>();
-        app.register_asset_loader(VtfLoader);
+        let bc = Arc::new(AtomicBool::new(false));
+        app.insert_resource(BlockCompression(Arc::clone(&bc)));
+        app.register_asset_loader(VtfLoader { bc });
         app.register_asset_loader(VmtLoader);
         app.register_asset_loader(BspLoader);
         app.register_asset_loader(MdlLoader);
         app.register_asset_loader(VhvLoader);
         app.register_asset_loader(SoundLoader);
     }
+
+    /// Tells the texture loader, once the GPU is known, whether to keep
+    /// block-compressed textures as they are.
+    fn finish(&self, app: &mut App) {
+        let bc = app
+            .world()
+            .get_resource::<bevy_image::CompressedImageFormatSupport>()
+            .is_some_and(|support| support.0.contains(bevy_image::CompressedImageFormats::BC));
+        if let Some(flag) = app.world().get_resource::<BlockCompression>() {
+            flag.0.store(bc, Ordering::Relaxed);
+        }
+        tracing::info!(
+            bc,
+            "textures {}",
+            if bc {
+                "stay block-compressed"
+            } else {
+                "are decoded"
+            }
+        );
+    }
 }
+
+/// Whether the texture loader uploads BC textures, shared with it.
+#[derive(bevy_ecs::resource::Resource)]
+struct BlockCompression(Arc<AtomicBool>);

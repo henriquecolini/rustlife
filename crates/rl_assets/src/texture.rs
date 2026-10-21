@@ -1,11 +1,19 @@
 //! VTF texture loading: `source://**/*.vtf` becomes a Bevy [`Image`].
+//!
+//! DXT textures (most of the game's) are uploaded as the GPU's BC formats
+//! with the file's own mip chain when the GPU samples those, at a quarter to
+//! an eighth of the memory of RGBA8; everything else, and every texture on
+//! GPUs without BC support, is decoded to RGBA8 with a generated mip chain.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bevy_asset::io::Reader;
 use bevy_asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy_image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
-use source_formats::vtf::{self, DecodedTexture, VtfError};
+use source_formats::vtf::{self, BlockFormat, CompressedTexture, DecodedTexture, VtfError};
 use thiserror::Error;
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
@@ -20,9 +28,14 @@ pub enum VtfLoadError {
     Decode(#[from] VtfError),
 }
 
-/// Loads a `.vtf` file into an [`Image`] with the decoded RGBA8 pixels.
+/// Loads a `.vtf` file into an [`Image`]: block-compressed when the GPU
+/// samples BC formats (`bc`), else decoded RGBA8.
 #[derive(Default, TypePath)]
-pub struct VtfLoader;
+pub struct VtfLoader {
+    /// Whether the GPU samples BC1–3 textures: set once the GPU is known,
+    /// which is after the loader is registered.
+    pub bc: Arc<AtomicBool>,
+}
 
 impl AssetLoader for VtfLoader {
     type Asset = Image;
@@ -37,6 +50,11 @@ impl AssetLoader for VtfLoader {
     ) -> Result<Image, VtfLoadError> {
         let mut bytes = Vec::new();
         AsyncReadExt::read_to_end(reader, &mut bytes).await?;
+        if self.bc.load(Ordering::Relaxed)
+            && let Some(texture) = vtf::compressed(&bytes)
+        {
+            return Ok(image_from_blocks(texture));
+        }
         Ok(image_from_decoded(vtf::decode(&bytes)?))
     }
 
@@ -82,14 +100,48 @@ fn image_from_decoded(texture: DecodedTexture) -> Image {
     );
     image.data = Some(chain);
     image.texture_descriptor.mip_level_count = levels;
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+    image.sampler = tiling_sampler();
+    image
+}
+
+/// Wraps a texture's stored blocks in an [`Image`] of the matching BC
+/// format, with the file's mip chain and a tiling sampler.
+fn image_from_blocks(texture: CompressedTexture) -> Image {
+    let format = match (texture.format, texture.is_normal_map) {
+        (BlockFormat::Dxt1, false) => TextureFormat::Bc1RgbaUnormSrgb,
+        (BlockFormat::Dxt1, true) => TextureFormat::Bc1RgbaUnorm,
+        (BlockFormat::Dxt3, false) => TextureFormat::Bc2RgbaUnormSrgb,
+        (BlockFormat::Dxt3, true) => TextureFormat::Bc2RgbaUnorm,
+        (BlockFormat::Dxt5, false) => TextureFormat::Bc3RgbaUnormSrgb,
+        (BlockFormat::Dxt5, true) => TextureFormat::Bc3RgbaUnorm,
+    };
+    let levels = texture.mips.len() as u32;
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: texture.width,
+            height: texture.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(texture.mips.concat());
+    image.texture_descriptor.mip_level_count = levels;
+    image.sampler = tiling_sampler();
+    image
+}
+
+/// A repeating, anisotropic sampler: world textures tile and are seen at
+/// grazing angles.
+fn tiling_sampler() -> ImageSampler {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
         address_mode_w: ImageAddressMode::Repeat,
         anisotropy_clamp: ANISOTROPY,
         ..ImageSamplerDescriptor::linear()
-    });
-    image
+    })
 }
 
 /// Builds a complete mip chain (base level first) for tightly packed RGBA8
@@ -193,6 +245,23 @@ mod tests {
         };
         assert_eq!(sampler.address_mode_u, ImageAddressMode::Repeat);
         assert_eq!(sampler.address_mode_v, ImageAddressMode::Repeat);
+    }
+
+    #[test]
+    fn blocks_become_a_bc_image_with_their_mips() {
+        let image = image_from_blocks(CompressedTexture {
+            format: BlockFormat::Dxt5,
+            width: 8,
+            height: 4,
+            mips: vec![vec![0; 2 * 16], vec![0; 16], vec![0; 16], vec![0; 16]],
+            is_normal_map: false,
+        });
+        assert_eq!(
+            image.texture_descriptor.format,
+            TextureFormat::Bc3RgbaUnormSrgb
+        );
+        assert_eq!(image.texture_descriptor.mip_level_count, 4);
+        assert_eq!(image.data.as_ref().map(Vec::len), Some(80));
     }
 
     #[test]

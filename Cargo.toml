@@ -34,6 +34,7 @@ bevy = { version = "0.20", features = ["wav", "mp3"] }
 bevy_animation = "0.20"
 bevy_app = "0.20"
 bevy_asset = "0.20"
+bevy_ecs = "0.20"
 # Audio assets only; formats are chosen by the client's `bevy` features.
 bevy_audio = { version = "0.20", default-features = false }
 bevy_image = "0.20"
