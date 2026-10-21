@@ -38,6 +38,7 @@
 pub mod content;
 pub mod error;
 pub mod gameinfo;
+pub mod games;
 mod io;
 pub mod keyvalues;
 pub mod loose;

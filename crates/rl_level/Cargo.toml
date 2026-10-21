@@ -21,6 +21,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 source_formats = { workspace = true, features = ["testing"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -25,16 +25,16 @@ mode, all tunable through RON files in [`data/`](data/).
 
 ## Finding your game
 
-rustlife looks for the game in this order:
+No command-line arguments are needed. rustlife *mounts* games the way Garry's
+Mod does: the content of an installed Source game (today Half-Life 2:
+Deathmatch, id `hl2dm`) becomes available for maps, models and sounds. To find
+the install it searches every Steam library (native, Flatpak and Snap installs,
+the libraries listed in `libraryfolders.vdf`, and libraries on secondary drives
+under `/mnt`, `/media` and the like). A server and its players must have the
+same games mounted to play together.
 
-1. `--game-dir <folder>` on the command line;
-2. the `HL2DM_DIR` environment variable;
-3. `content.game_dir` in the config file;
-4. every Steam library listed in `libraryfolders.vdf` (native, Flatpak and
-   Snap Steam installs are detected automatically).
-
-The folder to point at is the one containing `hl2mp/`, e.g.
-`~/.local/share/Steam/steamapps/common/Half-Life 2 Deathmatch`.
+For installs it cannot find, add the folder containing `hl2mp/` or a Steam
+library folder to the config file:
 
 ### Config file
 
@@ -44,7 +44,10 @@ The folder to point at is the one containing `hl2mp/`, e.g.
 ```ron
 (
     content: (
-        game_dir: Some("/path/to/Half-Life 2 Deathmatch"),
+        games: {
+            "hl2dm": (enabled: true, dir: Some("/path/to/Half-Life 2 Deathmatch")),
+        },
+        library_paths: ["/mnt/games/SteamLibrary"],   // extra Steam libraries
         workshop: (
             enabled: true,
             extra_apps: [220],          // also mount Half-Life 2 workshop items
@@ -53,6 +56,17 @@ The folder to point at is the one containing `hl2mp/`, e.g.
     ),
 )
 ```
+
+Developers can override the Half-Life 2: Deathmatch folder with `--game-dir`
+or the `HL2DM_DIR` environment variable (in that order of precedence, above
+the config file).
+
+### Dedicated server
+
+`rustlife-server` needs no arguments either. Everything is in one file,
+`server.ron`, next to the config above; a commented default is written the
+first time the server runs. It sets the mounted games, the map list, the
+port, the player limit, the match length and the respawn delay.
 
 ## Running
 
@@ -92,10 +106,10 @@ Every game runs on a server. Playing a map from the browser or with
 ```sh
 cargo run --release -p rustlife -- --map dm_lockdown --listen --name Gordon   # host, open on UDP 27015
 cargo run --release -p rustlife -- --connect 192.168.1.20:27015 --name Alyx   # join
-cargo run --release -p rustlife-server -- --map dm_overwatch                  # dedicated server
+cargo run --release -p rustlife-server                                        # dedicated server (see server.ron)
 ```
 
-Each player needs their own copy of the map; the server checks it matches
+Each player needs the server's games mounted and their own copy of the map; the server checks both match
 and sends its gameplay data, never game files. `--port` picks another UDP
 port, and `--net-sim 100ms,10ms,2%` simulates a bad connection. See
 [docs/netcode.md](docs/netcode.md).

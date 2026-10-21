@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod maps;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

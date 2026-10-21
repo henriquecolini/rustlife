@@ -79,6 +79,9 @@ pub enum ServerError {
 pub struct ServerOptions {
     /// The gameplay data, sent to every client.
     pub data: GameData,
+    /// Ids of the games whose content the server runs on; clients must have
+    /// every one mounted.
+    pub games: Vec<String>,
     /// Where to listen for UDP clients; `None` for in-process clients
     /// only.
     pub listen: Option<SocketAddr>,
@@ -160,6 +163,7 @@ pub struct Server {
     data: GameData,
     data_files: BTreeMap<String, String>,
     data_hash: u64,
+    games: Vec<String>,
     map: MapInfo,
     /// Where the level placed its moving props.
     initial: BTreeMap<BodyId, BodyPose>,
@@ -201,6 +205,7 @@ impl Server {
             initial: snapshot::initial_props(&built.simulation),
             sim: built.simulation,
             data_hash: rl_data::content_hash(&data_files),
+            games: options.games,
             data_files,
             tick_interval: Duration::from_secs_f32(options.data.simulation.tick_interval()),
             data: options.data,
@@ -423,9 +428,10 @@ impl Server {
                     version,
                     name,
                     data_hash,
+                    games,
                 },
                 Stage::Connected,
-            ) => self.hello(id, version, &name, data_hash),
+            ) => self.hello(id, version, &name, data_hash, &games),
             (ClientMessage::Ready, Stage::Loading) => self.ready(id),
             (message, stage) => {
                 tracing::debug!(client = id, ?message, ?stage, "message out of turn ignored");
@@ -433,11 +439,15 @@ impl Server {
         }
     }
 
-    fn hello(&mut self, id: ClientId, version: u32, name: &str, data_hash: u64) {
+    fn hello(&mut self, id: ClientId, version: u32, name: &str, data_hash: u64, games: &[String]) {
         let playing = self.players().count();
         let refusal = if version != PROTOCOL_VERSION {
             Some(format!(
                 "the server speaks protocol {PROTOCOL_VERSION}, the client {version}"
+            ))
+        } else if let Some(missing) = self.games.iter().find(|game| !games.contains(game)) {
+            Some(format!(
+                "this server needs the game `{missing}` mounted; mount it in the main menu"
             ))
         } else if playing >= self.data.net.max_players as usize {
             Some("the server is full".to_owned())
@@ -454,6 +464,7 @@ impl Server {
         }
         let name = protocol::clean_name(name, &format!("player{}", self.clients.len()));
         let welcome = Welcome {
+            games: self.games.clone(),
             map: self.map.clone(),
             data: (data_hash != self.data_hash).then(|| self.data_files.clone()),
             roster: self

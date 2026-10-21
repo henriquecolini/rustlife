@@ -50,7 +50,18 @@ impl SteamLibraries {
     /// per-platform locations (see [`default_steam_roots`]).
     #[must_use]
     pub fn discover() -> Self {
-        Self::from_roots(default_steam_roots())
+        let mut libraries = Self::from_roots(default_steam_roots());
+        libraries.add_libraries(scan_for_libraries(&default_scan_roots(), SCAN_DEPTH));
+        libraries
+    }
+
+    /// Adds library folders found by other means (a scan, the user's
+    /// configuration). Folders without a `steamapps` directory are ignored,
+    /// and so are duplicates.
+    pub fn add_libraries(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            self.add(path);
+        }
     }
 
     /// Discovers libraries listed by the given Steam roots. Each root is itself
@@ -229,6 +240,64 @@ pub fn default_steam_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+/// How many directory levels below a scan root [`scan_for_libraries`] looks
+/// by default: enough for `/mnt/<drive>/Games/SteamLibrary`.
+pub const SCAN_DEPTH: usize = 3;
+
+/// Places where secondary drives are usually mounted, which may hold Steam
+/// library folders that Steam's own `libraryfolders.vdf` does not list (a
+/// drive that was moved between installs, for instance).
+#[must_use]
+pub fn default_scan_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if cfg!(target_os = "linux") {
+        roots.extend(["/mnt", "/media", "/run/media"].map(PathBuf::from));
+    } else if cfg!(target_os = "macos") {
+        roots.push(PathBuf::from("/Volumes"));
+    } else if cfg!(windows) {
+        roots.extend(('C'..='Z').map(|drive| PathBuf::from(format!("{drive}:\\"))));
+    }
+    roots.into_iter().filter(|path| path.is_dir()).collect()
+}
+
+/// Looks for Steam library folders (directories containing `steamapps`) at
+/// most `max_depth` levels below each of `roots`.
+///
+/// Only directory listings are read, hidden directories are skipped, and the
+/// inside of a library is not searched, so the cost stays small even on large
+/// drives. Unreadable directories are skipped silently.
+#[must_use]
+pub fn scan_for_libraries(roots: &[PathBuf], max_depth: usize) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for root in roots {
+        scan(root, max_depth, &mut found);
+    }
+    found
+}
+
+fn scan(dir: &Path, depth_left: usize, found: &mut Vec<PathBuf>) {
+    if dir.join("steamapps").is_dir() {
+        found.push(dir.to_owned());
+        return;
+    }
+    if depth_left == 0 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    children.sort();
+    for child in children {
+        scan(&child, depth_left - 1, found);
+    }
+}
+
 fn home_dir() -> Option<PathBuf> {
     let variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var_os(variable)
@@ -240,6 +309,23 @@ fn home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::testing::SteamFixture;
+
+    #[test]
+    fn scan_finds_unlisted_libraries_within_depth() {
+        let root = tempfile::tempdir().unwrap();
+        let deep = root.path().join("drive/Games/SteamLibrary");
+        fs::create_dir_all(deep.join("steamapps")).unwrap();
+        let too_deep = root.path().join("a/b/c/d/Lib");
+        fs::create_dir_all(too_deep.join("steamapps")).unwrap();
+        fs::create_dir_all(root.path().join(".hidden/Lib/steamapps")).unwrap();
+
+        let found = scan_for_libraries(&[root.path().to_path_buf()], SCAN_DEPTH);
+        assert_eq!(found, std::slice::from_ref(&deep));
+
+        let mut libraries = SteamLibraries::default();
+        libraries.add_libraries(found);
+        assert_eq!(libraries.libraries().len(), 1);
+    }
 
     #[test]
     fn finds_apps_across_libraries() {

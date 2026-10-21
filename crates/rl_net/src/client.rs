@@ -62,6 +62,8 @@ pub struct ClientConfig {
     pub name: String,
     /// [`rl_data::content_hash`] of the gameplay data the client has.
     pub data_hash: u64,
+    /// Ids of the games the client has mounted.
+    pub games: Vec<String>,
     /// Simulated latency, jitter and loss (none for a real game).
     pub conditions: NetConditions,
 }
@@ -344,6 +346,7 @@ impl NetClient {
                 version: PROTOCOL_VERSION,
                 name: self.config.name.clone(),
                 data_hash: self.config.data_hash,
+                games: self.config.games.clone(),
             };
             self.send(Channel::Control, protocol::encode(&hello));
         }

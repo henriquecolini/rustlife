@@ -1,45 +1,49 @@
 //! `rustlife-server`: a dedicated server, headless.
 //!
 //! ```text
-//! rustlife-server --game-dir <HL2DM> --map dm_overwatch [--port 27015] [--dummies 2]
+//! rustlife-server
 //! ```
 //!
-//! It mounts the game content (for the map's collision and props; it draws
-//! nothing), loads the level and serves it over UDP until stopped, ticking
-//! at the gameplay data's rate. Clients join with
-//! `rustlife --connect <address>:<port>`.
+//! It needs no arguments: everything is configured in `server.ron` (in the
+//! rustlife configuration directory; a commented default is written on the
+//! first run). It mounts the configured games (for the maps' collision and
+//! props; it draws nothing), loads a map and serves it over UDP until
+//! stopped, ticking at the gameplay data's rate. Clients join from the
+//! game's menu.
+//!
+//! The command-line options are developer aids.
 
 #![forbid(unsafe_code)]
 
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use rl_config::ContentArgs;
+use rl_config::{ContentArgs, ServerConfig};
 use rl_data::GameData;
+use rl_level::maps::deathmatch_maps;
 use rl_server::{Server, ServerOptions};
-use source_fs::content::mount_game;
+use source_fs::Vfs;
+use source_fs::content::mount_games;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "The rustlife dedicated server")]
 struct Cli {
+    /// Content-location overrides (the server's own settings are in its
+    /// config file).
     #[command(flatten)]
     content: ContentArgs,
 
-    /// Map to serve, without path or extension (e.g. `dm_overwatch`).
-    #[arg(long)]
-    map: String,
+    /// Server config file to use instead of the one in the config directory.
+    #[arg(long, value_name = "FILE")]
+    server_config: Option<PathBuf>,
 
-    /// UDP port to listen on (default: `net.ron`'s).
+    /// Serve this map first, instead of the first one configured.
     #[arg(long)]
-    port: Option<u16>,
-
-    /// Address to listen on.
-    #[arg(long, default_value_t = Ipv4Addr::UNSPECIFIED)]
-    bind: Ipv4Addr,
+    map: Option<String>,
 
     /// Directory of gameplay data files overriding the built-in ones, file
     /// by file; clients are sent the result.
@@ -65,22 +69,43 @@ fn main() -> Result<()> {
         )
         .init();
     let cli = Cli::parse();
-    let config = cli.content.load_config()?;
-    let data = GameData::load(cli.data_dir.as_deref())?;
-    let game = mount_game(&cli.content.resolve(&config.content))?;
-    let level = rl_level::load(&game.vfs, &cli.map, &data.physics)
-        .with_context(|| format!("loading {}", cli.map))?;
-    let port = cli.port.unwrap_or(data.net.port);
+    let config_path = cli
+        .server_config
+        .clone()
+        .or_else(ServerConfig::default_path)
+        .unwrap_or_else(|| PathBuf::from("server.ron"));
+    let config = ServerConfig::load_or_create(&config_path)?;
+    tracing::info!(config = %config_path.display(), name = config.name, "configuration loaded");
+
+    let vfs = Vfs::new();
+    mount_configured_games(&vfs, &config, &cli.content)?;
+
+    let mut data = GameData::load(cli.data_dir.as_deref())?;
+    config.apply_to(&mut data);
+    let maps = if config.maps.is_empty() {
+        deathmatch_maps(&vfs)
+    } else {
+        config.maps.clone()
+    };
+    let map = cli
+        .map
+        .clone()
+        .or_else(|| maps.first().cloned())
+        .context("no maps to serve: configure `maps` or mount a game that has some")?;
+    let level =
+        rl_level::load(&vfs, &map, &data.physics).with_context(|| format!("loading {map}"))?;
+    let port = config.port;
     let tick = Duration::from_secs_f32(data.simulation.tick_interval());
     let mut server = Server::new(
         &level,
         ServerOptions {
             data,
-            listen: Some(SocketAddr::from((cli.bind, port))),
+            games: config.games.clone(),
+            listen: Some(SocketAddr::from((config.bind, port))),
             dummies: cli.dummies,
         },
     )?;
-    tracing::info!(map = cli.map, addresses = ?server.addresses(), "serving");
+    tracing::info!(map, addresses = ?server.addresses(), "serving");
 
     let start = Instant::now();
     let stop = cli.run_for.map(Duration::from_secs_f32);
@@ -107,5 +132,29 @@ fn main() -> Result<()> {
     server.shut_down();
     // Let the disconnections go out.
     server.update(start.elapsed());
+    Ok(())
+}
+
+/// Mounts every game the config requires, failing if one cannot be mounted,
+/// since players would then be refused or play with different content.
+fn mount_configured_games(vfs: &Vfs, config: &ServerConfig, args: &ContentArgs) -> Result<()> {
+    let mut content = config.content.clone();
+    args.apply(&mut content);
+    let plans = content.plans(Some(&config.games));
+    for id in &config.games {
+        if !plans.iter().any(|plan| plan.game.id == id) {
+            bail!("game `{id}` in the server config is unknown or disabled");
+        }
+    }
+    for mount in mount_games(vfs, &plans) {
+        match mount.outcome {
+            Ok(info) => tracing::info!(
+                game = mount.game.name,
+                dir = %info.game_dir.display(),
+                "mounted"
+            ),
+            Err(error) => bail!("cannot mount {}: {error}", mount.game.name),
+        }
+    }
     Ok(())
 }

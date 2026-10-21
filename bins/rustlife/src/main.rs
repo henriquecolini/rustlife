@@ -17,12 +17,13 @@ use anyhow::Result;
 use clap::Parser;
 use rl_client::ClientOptions;
 use rl_client::capture::Capture;
+use rl_client::content::Content;
 use rl_client::net::{NetSettings, Network};
 use rl_client::script::InputScript;
 use rl_config::ContentArgs;
 use rl_data::GameData;
 use rl_net::conditioner::NetConditions;
-use source_fs::content::mount_game;
+use source_fs::Vfs;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -168,9 +169,11 @@ fn parse_teleport(text: &str) -> Result<([f32; 3], (f32, f32)), String> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // Logging is set up by Bevy's `LogPlugin`; `RUST_LOG` still applies.
-    let config = cli.content.load_config()?;
+    let mut config = cli.content.load_config()?;
+    cli.content.apply(&mut config.content);
     let data = GameData::load(cli.data_dir.as_deref())?;
-    let game = mount_game(&cli.content.resolve(&config.content))?;
+    let vfs = Arc::new(Vfs::new());
+    let content = Content::mount(config, cli.content.config_path(), &vfs);
     let grab_at = cli.grab_prop.then_some(LOAD_SECS);
     let fire_at = cli.throw_after.map(|secs| LOAD_SECS + secs);
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
@@ -219,8 +222,9 @@ fn main() -> Result<()> {
         dummies: cli.dummies,
     };
     rl_client::run(
-        Arc::new(game.vfs),
+        vfs,
         ClientOptions {
+            content,
             map: cli.map,
             spawn: cli.spawn,
             capture,

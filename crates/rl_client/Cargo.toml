@@ -11,6 +11,7 @@ description = "The rustlife client: renders mounted Source maps and runs the pla
 
 [dependencies]
 rl_assets.workspace = true
+rl_config.workspace = true
 rl_data.workspace = true
 rl_level.workspace = true
 rl_net.workspace = true
@@ -22,6 +23,7 @@ bevy.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+source_fs = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 
 [lints]

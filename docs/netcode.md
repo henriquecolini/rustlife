@@ -26,7 +26,7 @@ does.
 ```sh
 rustlife --map dm_lockdown                 # host a game, alone (in-process server)
 rustlife --map dm_lockdown --listen        # host it for others too (UDP, --port)
-rustlife-server --map dm_overwatch         # a dedicated server (--port, --dummies)
+rustlife-server                          # a dedicated server, configured by server.ron
 rustlife --connect 127.0.0.1:27015 --name Alyx
 rustlife --connect 127.0.0.1:27015 --net-sim 100ms,10ms,2%
 ```

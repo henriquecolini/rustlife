@@ -37,6 +37,7 @@ use rl_sim::physics::BodyId;
 use rl_sim::simulation::{PlayerId, Simulation};
 use source_formats::entities::MapEntity;
 
+use crate::content::Content;
 use crate::player::{Gameplay, Movement, Ticked};
 use crate::{AppState, CurrentMap, GameVfs};
 
@@ -163,7 +164,7 @@ impl Plugin for NetPlugin {
     }
 }
 
-fn client_config(settings: &NetSettings, data: &GameData) -> ClientConfig {
+fn client_config(settings: &NetSettings, data: &GameData, games: Vec<String>) -> ClientConfig {
     let data_hash = data
         .to_files()
         .map(|files| rl_data::content_hash(&files))
@@ -171,6 +172,7 @@ fn client_config(settings: &NetSettings, data: &GameData) -> ClientConfig {
     ClientConfig {
         name: settings.name.clone(),
         data_hash,
+        games,
         conditions: settings.conditions,
     }
 }
@@ -180,6 +182,7 @@ fn connect(
     mut commands: Commands,
     settings: Res<NetSettings>,
     gameplay: Res<Gameplay>,
+    content: Res<Content>,
     mut status: ResMut<NetStatus>,
     mut next: ResMut<NextState<AppState>>,
 ) {
@@ -187,7 +190,10 @@ fn connect(
         next.set(AppState::Browser);
         return;
     };
-    match NetClient::connect(address, client_config(&settings, &gameplay.0)) {
+    match NetClient::connect(
+        address,
+        client_config(&settings, &gameplay.0, content.mounted_ids()),
+    ) {
         Ok(client) => {
             info!("connecting to {address}");
             *status = NetStatus::Connecting(address.to_string());
@@ -209,6 +215,7 @@ fn host(
     map: Res<CurrentMap>,
     vfs: Res<GameVfs>,
     gameplay: Res<Gameplay>,
+    content: Res<Content>,
     connection: Option<Res<Connection>>,
     mut status: ResMut<NetStatus>,
 ) {
@@ -229,8 +236,10 @@ fn host(
         }
     };
     let listen = port.map(|port| SocketAddr::from(([0, 0, 0, 0], port)));
+    let games = content.mounted_ids();
     let options = ServerOptions {
         data: data.clone(),
+        games: games.clone(),
         listen,
         dummies: settings.dummies,
     };
@@ -245,7 +254,7 @@ fn host(
     if listen.is_some() {
         info!("hosting {} on {:?}", map.0, server.addresses());
     }
-    let client = server.connect_local(client_config(&settings, &data));
+    let client = server.connect_local(client_config(&settings, &data, games));
     commands.insert_resource(Host(server));
     commands.insert_resource(HostedLevel(level));
     commands.insert_resource(Connection(client));

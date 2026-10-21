@@ -151,6 +151,14 @@ impl Vfs {
         before - mounts.len()
     }
 
+    /// Removes every mount, e.g. before mounting a different set of games.
+    pub fn clear(&self) {
+        self.mounts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
     /// Describes every mount in priority order.
     #[must_use]
     pub fn mount_list(&self) -> Vec<MountInfo> {

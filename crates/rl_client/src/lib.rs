@@ -42,6 +42,7 @@ pub mod audio;
 pub mod browser;
 pub mod camera;
 pub mod capture;
+pub mod content;
 pub mod effects;
 pub mod fog;
 pub mod hud;
@@ -79,6 +80,8 @@ pub struct GameVfs(pub Arc<Vfs>);
 /// How the client should start.
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
+    /// The mounted games and the player's content settings.
+    pub content: content::Content,
     /// Map to host straight away (without path or extension); `None` opens
     /// the map browser (or, when joining, waits for the server's map).
     pub map: Option<String>,
@@ -115,6 +118,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     };
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
+    app.insert_resource(options.content);
     app.add_plugins(SourceAssetPlugin::new(vfs));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {

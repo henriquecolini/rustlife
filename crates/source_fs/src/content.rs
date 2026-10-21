@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::gameinfo::{GameInfo, ResolvedLocation};
+use crate::games::GameDescriptor;
 use crate::loose::LooseDirectory;
 use crate::steam::{SteamLibraries, WorkshopItem};
 use crate::vfs::{MountOrigin, Vfs};
@@ -88,11 +89,40 @@ impl Default for ContentOptions {
     }
 }
 
+impl ContentOptions {
+    /// Options for mounting `game`, with its default workshop selection.
+    #[must_use]
+    pub fn for_game(game: &GameDescriptor) -> Self {
+        Self {
+            app_id: game.app_id,
+            mod_dir: game.mod_dir.to_owned(),
+            ..Self::default()
+        }
+    }
+}
+
 /// The result of [`mount_game`].
 #[derive(Debug)]
 pub struct MountedGame {
     /// The assembled filesystem.
     pub vfs: Vfs,
+    /// What was mounted into it.
+    pub info: MountedInfo,
+}
+
+impl std::ops::Deref for MountedGame {
+    type Target = MountedInfo;
+
+    fn deref(&self) -> &MountedInfo {
+        &self.info
+    }
+}
+
+/// What [`mount_game_into`] mounted.
+#[derive(Debug)]
+pub struct MountedInfo {
+    /// The install folder the game was found in.
+    pub game_dir: PathBuf,
     /// The parsed `gameinfo.txt`.
     pub gameinfo: GameInfo,
     /// Workshop items that were mounted.
@@ -110,6 +140,18 @@ pub struct MountedGame {
 /// Returns [`Error::GameNotFound`] if the install cannot be located, or an
 /// error if its `gameinfo.txt` is unreadable.
 pub fn mount_game(options: &ContentOptions) -> Result<MountedGame> {
+    let vfs = Vfs::new();
+    let info = mount_game_into(&vfs, options)?;
+    Ok(MountedGame { vfs, info })
+}
+
+/// Like [`mount_game`], but mounts below the existing mounts of `vfs`, so
+/// several games can share one filesystem and a live one can be remounted.
+///
+/// # Errors
+///
+/// See [`mount_game`].
+pub fn mount_game_into(vfs: &Vfs, options: &ContentOptions) -> Result<MountedInfo> {
     let steam = options
         .steam
         .clone()
@@ -135,7 +177,6 @@ pub fn mount_game(options: &ContentOptions) -> Result<MountedGame> {
         Vec::new()
     };
 
-    let vfs = Vfs::new();
     let locations = gameinfo.content_locations();
     let wildcard_count = locations
         .iter()
@@ -144,10 +185,10 @@ pub fn mount_game(options: &ContentOptions) -> Result<MountedGame> {
     let (wildcards, rest) = locations.split_at(wildcard_count);
 
     for (_, location) in wildcards {
-        mount_location(&vfs, location, &MountOrigin::Custom);
+        mount_location(vfs, location, &MountOrigin::Custom);
     }
     for item in &workshop_items {
-        mount_workshop_item(&vfs, item);
+        mount_workshop_item(vfs, item);
     }
     for (search_path, location) in rest {
         let origin = if search_path.has_id("download") {
@@ -157,14 +198,45 @@ pub fn mount_game(options: &ContentOptions) -> Result<MountedGame> {
         } else {
             MountOrigin::BaseGame
         };
-        mount_location(&vfs, location, &origin);
+        mount_location(vfs, location, &origin);
     }
 
-    Ok(MountedGame {
-        vfs,
+    Ok(MountedInfo {
+        game_dir,
         gameinfo,
         workshop_items,
     })
+}
+
+/// One game to mount: which, and how to find it.
+#[derive(Debug, Clone)]
+pub struct GamePlan {
+    /// The game.
+    pub game: GameDescriptor,
+    /// Where it is and which workshop content comes with it.
+    pub options: ContentOptions,
+}
+
+/// The outcome of mounting one [`GamePlan`].
+#[derive(Debug)]
+pub struct GameMount {
+    /// The game.
+    pub game: GameDescriptor,
+    /// What was mounted, or why the game could not be.
+    pub outcome: Result<MountedInfo>,
+}
+
+/// Mounts every game in `plans` into `vfs`, in order (earlier games take
+/// priority), and reports each one's outcome. A game that is not installed
+/// does not stop the others from mounting.
+pub fn mount_games(vfs: &Vfs, plans: &[GamePlan]) -> Vec<GameMount> {
+    plans
+        .iter()
+        .map(|plan| GameMount {
+            game: plan.game,
+            outcome: mount_game_into(vfs, &plan.options),
+        })
+        .collect()
 }
 
 fn locate_game_dir(options: &ContentOptions, steam: &SteamLibraries) -> Result<PathBuf> {
@@ -188,8 +260,8 @@ fn locate_game_dir(options: &ContentOptions, steam: &SteamLibraries) -> Result<P
         .ok_or_else(|| {
             Error::GameNotFound(format!(
                 "could not find an installation of Steam app {} in any Steam library \
-                 (searched {} libraries). Install Half-Life 2: Deathmatch through Steam, or \
-                 pass --game-dir / set HL2DM_DIR to its install folder",
+                 (searched {} libraries). Install the game through Steam, or point rustlife \
+                 at its install folder",
                 options.app_id,
                 steam.libraries().len()
             ))
@@ -375,6 +447,23 @@ mod tests {
             }
         );
         assert_eq!(origins.last(), Some(&MountOrigin::Download));
+    }
+
+    #[test]
+    fn mounts_into_an_existing_filesystem_and_can_be_cleared() {
+        let (_tmp, options) = fixture();
+        let vfs = Vfs::new();
+        let info = mount_game_into(&vfs, &options).unwrap();
+        assert!(info.game_dir.ends_with("Sample"), "{:?}", info.game_dir);
+        assert!(vfs.exists("maps/dm_base.bsp"));
+
+        vfs.clear();
+        assert!(!vfs.exists("maps/dm_base.bsp"));
+        mount_game_into(&vfs, &options).unwrap();
+        assert!(
+            vfs.exists("maps/dm_base.bsp"),
+            "remounting restores content"
+        );
     }
 
     #[test]

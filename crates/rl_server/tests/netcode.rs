@@ -24,6 +24,9 @@ use rl_sim::physics::{Motion, PropDesc};
 use rl_sim::simulation::{PlayerId, Spawn, TickEvents};
 use source_formats::props::{PropKind, PropPlacement};
 
+/// The game id every test client and server agrees on.
+const GAME: &str = "hl2dm";
+
 fn data() -> GameData {
     GameData::builtin().expect("builtin data")
 }
@@ -101,6 +104,7 @@ impl Game {
             &level,
             ServerOptions {
                 data: data.clone(),
+                games: vec![GAME.to_owned()],
                 listen: None,
                 dummies: 0,
             },
@@ -123,6 +127,7 @@ impl Game {
         let config = ClientConfig {
             name: name.to_owned(),
             data_hash,
+            games: vec![GAME.to_owned()],
             conditions: conditions.parse().expect("conditions"),
         };
         let client = self.server.connect_local(config);
@@ -250,6 +255,7 @@ fn a_full_server_refuses_more_players() {
     let config = ClientConfig {
         name: "Bob".to_owned(),
         data_hash: 0,
+        games: vec![GAME.to_owned()],
         conditions: NetConditions::NONE,
     };
     let client = game.server.connect_local(config);
@@ -260,6 +266,29 @@ fn a_full_server_refuses_more_players() {
             index == 1 && matches!(event, ClientEvent::Refused(ref why) if why.contains("full"))
         });
     assert!(refused);
+}
+
+#[test]
+fn a_client_without_the_servers_game_is_refused() {
+    let data = data();
+    let mut game = Game::new(data.clone());
+    let config = ClientConfig {
+        name: "Bob".to_owned(),
+        data_hash: local_hash(&data),
+        games: vec!["other".to_owned()],
+        conditions: NetConditions::NONE,
+    };
+    let client = game.server.connect_local(config);
+    game.clients.push(client);
+    let reason = (0..120)
+        .flat_map(|_| game.step_with(|_, _| None))
+        .find_map(|(_, event)| match event {
+            ClientEvent::Refused(why) => Some(why),
+            _ => None,
+        })
+        .expect("refused");
+    assert!(reason.contains(GAME), "{reason}");
+    assert_eq!(game.server.players().count(), 0);
 }
 
 #[test]
@@ -594,6 +623,7 @@ fn a_game_over_udp_shared_with_an_in_process_player() {
         &level,
         ServerOptions {
             data: data.clone(),
+            games: vec![GAME.to_owned()],
             listen: Some("127.0.0.1:0".parse().expect("address")),
             dummies: 1,
         },
@@ -603,6 +633,7 @@ fn a_game_over_udp_shared_with_an_in_process_player() {
     let config = |name: &str| ClientConfig {
         name: name.to_owned(),
         data_hash: local_hash(&data),
+        games: vec![GAME.to_owned()],
         conditions: NetConditions::NONE,
     };
     // The host plays in-process while a remote player joins over UDP:

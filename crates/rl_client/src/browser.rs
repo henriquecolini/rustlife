@@ -7,35 +7,10 @@ use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::picking::Pickable;
 use bevy::picking::events::{PointerClick, PointerOut, PointerOver};
 use bevy::prelude::*;
-use source_fs::Vfs;
+use rl_level::maps::{MapEntry, list_maps};
 
 use crate::net::{NetSettings, NetStatus, Network};
 use crate::{AppState, CurrentMap, GameVfs};
-
-/// A map the browser can offer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MapEntry {
-    /// Map name without path or extension, e.g. `dm_lockdown`.
-    pub name: String,
-    /// Human-readable origin of the copy that would load, e.g. `base game`.
-    pub origin: String,
-}
-
-/// Lists the playable maps in `vfs` (`maps/*.bsp`), sorted by name, each
-/// attributed to the highest-priority mount providing it.
-#[must_use]
-pub fn list_maps(vfs: &Vfs) -> Vec<MapEntry> {
-    vfs.list("maps/*.bsp")
-        .into_iter()
-        .filter_map(|file| {
-            let name = file.path.strip_prefix("maps/")?.strip_suffix(".bsp")?;
-            Some(MapEntry {
-                name: name.to_owned(),
-                origin: file.origin.to_string(),
-            })
-        })
-        .collect()
-}
 
 /// Shows the map browser while in [`AppState::Browser`].
 pub struct BrowserPlugin;
@@ -216,44 +191,5 @@ fn scroll_list(
     };
     for mut position in &mut lists {
         position.0.y = (position.0.y - pixels).max(0.0);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use source_fs::{LooseDirectory, MountOrigin};
-
-    #[test]
-    fn lists_top_level_maps_with_their_origin() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join("maps/graphs")).expect("mkdir");
-        for file in [
-            "maps/dm_b.bsp",
-            "maps/dm_a.bsp",
-            "maps/graphs/dm_a.ain",
-            "maps/readme.txt",
-        ] {
-            std::fs::write(dir.path().join(file), b"").expect("write");
-        }
-        let vfs = Vfs::new();
-        vfs.mount_back(
-            LooseDirectory::open(dir.path()).expect("open"),
-            MountOrigin::Custom,
-        );
-
-        assert_eq!(
-            list_maps(&vfs),
-            [
-                MapEntry {
-                    name: "dm_a".into(),
-                    origin: "custom".into()
-                },
-                MapEntry {
-                    name: "dm_b".into(),
-                    origin: "custom".into()
-                },
-            ]
-        );
     }
 }

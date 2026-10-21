@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 clap.workspace = true
 directories.workspace = true
+rl_data.workspace = true
 ron.workspace = true
 serde.workspace = true
 source_fs.workspace = true

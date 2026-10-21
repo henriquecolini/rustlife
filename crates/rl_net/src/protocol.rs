@@ -43,7 +43,7 @@ use thiserror::Error;
 pub const PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustlife");
 
 /// Bumped whenever a message changes shape: client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Longest player name kept, in characters.
 pub const MAX_NAME_CHARS: usize = 32;
@@ -119,6 +119,10 @@ pub enum ClientMessage {
         /// [`rl_data::content_hash`] of the gameplay data the client has;
         /// the server sends its own unless they match.
         data_hash: u64,
+        /// Ids of the games the client has mounted
+        /// (`source_fs::games::GameDescriptor::id`); the server refuses
+        /// clients that lack one it requires.
+        games: Vec<String>,
     },
     /// The map is loaded: put the player in the game.
     Ready,
@@ -139,6 +143,8 @@ pub struct MapInfo {
 /// The server's answer to [`ClientMessage::Hello`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Welcome {
+    /// Ids of the games whose content the server runs on.
+    pub games: Vec<String>,
     /// The map to load.
     pub map: MapInfo,
     /// The server's gameplay data as files ([`rl_data::GameData::to_files`]),
@@ -232,6 +238,7 @@ mod tests {
             version: PROTOCOL_VERSION,
             name: "Gordon".to_owned(),
             data_hash: 42,
+            games: vec!["hl2dm".to_owned()],
         };
         assert_eq!(
             decode::<ClientMessage>(&encode(&hello)).expect("decode"),
@@ -252,6 +259,7 @@ mod tests {
             packet
         );
         let welcome = ServerMessage::Welcome(Box::new(Welcome {
+            games: vec!["hl2dm".to_owned()],
             map: MapInfo {
                 name: "dm_test".to_owned(),
                 checksum: 0xdead_beef,

@@ -5597,6 +5597,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "rl_assets",
+ "rl_config",
  "rl_data",
  "rl_level",
  "rl_net",
@@ -5614,6 +5615,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "directories",
+ "rl_data",
  "ron",
  "serde",
  "source_fs",
@@ -5642,6 +5644,7 @@ dependencies = [
  "rl_sim",
  "source_formats",
  "source_fs",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]

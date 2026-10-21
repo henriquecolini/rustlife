@@ -73,8 +73,15 @@ fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = cli.content.load_config()?;
-    let game = mount_game(&cli.content.resolve(&config.content))?;
+    let mut config = cli.content.load_config()?;
+    cli.content.apply(&mut config.content);
+    let plan = config
+        .content
+        .plans(None)
+        .into_iter()
+        .next()
+        .context("no game is enabled in the config")?;
+    let game = mount_game(&plan.options)?;
     run(&cli.command, &game)
 }
 
