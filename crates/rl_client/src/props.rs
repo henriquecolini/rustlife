@@ -38,10 +38,12 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use rl_assets::coords;
-use rl_assets::vertex_lighting::{colors_by_vertex, cube_lit_mesh, vertex_lit_mesh};
+use rl_assets::light_field::LightField;
+use rl_assets::vertex_lighting::{
+    colors_by_vertex, cube_lit_mesh, field_lit_mesh, vertex_lit_mesh,
+};
 use rl_assets::{MapAsset, ModelAsset, PlacedProp, PropKind, VertexLightingAsset};
 use rl_sim::physics::{BodyId, BodyPose};
-use source_formats::ambient::{AmbientCube, AmbientLighting};
 
 use crate::AppState;
 use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
@@ -52,16 +54,13 @@ use crate::world::{
 };
 
 /// A moving prop is relit once it has moved this far since it was last
-/// lit, metres (16 units)...
-const RELIGHT_DISTANCE: f32 = 16.0 * coords::METERS_PER_UNIT;
-/// ...or turned this far, radians...
-const RELIGHT_ANGLE: f32 = 0.25;
+/// lit, metres (2 units)...
+const RELIGHT_DISTANCE: f32 = 2.0 * coords::METERS_PER_UNIT;
+/// ...or turned this far, radians. The light field is continuous, so small
+/// steps change the lighting only a little each time...
+const RELIGHT_ANGLE: f32 = 0.04;
 /// ...but at most this often, seconds.
-const RELIGHT_INTERVAL: f32 = 0.2;
-
-/// Height above a prop's origin at which to light it when its centre is
-/// inside solid space: origins often sit exactly on the floor (8 units).
-const LIGHTING_LIFT: f32 = 8.0 * coords::METERS_PER_UNIT;
+const RELIGHT_INTERVAL: f32 = 0.04;
 
 /// Spawns and dresses the map's props while in [`AppState::InGame`].
 pub struct PropsPlugin;
@@ -76,6 +75,7 @@ impl Plugin for PropsPlugin {
                 Update,
                 (
                     spawn_props,
+                    make_light_field,
                     attach_models,
                     add_bodies,
                     show_broken,
@@ -192,9 +192,14 @@ pub(crate) fn spawn_model(
 
 /// Forgets the previous map's props and models on entering or leaving a map.
 /// The entities themselves are [`MapScoped`] and despawned by the world.
-fn reset(mut spawned: ResMut<PropsSpawned>, mut models: ResMut<ModelHandles>) {
+fn reset(
+    mut commands: Commands,
+    mut spawned: ResMut<PropsSpawned>,
+    mut models: ResMut<ModelHandles>,
+) {
     spawned.0 = false;
     models.0.clear();
+    commands.remove_resource::<MapLightField>();
 }
 
 /// Spawns a root entity for every prop of the loaded map.
@@ -260,9 +265,9 @@ fn transform_of(prop: &PlacedProp) -> Transform {
 enum PropLight {
     /// vrad's baked colour per model vertex (static props).
     Baked(Vec<[f32; 3]>),
-    /// The engine's model lighting at the prop: an ambient cube (Source
-    /// space) and the prop's rotation, to turn its normals into the world.
-    Cube(AmbientCube, Quat),
+    /// The map's light field, evaluated at every vertex (or once, for a
+    /// model hung off another entity), and again as the prop moves.
+    Field,
     /// Nothing usable: the irradiance volume lights the prop.
     Volume,
 }
@@ -276,16 +281,13 @@ fn attach_models(
     waiting: Query<(Entity, &Prop, &Transform, Option<&LightAt>), With<AwaitingModel>>,
     models: Res<Assets<ModelAsset>>,
     lightings: Res<Assets<VertexLightingAsset>>,
-    map: Option<Res<MapHandle>>,
-    maps: Res<Assets<MapAsset>>,
+    field: Option<Res<MapLightField>>,
     mut meshes: ResMut<Assets<Mesh>>,
     asset_server: Res<AssetServer>,
     placeholder: Res<Placeholder>,
     mut material_maps: ResMut<MaterialMaps>,
 ) {
-    let map_lighting = map
-        .and_then(|map| maps.get(&map.0))
-        .and_then(|map| map.lighting.clone());
+    let field = field.as_deref().map(|field| &field.0);
     for (entity, prop, transform, light_at) in &waiting {
         let transform = &lighting_transform(transform, light_at, None);
         let Some(model) = models.get(&prop.model) else {
@@ -309,14 +311,13 @@ fn attach_models(
                 None => continue,
             },
         };
+        let uniform = light_at.is_some();
         let light = match baked {
             Some(colors) => PropLight::Baked(colors),
-            None => map_lighting
-                .as_deref()
-                .and_then(|lighting| engine_lighting(lighting, transform, model))
-                .map_or(PropLight::Volume, |cube| {
-                    PropLight::Cube(cube, transform.rotation)
-                }),
+            None => field
+                .as_ref()
+                .filter(|field| field_mesh_ok(field, transform))
+                .map_or(PropLight::Volume, |_| PropLight::Field),
         };
 
         // A skeletal model's joints, which its meshes are skinned to.
@@ -336,7 +337,7 @@ fn attach_models(
         });
         let mut root = commands.entity(entity);
         root.remove::<AwaitingModel>();
-        if matches!(light, PropLight::Cube(..)) {
+        if matches!(light, PropLight::Field) {
             root.insert(CubeLit {
                 translation: transform.translation,
                 rotation: transform.rotation,
@@ -347,7 +348,9 @@ fn attach_models(
             for part in &model.parts {
                 let lit_mesh = meshes.get(&part.mesh).and_then(|base| match &light {
                     PropLight::Baked(colors) => vertex_lit_mesh(base, part, colors),
-                    PropLight::Cube(cube, rotation) => cube_lit_mesh(base, *rotation, cube),
+                    PropLight::Field => {
+                        field.and_then(|field| field_mesh(field, base, transform, uniform))
+                    }
                     PropLight::Volume => None,
                 });
                 let lit = lit_mesh.is_some();
@@ -359,7 +362,7 @@ fn attach_models(
                 if lit {
                     child.insert(VertexLit);
                 }
-                if lit && matches!(light, PropLight::Cube(..)) {
+                if lit && matches!(light, PropLight::Field) {
                     child.insert(LitPart {
                         base: part.mesh.clone(),
                     });
@@ -486,7 +489,6 @@ impl HeldView<'_> {
 
 /// What relighting a moving prop reads and writes.
 type MovingProp<'a> = (
-    &'a Prop,
     &'a Transform,
     &'a GlobalTransform,
     Option<&'a LightAt>,
@@ -494,45 +496,38 @@ type MovingProp<'a> = (
     &'a Children,
 );
 
-/// Relights moving, engine-lit props that have moved or turned noticeably
-/// since they were last lit, rebuilding their meshes' vertex colours in
-/// place.
+/// Relights moving props that have moved or turned a little since they
+/// were last lit, rebuilding their meshes' vertex colours in place from the
+/// map's light field.
 fn relight_moved_props(
     time: Res<Time>,
     mut props: Query<MovingProp, With<Moving>>,
     parts: Query<(&LitPart, &Mesh3d)>,
-    models: Res<Assets<ModelAsset>>,
-    map: Option<Res<MapHandle>>,
-    maps: Res<Assets<MapAsset>>,
+    field: Option<Res<MapLightField>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    let Some(lighting) = map
-        .and_then(|map| maps.get(&map.0))
-        .and_then(|map| map.lighting.clone())
-    else {
+    let Some(field) = field else {
         return;
     };
     let now = time.elapsed_secs();
-    for (prop, transform, global, light_at, mut lit, children) in &mut props {
+    for (transform, global, light_at, mut lit, children) in &mut props {
+        let uniform = light_at.is_some();
         let transform = &lighting_transform(transform, light_at, Some(global));
         let moved = transform.translation.distance(lit.translation) > RELIGHT_DISTANCE
             || transform.rotation.angle_between(lit.rotation) > RELIGHT_ANGLE;
         if !moved || now - lit.at_secs < RELIGHT_INTERVAL {
             continue;
         }
-        let Some(model) = models.get(&prop.model) else {
+        if !field_mesh_ok(&field.0, transform) {
             continue;
-        };
-        let Some(cube) = engine_lighting(&lighting, transform, model) else {
-            continue;
-        };
+        }
         for child in children {
             let Ok((part, mesh)) = parts.get(*child) else {
                 continue;
             };
             let relit = meshes
                 .get(&part.base)
-                .and_then(|base| cube_lit_mesh(base, transform.rotation, &cube));
+                .and_then(|base| field_mesh(&field.0, base, transform, uniform));
             if let Some(relit) = relit {
                 let _ = meshes.insert(&mesh.0, relit);
             }
@@ -542,6 +537,58 @@ fn relight_moved_props(
             rotation: transform.rotation,
             at_secs: now,
         };
+    }
+}
+
+/// The map's light field, once the map has loaded.
+#[derive(Resource, Clone)]
+pub(crate) struct MapLightField(pub(crate) LightField);
+
+/// Makes the light field when the map's lighting arrives.
+fn make_light_field(
+    mut commands: Commands,
+    existing: Option<Res<MapLightField>>,
+    map: Option<Res<MapHandle>>,
+    maps: Res<Assets<MapAsset>>,
+) {
+    if existing.is_some() {
+        return;
+    }
+    if let Some(lighting) = map
+        .and_then(|map| maps.get(&map.0))
+        .and_then(|map| map.lighting.clone())
+    {
+        commands.insert_resource(MapLightField(LightField::new(lighting)));
+    }
+}
+
+/// Whether there is any light at the lit point (so the field can serve).
+fn field_mesh_ok(field: &LightField, transform: &Transform) -> bool {
+    field
+        .cube_at(coords::to_source_position(transform.translation))
+        .is_some()
+}
+
+/// A copy of `base` lit from the field: per vertex for a model standing in
+/// the world, one light for all of it for a model hung off another entity
+/// (its vertices are not where it is lit).
+fn field_mesh(
+    field: &LightField,
+    base: &Mesh,
+    transform: &Transform,
+    uniform: bool,
+) -> Option<Mesh> {
+    if uniform {
+        let cube = field.cube_at(coords::to_source_position(transform.translation))?;
+        cube_lit_mesh(base, transform.rotation, &cube)
+    } else {
+        field_lit_mesh(
+            base,
+            transform.translation,
+            transform.rotation,
+            transform.scale.x,
+            field,
+        )
     }
 }
 
@@ -563,22 +610,6 @@ fn lighting_transform(
         },
         None => *transform,
     }
-}
-
-/// The engine's lighting for a model placed at `transform`, sampled at the
-/// centre of its bounds as the engine does. A model whose centre is inside a
-/// wall (or the floor) falls back to points nearer its origin.
-fn engine_lighting(
-    lighting: &AmbientLighting,
-    transform: &Transform,
-    model: &ModelAsset,
-) -> Option<AmbientCube> {
-    let (min, max) = model.bounds;
-    let center = transform.transform_point(min.midpoint(max));
-    let lifted = transform.translation + Vec3::Y * LIGHTING_LIFT;
-    [center, lifted, transform.translation]
-        .into_iter()
-        .find_map(|point| lighting.lighting_at(coords::to_source_position(point)))
 }
 
 #[cfg(test)]

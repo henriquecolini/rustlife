@@ -11,7 +11,7 @@
 
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, LoadContext, RenderAssetUsages};
-use bevy_math::Quat;
+use bevy_math::{Quat, Vec3};
 use bevy_mesh::{Mesh, VertexAttributeValues};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
@@ -20,6 +20,7 @@ use source_formats::vhv::{self, VertexLighting, VhvError};
 use thiserror::Error;
 
 use crate::coords;
+use crate::light_field::LightField;
 use crate::model::{ModelAsset, ModelPart};
 
 /// A static prop's decoded baked lighting.
@@ -100,19 +101,63 @@ pub fn cube_lit_mesh(base: &Mesh, rotation: Quat, cube: &AmbientCube) -> Option<
     };
     let vertex_colors = normals
         .iter()
-        .map(|&normal| {
-            let n = coords::to_source_direction(rotation * bevy_math::Vec3::from(normal));
-            let mut color = [0.0, 0.0, 0.0, 1.0];
-            for (axis, component) in n.into_iter().enumerate() {
-                let side = &cube[axis * 2 + usize::from(component < 0.0)];
-                for (channel, light) in color.iter_mut().zip(side) {
-                    *channel += component * component * light;
-                }
-            }
-            color
+        .map(|&normal| evaluate(cube, rotation * Vec3::from(normal)))
+        .collect();
+    Some(with_colors(base, vertex_colors))
+}
+
+/// A copy of `base` lit by the map's light `field` at every vertex: the
+/// prop's vertices are placed (`translation`, `rotation`, `scale` in Bevy
+/// space) and each takes the field's light at its own position, evaluated
+/// for its normal as [`cube_lit_mesh`] does. A prop half in shadow is lit
+/// half and half, and moving it only ever changes its light gradually.
+///
+/// A vertex whose surroundings have no light takes the light at the prop's
+/// origin. `None` if the mesh has no positions and normals, or even the
+/// origin has no light.
+#[must_use]
+pub fn field_lit_mesh(
+    base: &Mesh,
+    translation: Vec3,
+    rotation: Quat,
+    scale: f32,
+    field: &LightField,
+) -> Option<Mesh> {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        base.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return None;
+    };
+    let Some(VertexAttributeValues::Float32x3(normals)) = base.attribute(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        return None;
+    };
+    let fallback = field.cube_at(coords::to_source_position(translation))?;
+    let vertex_colors = positions
+        .iter()
+        .zip(normals)
+        .map(|(&position, &normal)| {
+            let world = translation + rotation * (Vec3::from(position) * scale);
+            let cube = field
+                .cube_at(coords::to_source_position(world))
+                .unwrap_or(fallback);
+            evaluate(&cube, rotation * Vec3::from(normal))
         })
         .collect();
     Some(with_colors(base, vertex_colors))
+}
+
+/// `Σ nᵢ² · cube[side of nᵢ]` for the Bevy-space normal `normal`.
+fn evaluate(cube: &AmbientCube, normal: Vec3) -> [f32; 4] {
+    let n = coords::to_source_direction(normal);
+    let mut color = [0.0, 0.0, 0.0, 1.0];
+    for (axis, component) in n.into_iter().enumerate() {
+        let side = &cube[axis * 2 + usize::from(component < 0.0)];
+        for (channel, light) in color.iter_mut().zip(side) {
+            *channel += component * component * light;
+        }
+    }
+    color
 }
 
 /// A render-only copy of `base` with `colors` as its vertex colours.
@@ -181,7 +226,7 @@ mod tests {
         assert_eq!(colors(&upright), [1.0, 0.0, 0.0, 1.0]);
         // Tipped 90° about Bevy -Z (Source +Y), the normal faces Bevy +X:
         // Source +X, which is lit green.
-        let tipped = Quat::from_axis_angle(bevy_math::Vec3::NEG_Z, std::f32::consts::FRAC_PI_2);
+        let tipped = Quat::from_axis_angle(Vec3::NEG_Z, std::f32::consts::FRAC_PI_2);
         let tipped = cube_lit_mesh(&base, tipped, &cube).expect("normals");
         let expected = [0.0, 1.0, 0.0, 1.0];
         assert!(

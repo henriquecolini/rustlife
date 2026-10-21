@@ -127,6 +127,7 @@ fn swap_view_model(
     local: Option<Res<LocalPlayer>>,
     mode: Option<Res<ViewMode>>,
     camera: Query<Entity, With<ViewCamera>>,
+    eyes: Query<&GlobalTransform, With<FlyCam>>,
     current: Query<(Entity, &ViewModel)>,
     mut models: ResMut<ModelHandles>,
     asset_server: Res<AssetServer>,
@@ -155,7 +156,13 @@ fn swap_view_model(
             drawn: false,
         },
         Moving,
-        LightAt(Vec3::ZERO),
+        // Lit from where the eyes are from the first frame: a model that
+        // loads at once (a weapon taken up again) would otherwise be lit
+        // from the world's origin, usually inside a wall.
+        LightAt(
+            eyes.single()
+                .map_or(Vec3::ZERO, GlobalTransform::translation),
+        ),
         RenderLayers::layer(VIEW_LAYER),
     ));
 }
@@ -229,6 +236,7 @@ fn animate_view_model(
     let mut wanted: Option<&str> = None;
     if !view.drawn {
         view.drawn = true;
+        player.fade = VIEW_FADE_SECS;
         wanted = Some("ACT_VM_DRAW");
     }
     for Ticked(events) in ticks.read() {
@@ -261,7 +269,8 @@ fn animate_view_model(
         player.restart(sequence, 1.0);
         return;
     }
-    let idle = player.current().is_none() || player.finished(sequences);
+    // The idle follows a swing or shot as it ends, faded in over it.
+    let idle = player.current().is_none() || player.ends_within(sequences, player.fade);
     if idle && let Some(sequence) = animated.activity("ACT_VM_IDLE") {
         player.play(sequence, 0.0, 1.0);
     }
@@ -279,6 +288,11 @@ fn light_view_model(
         light.0 = camera.translation();
     }
 }
+
+/// Seconds one view model sequence fades into the next over: Source's own
+/// sequence blends are about this long. Without it a swing's last pose cuts
+/// to the idle's first.
+const VIEW_FADE_SECS: f32 = 0.15;
 
 /// The view model's turn under its camera: Source models face +X, the
 /// camera looks down its −Z.

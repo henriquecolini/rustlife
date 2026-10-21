@@ -210,10 +210,19 @@ impl SequencePlayer {
     /// looping one).
     #[must_use]
     pub fn finished(&self, sequences: &[SequenceClips]) -> bool {
+        self.ends_within(sequences, 0.0)
+    }
+
+    /// Whether the current sequence ends within `margin` seconds (never, for
+    /// a looping one): the moment to start what follows, so that its fade
+    /// in overlaps the end of this one rather than waiting for it to end
+    /// and cutting in.
+    #[must_use]
+    pub fn ends_within(&self, sequences: &[SequenceClips], margin: f32) -> bool {
         self.current.is_some_and(|track| {
-            sequences
-                .get(track.sequence)
-                .is_some_and(|sequence| !sequence.looping && track.time >= sequence.duration)
+            sequences.get(track.sequence).is_some_and(|sequence| {
+                !sequence.looping && track.time + margin * track.rate >= sequence.duration
+            })
         })
     }
 
@@ -344,6 +353,38 @@ mod tests {
         player.advance(0.75, &all);
         assert_eq!(player.current(), Some((1, 1.0)));
         assert!(player.finished(&all));
+    }
+
+    #[test]
+    fn the_idle_fades_in_over_the_end_of_a_swing_without_a_gap_or_a_cut() {
+        let all = sequences();
+        let mut player = SequencePlayer {
+            fade: 0.2,
+            ..SequencePlayer::default()
+        };
+        player.play(0, 0.0, 1.0);
+        // The swing (sequence 1, one second long) runs; at 0.2 s from its end
+        // the idle begins.
+        player.restart(1, 1.0);
+        let mut begun = false;
+        let mut totals = Vec::new();
+        for _ in 0..80 {
+            if !begun && player.ends_within(&all, 0.2) {
+                player.play(0, 0.0, 1.0);
+                begun = true;
+            }
+            player.advance(1.0 / 60.0, &all);
+            // Every frame's pose is wholly made of some sequence.
+            let weights = player.clip_weights(&all);
+            totals.push(weights.iter().map(|(_, weight, _)| weight).sum::<f32>());
+        }
+        assert!(begun, "the idle was started");
+        assert!(
+            totals.iter().all(|total| (total - 1.0).abs() < 1e-3),
+            "{totals:?}"
+        );
+        assert!(player.fading.is_empty(), "the swing faded out");
+        assert_eq!(player.current().map(|(sequence, _)| sequence), Some(0));
     }
 
     #[test]

@@ -23,6 +23,7 @@ use bevy_asset::AssetApp;
 
 pub mod coords;
 pub mod irradiance;
+pub mod light_field;
 pub mod map;
 pub mod material;
 pub mod model;
