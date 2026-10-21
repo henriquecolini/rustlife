@@ -583,8 +583,12 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
     }
     let alpha_mode = if source.translucent {
         AlphaMode::Blend
-    } else if let Some(cutoff) = source.alpha_test {
-        AlphaMode::Mask(cutoff)
+    } else if source.alpha_test.is_some() {
+        // Alpha-tested texels (grates, foliage, perforated metal) cover the
+        // multisampled pixel by their alpha rather than being cut at a
+        // threshold, so fine holes stay smooth instead of shimmering as
+        // their mips blur them.
+        AlphaMode::AlphaToCoverage
     } else {
         AlphaMode::Opaque
     };
