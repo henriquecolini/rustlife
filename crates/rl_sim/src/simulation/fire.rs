@@ -79,6 +79,16 @@ impl Simulation {
             {
                 self.thrown.retain(|&(thrown, ..)| thrown != body);
                 self.thrown.push((body, id, self.tick));
+                let launched = matches!(event, ToolEvent::Launched(_) | ToolEvent::Punted(_));
+                let armed = if launched {
+                    self.data.physics.breakables.barrels.launched_seconds
+                } else {
+                    0.0
+                };
+                self.breakables.arm(body, armed);
+            }
+            if let ToolEvent::Grabbed(body) = event {
+                self.breakables.arm(body, 0.0);
             }
             events.tools.push((id, event));
         }

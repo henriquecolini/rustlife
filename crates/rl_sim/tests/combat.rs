@@ -16,7 +16,7 @@ use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::Cause;
 use rl_sim::hazards::Hazard;
 use rl_sim::movement::{Buttons, UserCmd};
-use rl_sim::physics::{Breakable, Motion, PropDesc};
+use rl_sim::physics::{BodyId, Breakable, Motion, PropDesc};
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{Life, PlayerId, PropBreak, Simulation, Spawn, TickEvents};
 use rl_sim::weapons::WeaponId;
@@ -599,39 +599,85 @@ fn shooting_a_prop_breaks_it_when_its_health_runs_out() {
     );
 }
 
-#[test]
-fn an_explosive_barrel_kills_whoever_is_near_and_credits_who_shot_it() {
-    let data = data();
-    let mut arena = Arena::new(&data, 600.0);
-    arena.sim.add_prop(&breakable_box(
-        &data,
+/// A prop too heavy for bullets to push off the line of fire.
+fn heavy(mut desc: PropDesc) -> PropDesc {
+    desc.mass = 5000.0;
+    desc
+}
+
+/// Fires the magnum once, then waits long enough for the next shot.
+fn shoot(arena: &mut Arena) -> Vec<TickEvents> {
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(80));
+    events
+}
+
+fn ignitions(events: &[TickEvents]) -> usize {
+    events.iter().map(|e| e.prop_ignitions.len()).sum()
+}
+
+/// A barrel dead ahead of the shooter, and the arena.
+fn barrel_arena(data: &GameData) -> (Arena, BodyId) {
+    let mut arena = Arena::new(data, 600.0);
+    let barrel = arena.sim.add_prop(&heavy(breakable_box(
+        data,
         Vec3::new(200.0, 0.0, 0.0),
         (16.0, 90.0),
         10.0,
         Some((120.0, 256.0)),
-    ));
+    )));
+    arena.arm("magnum");
+    (arena, barrel)
+}
+
+#[test]
+fn a_barrel_takes_three_shots_the_first_primes_the_second_ignites_the_third_explodes() {
+    let data = data();
+    let (mut arena, barrel) = barrel_arena(&data);
+    let first = shoot(&mut arena);
+    assert_eq!(ignitions(&first), 0, "a first shot does nothing to see");
+    assert!(breaks(&first).is_empty());
+    let second = shoot(&mut arena);
+    assert_eq!(ignitions(&second), 1, "the second sets it on fire");
+    let fuse = second
+        .iter()
+        .flat_map(|e| &e.prop_ignitions)
+        .map(|ignition| (ignition.body, ignition.fuse))
+        .next()
+        .expect("ignited");
+    assert_eq!(fuse, (barrel, data.physics.breakables.barrels.burn_seconds));
+    assert!(breaks(&second).is_empty(), "it burns for a while first");
+    let third = shoot(&mut arena);
+    let broke = breaks(&third);
+    assert_eq!(broke.len(), 1, "a burning barrel shot goes off at once");
+    assert!(broke[0].exploded);
+}
+
+#[test]
+fn a_burning_barrel_explodes_when_its_fuse_runs_out_and_credits_who_lit_it() {
+    let data = data();
+    let (mut arena, _) = barrel_arena(&data);
     // The target stands next to the barrel, off the line of fire.
     arena
         .sim
         .teleport_player(arena.target, Vec3::new(200.0, 90.0, 1.0));
-    arena.arm("magnum");
     arena
         .sim
         .player_mut(arena.target)
         .expect("target")
         .vitals
         .health = 30.0;
-    let events = arena.hold(Buttons::ATTACK, 0.0, 1);
-    let mut events = events;
-    events.extend(arena.idle(40));
+    let mut events = shoot(&mut arena);
+    events.extend(shoot(&mut arena));
+    let burn_ticks = (data.physics.breakables.barrels.burn_seconds * 66.0) as usize;
+    assert!(breaks(&events).is_empty());
+    events.extend(arena.idle(burn_ticks / 2));
+    assert!(breaks(&events).is_empty(), "still burning");
+    events.extend(arena.idle(burn_ticks));
     let broke = breaks(&events);
     assert_eq!(broke.len(), 1, "{broke:?}");
     assert!(broke[0].exploded);
-    assert_eq!(
-        events.iter().flat_map(|e| &e.explosions).count(),
-        1,
-        "one blast"
-    );
+    assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 1);
     let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
     assert_eq!(kills.len(), 1, "{kills:?}");
     assert_eq!(kills[0].victim, arena.target);
@@ -648,23 +694,110 @@ fn barrels_set_each_other_off() {
     let barrels: Vec<_> = [200.0, 330.0, 460.0]
         .into_iter()
         .map(|x| {
-            arena.sim.add_prop(&breakable_box(
+            arena.sim.add_prop(&heavy(breakable_box(
                 &data,
                 Vec3::new(x, 0.0, 0.0),
                 (16.0, 90.0),
                 10.0,
                 Some((120.0, 200.0)),
-            ))
+            )))
         })
         .collect();
     arena.arm("magnum");
-    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
-    events.extend(arena.idle(60));
+    let mut events = shoot(&mut arena);
+    events.extend(shoot(&mut arena));
+    assert!(breaks(&events).is_empty(), "two shots only set one on fire");
+    events.extend(shoot(&mut arena));
+    events.extend(arena.idle(66 * 8));
     let broke: Vec<_> = breaks(&events).iter().map(|b| b.body).collect();
     for barrel in &barrels {
         assert!(broke.contains(barrel), "{barrel:?} not in {broke:?}");
     }
     assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 3);
+}
+
+#[test]
+fn a_nearer_blast_gives_a_shorter_fuse() {
+    let barrels = data().physics.breakables.barrels;
+    assert!((barrels.blast_fuse(0.0) - barrels.longest_fuse).abs() < 1e-4);
+    let hardest = barrels.blast_fuse(barrels.instant_damage);
+    assert!((hardest - barrels.shortest_fuse).abs() < 1e-4);
+    assert!(barrels.blast_fuse(10.0) > barrels.blast_fuse(40.0));
+}
+
+#[test]
+fn a_barrel_that_falls_or_is_knocked_about_does_not_explode() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let barrel = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(-200.0, 400.0, 500.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    ));
+    let events = arena.idle(200);
+    assert!(breaks(&events).is_empty(), "a fall does not set it off");
+    assert!(!arena.sim.physics().is_broken(barrel));
+    assert!(
+        events
+            .iter()
+            .flat_map(|e| &e.prop_impacts)
+            .any(|impact| impact.body == barrel && impact.speed > 500.0),
+        "it did land hard"
+    );
+}
+
+#[test]
+fn a_barrel_thrown_with_the_gravity_gun_explodes_on_what_it_touches() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(700.0, -300.0, 0.0),
+        Vec3::new(720.0, 300.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 1500.0, wall);
+    let barrel = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(90.0, 0.0, 0.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    ));
+    arena.arm("manipulator");
+    let mut events = arena.hold(Buttons::ATTACK2, 0.0, 30);
+    assert!(breaks(&events).is_empty(), "holding it does nothing");
+    events.extend(arena.hold(Buttons::ATTACK, 0.0, 1));
+    events.extend(arena.idle(120));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, barrel);
+    assert!(broke[0].exploded);
+    assert!(
+        broke[0].position.x > 200.0,
+        "it flew off before going off: {}",
+        broke[0].position
+    );
+}
+
+#[test]
+fn a_barrel_that_is_only_put_down_with_the_gravity_gun_stays_whole() {
+    let data = data();
+    let mut arena = Arena::new(&data, 1500.0);
+    let barrel = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(90.0, 0.0, 0.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    ));
+    arena.arm("manipulator");
+    arena.hold(Buttons::ATTACK2, 0.0, 30);
+    // Let go (the grab button again) and let it fall to the floor.
+    arena.idle(5);
+    arena.hold(Buttons::ATTACK2, 0.0, 1);
+    let events = arena.idle(200);
+    assert!(breaks(&events).is_empty());
+    assert!(!arena.sim.physics().is_broken(barrel));
 }
 
 #[test]

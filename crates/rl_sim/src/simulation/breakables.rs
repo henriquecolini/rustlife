@@ -9,6 +9,13 @@
 //! ([`PropBreak`]) and, for an explosive prop, sets off its blast, which
 //! hits other props in turn, so barrels chain.
 //!
+//! Explosive props are the exception to health: bullets and knocks do not
+//! break them. They go through a [`Fuse`] instead: a first bullet primes
+//! one, a second sets it on fire, a bullet into a burning one sets it off at
+//! once, a blast near one sets it off or on fire, and one thrown with the
+//! gravity gun goes off on the first thing it touches. A prop that is
+//! merely pushed about, or falls, never explodes.
+//!
 //! Whoever broke a prop is credited with its blast, and with the breaking of
 //! the props that blast breaks: a barrel shot by a player is that player's
 //! kill.
@@ -42,6 +49,9 @@ pub(super) enum Blow {
     Explosion,
     /// Another prop or the map hitting it hard.
     Impact,
+    /// Touching anything at all: what a prop thrown with the gravity gun
+    /// does to itself.
+    Slam,
 }
 
 /// A blow waiting to be applied.
@@ -53,6 +63,17 @@ pub(super) struct PropHit {
     attacker: Option<PlayerId>,
 }
 
+/// How far an explosive prop is from going off.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Fuse {
+    /// Untouched.
+    Idle,
+    /// Shot once: the next bullet sets it on fire.
+    Primed,
+    /// On fire: it explodes in this many seconds, or at once if shot.
+    Burning { left: f32 },
+}
+
 /// A breakable prop's state.
 #[derive(Debug, Clone)]
 pub(super) struct PropHealth {
@@ -61,6 +82,22 @@ pub(super) struct PropHealth {
     broken: bool,
     /// Seconds until a broken prop that respawns comes back.
     respawn_in: Option<f32>,
+    /// How near an explosive prop is to going off.
+    fuse: Fuse,
+    /// Who set it burning, for the credit.
+    igniter: Option<PlayerId>,
+    /// Seconds left that it explodes on touching anything: it was thrown
+    /// or punted with the gravity gun.
+    launched: f32,
+}
+
+/// A prop set on fire, for effects: it burns until it explodes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropIgnition {
+    /// The prop.
+    pub body: BodyId,
+    /// Seconds until it goes off, unless something sets it off sooner.
+    pub fuse: f32,
 }
 
 /// A prop breaking, for sounds and effects. What it was made of and what it
@@ -119,8 +156,21 @@ impl Breakables {
                 spec: spec.clone(),
                 broken: false,
                 respawn_in: None,
+                fuse: Fuse::Idle,
+                igniter: None,
+                launched: 0.0,
             },
         );
+    }
+
+    /// Makes an explosive `body` go off on touching anything for
+    /// `seconds` (it was launched with the gravity gun); `0` disarms it.
+    pub(super) fn arm(&mut self, body: BodyId, seconds: f32) {
+        if let Some(state) = self.props.get_mut(&body)
+            && state.spec.explosion.is_some()
+        {
+            state.launched = seconds;
+        }
     }
 
     /// Whether `body` can break and has not yet.
@@ -141,6 +191,9 @@ impl Breakables {
             state.broken = false;
             state.respawn_in = None;
             state.health = state.spec.health;
+            state.fuse = Fuse::Idle;
+            state.igniter = None;
+            state.launched = 0.0;
         }
     }
 
@@ -187,6 +240,7 @@ impl Simulation {
                 mass,
             });
             let attacker = self.thrower_of(impact.body);
+            self.hit_prop(impact.body, 1.0, Blow::Slam, attacker);
             let other_mass = impact.other.and_then(|other| self.physics.mass(other));
             let own = config.damage(other_mass.unwrap_or(mass), impact.speed);
             self.hit_prop(impact.body, own, Blow::Impact, attacker);
@@ -303,15 +357,91 @@ impl Simulation {
         else {
             return;
         };
+        if state.spec.explosion.is_some() {
+            self.hit_explosive(hit, events);
+            return;
+        }
         let scale = match hit.blow {
             Blow::Bullet => state.spec.bullets,
             Blow::Club => state.spec.club,
             Blow::Explosion => state.spec.explosive,
             Blow::Impact => 1.0,
+            Blow::Slam => return,
         };
         state.health -= hit.amount * scale;
         if state.health <= 0.0 {
             self.break_prop(hit.body, hit.attacker, events);
+        }
+    }
+
+    /// What a blow does to an explosive prop: advances its fuse, sets it
+    /// off, or nothing.
+    fn hit_explosive(&mut self, hit: PropHit, events: &mut TickEvents) {
+        let config = self.data.physics.breakables.barrels;
+        let Some(state) = self.breakables.props.get_mut(&hit.body) else {
+            return;
+        };
+        let fuse = match (hit.blow, state.fuse) {
+            (Blow::Bullet, Fuse::Idle) => Fuse::Primed,
+            (Blow::Bullet, Fuse::Primed) => Fuse::Burning {
+                left: config.burn_seconds,
+            },
+            (Blow::Bullet, Fuse::Burning { .. }) => return self.explode_prop(hit, events),
+            (Blow::Explosion, _) if hit.amount >= config.instant_damage => {
+                return self.explode_prop(hit, events);
+            }
+            (Blow::Explosion, current) => {
+                let left = config.blast_fuse(hit.amount);
+                match current {
+                    Fuse::Burning { left: sooner } if sooner <= left => current,
+                    _ => Fuse::Burning { left },
+                }
+            }
+            (Blow::Slam, _) if state.launched > 0.0 => return self.explode_prop(hit, events),
+            _ => return,
+        };
+        if let (Fuse::Burning { left }, true) = (fuse, !matches!(state.fuse, Fuse::Burning { .. }))
+        {
+            events.prop_ignitions.push(PropIgnition {
+                body: hit.body,
+                fuse: left,
+            });
+        }
+        if matches!(fuse, Fuse::Burning { .. }) && state.igniter.is_none() {
+            state.igniter = hit.attacker;
+        }
+        state.fuse = fuse;
+    }
+
+    fn explode_prop(&mut self, hit: PropHit, events: &mut TickEvents) {
+        let attacker = self
+            .breakables
+            .props
+            .get(&hit.body)
+            .and_then(|state| state.igniter)
+            .or(hit.attacker);
+        self.break_prop(hit.body, attacker, events);
+    }
+
+    /// Burns the props that are on fire down by a tick, setting off those
+    /// whose fuse is spent, and lets launched ones' danger run out.
+    pub(super) fn burn_props(&mut self, events: &mut TickEvents) {
+        let dt = self.dt;
+        let mut spent = Vec::new();
+        for (&body, state) in &mut self.breakables.props {
+            if state.broken {
+                continue;
+            }
+            state.launched = (state.launched - dt).max(0.0);
+            if let Fuse::Burning { left } = &mut state.fuse {
+                *left -= dt;
+                if *left <= 0.0 {
+                    spent.push((body, state.igniter));
+                }
+            }
+        }
+        for (body, igniter) in spent {
+            self.break_prop(body, igniter, events);
         }
     }
 

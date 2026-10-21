@@ -58,6 +58,41 @@ pub struct BreakablesConfig {
     /// Props striking each other or the map, which make noise and may break
     /// the prop.
     pub impact: PropImpactConfig,
+    /// How explosive barrels are set off.
+    pub barrels: BarrelConfig,
+}
+
+/// How an explosive prop is set off. Bullets and knocks do not break it:
+/// the first bullet only primes it, the second sets it on fire, a bullet
+/// into a burning one sets it off at once, a nearby blast sets it off or
+/// on fire, and one thrown with the gravity gun goes off on whatever it
+/// touches first.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BarrelConfig {
+    /// Seconds a barrel burns, set on fire by a bullet, before it explodes.
+    pub burn_seconds: f32,
+    /// A blast's damage, at the barrel, that sets it off at once; weaker
+    /// ones set it on fire.
+    pub instant_damage: f32,
+    /// Fuse, seconds, of a barrel set on fire by a blast of next to no
+    /// damage...
+    pub longest_fuse: f32,
+    /// ...and of one set on fire by a blast just short of `instant_damage`.
+    pub shortest_fuse: f32,
+    /// Seconds a barrel stays dangerous after being thrown or punted by
+    /// the gravity gun, if it touches nothing.
+    pub launched_seconds: f32,
+}
+
+impl BarrelConfig {
+    /// The fuse, seconds, of a barrel that a blast of `damage` (less than
+    /// `instant_damage`) sets on fire: the harder the blast, the shorter.
+    #[must_use]
+    pub fn blast_fuse(&self, damage: f32) -> f32 {
+        let hardness = (damage / self.instant_damage).clamp(0.0, 1.0);
+        self.longest_fuse + (self.shortest_fuse - self.longest_fuse) * hardness
+    }
 }
 
 /// Props striking props and the map.
@@ -250,6 +285,21 @@ impl PhysicsConfig {
         check.non_negative(
             "breakables.impact.damage_per_joule",
             breakables.impact.damage_per_joule,
+        );
+        let barrels = &breakables.barrels;
+        check.positive("breakables.barrels.burn_seconds", barrels.burn_seconds);
+        check.positive("breakables.barrels.instant_damage", barrels.instant_damage);
+        check.positive("breakables.barrels.shortest_fuse", barrels.shortest_fuse);
+        check.positive("breakables.barrels.longest_fuse", barrels.longest_fuse);
+        if barrels.shortest_fuse > barrels.longest_fuse {
+            check.fail(
+                "breakables.barrels.shortest_fuse",
+                "must not exceed longest_fuse",
+            );
+        }
+        check.positive(
+            "breakables.barrels.launched_seconds",
+            barrels.launched_seconds,
         );
     }
 }

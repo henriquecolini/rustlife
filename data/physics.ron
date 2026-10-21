@@ -70,6 +70,20 @@ Physics(
         // Dropping a 20 kg crate from head height (about 400 units/s) takes
         // a quarter of a crate's health.
         impact: (report_speed: 120.0, min_energy: 250.0, damage_per_joule: 0.04, scrape_speed: 70.0),
+        // Explosive barrels do not break from bullets or knocks. A bullet
+        // primes one, a second sets it on fire (it explodes burn_seconds
+        // later), a bullet into a burning one sets it off at once. A blast
+        // of at least instant_damage at the barrel sets it off; a weaker
+        // one sets it on fire with a fuse that is shorter the harder the
+        // blast. One thrown or punted with the gravity gun explodes on the
+        // first thing it touches, for launched_seconds.
+        barrels: (
+            burn_seconds: 4.0,
+            instant_damage: 60.0,
+            longest_fuse: 3.0,
+            shortest_fuse: 0.4,
+            launched_seconds: 6.0,
+        ),
     ),
     impact_damage: (
         // Props must hit at least this fast to hurt, units/s.

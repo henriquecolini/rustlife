@@ -10,17 +10,21 @@
 //! life. [`crate::effects`] asks for a `Blast` and this module does the
 //! rest; how it looks is `effects.ron`'s `explosion`.
 
+use std::collections::HashMap;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use rl_assets::coords;
 use rl_data::ExplosionEffectConfig;
 use rl_sim::collision::contents::SOLID;
+use rl_sim::physics::BodyId;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
 use crate::net::Game;
+use crate::player::Ticked;
 use crate::world::MapScoped;
 
 /// Most particles alive at once; blasts ask for no more than fit.
@@ -51,10 +55,11 @@ impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Blast>()
             .init_resource::<Shake>()
+            .init_resource::<Burning>()
             .add_systems(Startup, make_looks)
             .add_systems(
                 Update,
-                (spawn_blasts, move_particles)
+                (note_fires, burn_props, spawn_blasts, move_particles)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             )
@@ -414,39 +419,153 @@ fn spawn_blasts(
                 break;
             }
             room -= 1;
-            let material = materials.add(StandardMaterial {
-                base_color: Color::NONE,
-                base_color_texture: Some(looks.texture(spec.kind)),
-                unlit: true,
-                double_sided: true,
-                cull_mode: None,
-                alpha_mode: if spec.kind.glows() {
-                    AlphaMode::Add
-                } else {
-                    AlphaMode::Blend
-                },
-                ..default()
+            spawn_particle(&mut commands, &looks, &mut materials, rng, blast.at, &spec);
+        }
+    }
+}
+
+/// Makes the particle `spec` at `at`.
+fn spawn_particle(
+    commands: &mut Commands,
+    looks: &Looks,
+    materials: &mut Assets<StandardMaterial>,
+    rng: &mut Rng,
+    at: Vec3,
+    spec: &Spec,
+) {
+    let material = materials.add(StandardMaterial {
+        base_color: Color::NONE,
+        base_color_texture: Some(looks.texture(spec.kind)),
+        unlit: true,
+        double_sided: true,
+        cull_mode: None,
+        alpha_mode: if spec.kind.glows() {
+            AlphaMode::Add
+        } else {
+            AlphaMode::Blend
+        },
+        ..default()
+    });
+    commands.spawn((
+        Particle {
+            kind: spec.kind,
+            velocity: spec.velocity,
+            gravity: spec.gravity,
+            drag: spec.drag,
+            age: -spec.delay,
+            life: spec.life,
+            size: spec.size,
+            color: spec.color,
+            roll: rng.unit() * std::f32::consts::TAU,
+            spin: spec.spin,
+            resting: false,
+            material: material.clone(),
+        },
+        Mesh3d(looks.quad.clone()),
+        MeshMaterial3d(material),
+        Transform::from_translation(at + spec.offset).with_scale(Vec3::ZERO),
+        MapScoped,
+    ));
+}
+
+/// The props that are on fire, until when (seconds since startup).
+#[derive(Resource, Debug, Default)]
+struct Burning(HashMap<BodyId, f32>);
+
+/// How often a burning prop gives off a puff of flame, seconds.
+const FLAME_INTERVAL: f32 = 0.045;
+/// How often it gives off smoke, in flame puffs.
+const SMOKE_EVERY: u32 = 3;
+
+/// A tongue of flame rising off a burning prop, with a little flicker.
+fn flame_particles(rng: &mut Rng, puffs: u32) -> Vec<Spec> {
+    let mut specs = Vec::new();
+    for puff in 0..puffs {
+        let sway = Vec3::new(rng.unit() - 0.5, 0.0, rng.unit() - 0.5) * 0.25;
+        specs.push(Spec {
+            kind: Kind::Fire,
+            offset: Vec3::Y * 0.35 + sway * 0.6,
+            velocity: Vec3::Y * between(rng, 0.8, 1.6) + sway,
+            gravity: -1.5,
+            drag: 0.6,
+            delay: 0.0,
+            life: between(rng, 0.45, 0.8),
+            size: (between(rng, 0.2, 0.3), between(rng, 0.05, 0.12)),
+            color: ([1.4, 0.75, 0.25, 0.9], [0.6, 0.1, 0.02, 0.0]),
+            spin: between(rng, -2.0, 2.0),
+        });
+        if puff % SMOKE_EVERY == 0 {
+            specs.push(Spec {
+                kind: Kind::Smoke,
+                offset: Vec3::Y * 0.7 + sway,
+                velocity: Vec3::Y * between(rng, 0.6, 1.2) + sway,
+                gravity: -0.3,
+                drag: 0.5,
+                delay: 0.0,
+                life: between(rng, 1.6, 2.6),
+                size: (0.25, between(rng, 0.7, 1.1)),
+                color: ([0.1, 0.1, 0.1, 0.45], [0.2, 0.2, 0.2, 0.0]),
+                spin: between(rng, -0.5, 0.5),
             });
-            commands.spawn((
-                Particle {
-                    kind: spec.kind,
-                    velocity: spec.velocity,
-                    gravity: spec.gravity,
-                    drag: spec.drag,
-                    age: -spec.delay,
-                    life: spec.life,
-                    size: spec.size,
-                    color: spec.color,
-                    roll: rng.unit() * std::f32::consts::TAU,
-                    spin: spec.spin,
-                    resting: false,
-                    material: material.clone(),
-                },
-                Mesh3d(looks.quad.clone()),
-                MeshMaterial3d(material),
-                Transform::from_translation(blast.at + spec.offset).with_scale(Vec3::ZERO),
-                MapScoped,
-            ));
+        }
+    }
+    specs
+}
+
+/// Notes the props set on fire; stops noting them once they break.
+fn note_fires(
+    mut ticks: MessageReader<Ticked>,
+    time: Res<Time>,
+    game: Game,
+    mut burning: ResMut<Burning>,
+) {
+    let now = time.elapsed_secs();
+    for Ticked(events) in ticks.read() {
+        for ignition in &events.prop_ignitions {
+            burning.0.insert(ignition.body, now + ignition.fuse + 0.5);
+        }
+    }
+    if let Some(sim) = game.sim() {
+        burning
+            .0
+            .retain(|&body, until| *until > now && !sim.physics().is_broken(body));
+    }
+}
+
+/// Lets flames off the props that are on fire.
+fn burn_props(
+    mut commands: Commands,
+    time: Res<Time>,
+    game: Game,
+    burning: Res<Burning>,
+    looks: Option<Res<Looks>>,
+    live: Query<(), With<Particle>>,
+    mut since: Local<f32>,
+    mut rng: Local<Option<Rng>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let (Some(sim), Some(looks)) = (game.sim(), looks) else {
+        return;
+    };
+    *since += time.delta_secs();
+    let puffs = (*since / FLAME_INTERVAL) as u32;
+    if puffs == 0 || burning.0.is_empty() {
+        return;
+    }
+    *since -= puffs as f32 * FLAME_INTERVAL;
+    let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x0066_6c61_6d65]));
+    let mut room = MAX_PARTICLES.saturating_sub(live.iter().count());
+    for &body in burning.0.keys() {
+        let Some(center) = sim.physics().center_of_mass(body) else {
+            continue;
+        };
+        let at = coords::position(center.to_array());
+        for spec in flame_particles(rng, puffs.min(3)) {
+            if room == 0 {
+                return;
+            }
+            room -= 1;
+            spawn_particle(&mut commands, &looks, &mut materials, rng, at, &spec);
         }
     }
 }
@@ -602,6 +721,19 @@ mod tests {
         assert!(full < 0.2, "never more than a few degrees");
         shake.add(5.0);
         assert_eq!(shake.trauma, 1.0);
+    }
+
+    #[test]
+    fn flames_rise_and_smoke_every_few_puffs() {
+        let specs = flame_particles(&mut Rng::seeded(&[4]), 3);
+        let fire = specs.iter().filter(|spec| spec.kind == Kind::Fire).count();
+        let smoke = specs.iter().filter(|spec| spec.kind == Kind::Smoke).count();
+        assert_eq!((fire, smoke), (3, 1));
+        assert!(
+            specs
+                .iter()
+                .all(|spec| spec.velocity.y > 0.0 && spec.gravity < 0.0)
+        );
     }
 
     #[test]

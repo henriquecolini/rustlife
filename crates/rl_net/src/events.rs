@@ -13,8 +13,8 @@
 
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{
-    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, PropBreak, PropImpactEvent,
-    PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
+    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, PropBreak, PropIgnition,
+    PropImpactEvent, PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, WeaponId};
@@ -82,6 +82,8 @@ pub enum Event {
     Map(MapEvent),
     /// A prop broke.
     PropBreak(PropBreak),
+    /// An explosive prop was set on fire.
+    PropIgnite(PropIgnition),
     /// A prop struck another prop or the map.
     PropImpact(PropImpactEvent),
     /// A prop is sliding along something.
@@ -169,6 +171,12 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
     );
     out.extend(
         events
+            .prop_ignitions
+            .iter()
+            .map(|&ignition| Event::PropIgnite(ignition)),
+    );
+    out.extend(
+        events
             .prop_impacts
             .iter()
             .map(|&impact| Event::PropImpact(impact)),
@@ -210,6 +218,7 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Match(event) => tick.match_event = Some(event),
             Event::Map(event) => tick.map.push(event),
             Event::PropBreak(broke) => tick.prop_breaks.push(broke),
+            Event::PropIgnite(ignition) => tick.prop_ignitions.push(ignition),
             Event::PropImpact(impact) => tick.prop_impacts.push(impact),
             Event::PropScrape(scrape) => tick.prop_scrapes.push(scrape),
         }
@@ -264,6 +273,10 @@ mod tests {
                 body: BodyId::from_index(7),
                 position: Vec3::new(1.0, 2.0, 3.0),
                 exploded: true,
+            }],
+            prop_ignitions: vec![PropIgnition {
+                body: BodyId::from_index(6),
+                fuse: 4.0,
             }],
             prop_impacts: vec![PropImpactEvent {
                 body: BodyId::from_index(8),

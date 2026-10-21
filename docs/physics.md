@@ -128,6 +128,36 @@ taken from the player's health; a prop someone threw, punted or dropped in
 the last `prop_credit` seconds (`rules/deathmatch.ron`) is theirs, so a kill
 with it is their frag (see [combat.md](combat.md)).
 
+## Breakable props and explosive barrels
+
+A physics prop whose model says it breaks (`prop_data` in the model, or a
+class in `scripts/propdata.txt`; a map entity's own `health` wins) has
+health. Blows (a bullet, a swing, a blast, a hard impact) queue up as the
+tick runs and are applied at its end, each scaled by what the prop is made
+of: a crate takes more from a club than a bullet. A prop whose health runs
+out *breaks*: it leaves the physics world (its body id stays), everyone is
+told (`PropBreak`, and the replicated `broken` set for those who join
+later), the client scatters its gibs, and the prop comes back where it was
+if it respawns (`prop_physics_respawnable`).
+
+**Explosive barrels** do not use health. Bullets and knocks cannot break
+one, so shoving one off a ledge, or dropping it, does nothing. Instead a
+barrel has a fuse (`breakables.barrels` in `physics.ron`):
+
+| What happens to it | Result |
+|--------------------|--------|
+| shot once | primed; nothing shows |
+| shot while primed | set on fire: it explodes after `burn_seconds` |
+| shot while burning | explodes at once |
+| a blast of `instant_damage` or more at the barrel | explodes at once |
+| a weaker blast | set on fire, with a fuse between `longest_fuse` (barely reached) and `shortest_fuse` (just short of instant); a burning barrel keeps the sooner fuse |
+| thrown or punted with the Manipulator | explodes on the first thing it touches, for `launched_seconds` |
+
+Whoever lit the fuse is credited with the blast and its kills, so
+barrels set off by other barrels chain, each credited to the first
+shooter. The server sends `PropIgnite` when a barrel catches fire so
+clients can draw the flames (`rl_client::particles`).
+
 ## The Manipulator
 
 Each player carries a `Manipulator`, a weapon in slot 1 (see

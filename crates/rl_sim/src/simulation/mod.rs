@@ -66,7 +66,7 @@ mod life;
 mod map;
 mod replica;
 
-pub use breakables::{PropBreak, PropImpactEvent, PropScrapeEvent};
+pub use breakables::{PropBreak, PropIgnition, PropImpactEvent, PropScrapeEvent};
 pub use grenades::GrenadeView;
 pub use map::MapEvent;
 
@@ -240,6 +240,8 @@ pub struct TickEvents {
     pub map: Vec<MapEvent>,
     /// Props that broke.
     pub prop_breaks: Vec<PropBreak>,
+    /// Explosive props set on fire.
+    pub prop_ignitions: Vec<PropIgnition>,
     /// Props that struck props or the map.
     pub prop_impacts: Vec<PropImpactEvent>,
     /// Props sliding along something.
@@ -671,6 +673,7 @@ impl Simulation {
         self.advance_projectiles(&mut events);
         self.touch_pickups(&mut events);
         self.apply_hazards(&mut events);
+        self.burn_props(&mut events);
         self.resolve_prop_hits(&mut events);
         self.respawn_props();
         self.report_scrapes(&mut events);
