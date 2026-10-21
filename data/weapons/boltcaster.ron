@@ -27,6 +27,6 @@ Weapon(
     deploy_time: 0.6,
     pickup: Some((ammo: 6, respawn: 30.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Crossbow.Single", "reload": "Weapon_Crossbow.Reload"},
-    // Players hold it as HL2DM's models hold a crossbow (run_crossbow, ...).
+    // Players hold it with the crossbow sequences of HL2DM's player models (run_crossbow, ...).
     hold: Some("crossbow"),
 )

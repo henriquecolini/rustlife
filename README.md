@@ -74,7 +74,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Space | Jump (swim up in water) |
 | Left Ctrl / C | Crouch |
 | Left Shift | Walk |
-| E | Grab or let go of a ladder |
+| E | Use: press a button, open a door, draw from a wall charger; grab or let go of a ladder |
 | Left / right mouse | Primary / secondary fire |
 | R | Reload |
 | 1 – 9, mouse wheel | Choose a weapon by slot, or the next / previous one |
@@ -112,9 +112,18 @@ Other options:
   capture the player mid-walk, `--grab-prop` to pick up the prop nearest the
   spawn, `--grab-prop --throw-after <secs>` to throw it, `--weapon <id>`
   with `--shoot-for <secs>` to fire at the nearest dummy, or
-  `--visit-pickup` to look at the nearest pickup.
+  `--visit-pickup` to look at the nearest pickup, `--use-mover <class>`
+  to press use on the nearest door or button of that class, and
+  `--teleport x,y,z[,pitch,yaw]` with `--wait <secs>` to look at a spot a
+  while later. `--log-fps` logs the frame rate.
 
-Weapons, items, the rules and the HUD are all data: see
+Maps' own logic runs: doors, buttons, lifts, teleporters and traps work
+as their mappers wired them ([docs/map-logic.md](docs/map-logic.md)).
+Players and view models are animated, the game is heard through its own
+sounds and soundscapes, and maps' 3D skyboxes, fog and water are drawn
+([docs/presentation.md](docs/presentation.md)).
+
+Weapons, items, the rules, sounds, effects and the HUD are all data: see
 [docs/data-driven.md](docs/data-driven.md) to change them or add your own.
 
 ## Workshop content
@@ -160,7 +169,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 | M4 | Physics props and the Manipulator: `.phy` collision, pushing, impact damage, grab/pull/launch/punt | done |
 | M5 | Data-driven combat: weapons, items, pickups, damage, health and armor, deathmatch rules, HUD | done |
 | M6 | Networking: dedicated/listen servers, prediction, interpolation, lag compensation, data sync | done |
-| M7 | Animation, audio, doors, 3D skybox, water | |
+| M7 | Map logic (doors, buttons, triggers, traps, chargers), animation, audio, 3D skybox, PVS, fog, water, sprite effects | done |
 
 ## Legal
 

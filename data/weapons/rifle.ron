@@ -42,6 +42,6 @@ Weapon(
     deploy_time: 0.5,
     pickup: Some((ammo: 30, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_AR2.Single", "fire2": "Weapon_IRifle.Single", "reload": "Weapon_AR2.Reload"},
-    // Players hold it as HL2DM's models hold a ar2 (run_ar2, ...).
+    // Players hold it with the ar2 sequences of HL2DM's player models (run_ar2, ...).
     hold: Some("ar2"),
 )

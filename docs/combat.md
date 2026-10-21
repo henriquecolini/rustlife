@@ -66,8 +66,8 @@ modes' intervals are its rest after acting.
 
 Bullets and swings stop at what Source's `MASK_SHOT` stops at: solids,
 windows, props and players, not grates or clip brushes. Players are hit as
-their movement box; there are no per-limb hitboxes until models are
-animated (M7).
+their movement box; there are no per-limb hitboxes (models are animated
+for show only, on clients).
 
 ### Projectiles
 
@@ -152,9 +152,9 @@ Taken, it is gone for its `respawn` seconds. Weapon and item classnames the
 map uses but the entity map does not list are logged once.
 
 `trigger_hurt` brush entities become hazards: their brush model's bounding
-box, with their `damage` per second. Disabled ones (`StartDisabled`), which
-maps switch on through entity I/O, stay off until I/O is implemented (M7);
-in the stock maps that leaves one of sixteen active.
+box, with their `damage` per second. Disabled ones (`StartDisabled`) wait
+for the map's logic to switch them on, which is how traps are built (see
+[map-logic.md](map-logic.md)).
 
 ## The match
 
@@ -176,8 +176,8 @@ respawn countdown, pickups, the match result). The crosshair turns to the
 warning colour when your shot lands, the screen flashes red when you are
 hurt, and `Tab` shows the scoreboard (always shown between matches).
 
-Tracers, impact marks and explosion flashes are drawn without content for
-now; the game's own sprites and particles come with M7.
+Muzzle flashes, tracers, sparks and explosions are drawn with the game's
+own sprites (`effects.ron`, see [presentation.md](presentation.md)).
 
 ## Trying it
 

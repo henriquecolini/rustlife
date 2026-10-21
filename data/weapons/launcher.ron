@@ -28,6 +28,6 @@ Weapon(
     deploy_time: 0.6,
     pickup: Some((ammo: 3, respawn: 30.0, radius: 24.0)),
     sounds: {"fire": "Weapon_RPG.Single"},
-    // Players hold it as HL2DM's models hold a rpg (run_rpg, ...).
+    // Players hold it with the rpg sequences of HL2DM's player models (run_rpg, ...).
     hold: Some("rpg"),
 )

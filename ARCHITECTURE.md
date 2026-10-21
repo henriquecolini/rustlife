@@ -27,7 +27,7 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `rl_server` | The authoritative server: joining, command queues, the tick, snapshots. No Bevy. |
 | `rl_client` | The Bevy app: rendering, input, HUD, hosting or joining a game. |
 
-Crates are introduced by the milestone that needs them. As of M6 the workspace
+Crates are introduced by the milestone that needs them. As of M7 the workspace
 has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
 `rl_sim`, `rl_level`, `rl_net`, `rl_server`, `rl_client`, the `rustlife`,
 `rustlife-server` and `rustlife-inspect` binaries, and `xtask`. Everything up
@@ -178,8 +178,8 @@ See [docs/physics.md](docs/physics.md).
    command's number, spawns by the tick), so it is deterministic.
 4. **The client** sends weapon choices and reload with each command, draws
    pickups, projectiles and other players from the simulation (`actors`),
-   effects from the tick's events (`effects`) and the HUD laid out by
-   `hud.ron` (`hud`).
+   effects from the tick's events (`effects`, with sprites since M7) and
+   the HUD laid out by `hud.ron` (`hud`).
 
 See [docs/combat.md](docs/combat.md).
 
@@ -207,6 +207,37 @@ See [docs/combat.md](docs/combat.md).
    the replica (`Game`) and the interpolated world (`Drawn`).
 
 See [docs/netcode.md](docs/netcode.md).
+
+## Map logic, animation, sound and the world (M7)
+
+1. **Map logic.** `rl_sim::logic` runs the map's entity I/O on the server:
+   outputs queue events to named entities' inputs, which open doors, press
+   buttons, switch triggers, hazards and brushes, teleport, push and blow
+   up. Movers (doors, buttons, moving brushes) move in both the collision
+   and physics worlds and push or crush the players in their way. Their
+   poses and the ambient sounds playing replicate as `LogicState`; the
+   tick's map events travel with the others. See
+   [docs/map-logic.md](docs/map-logic.md).
+2. **Animation.** `source_formats::anim` decodes skeletons, animations and
+   sequences (with included models and `.ani` blocks); `rl_assets` turns
+   them into joints, inverse bind poses and `AnimationClip`s and skins the
+   meshes. The client plays stance sequences on other players, holding
+   their weapons' world models, and activities on the view model, drawn by
+   its own camera.
+3. **Sound.** `source_formats` reads WAV files, soundscripts and
+   soundscapes; `rl_assets` loads sounds as Bevy audio. The client plays
+   the tick's events, the map's ambient and door sounds, soundscapes and
+   footsteps from spatial emitters.
+4. **The world.** The BSP loader reads the PVS, leaf clusters and areas
+   and the sky camera, and chunks surfaces by material and cell with the
+   clusters they lie in. The client culls chunks by the PVS, draws the 3D
+   skybox with a camera of its own behind the world, fogs the views and
+   draws water. DXT textures stay block-compressed on the GPU.
+5. **Effects.** Sprite materials load with all their frames
+   (`SpriteLoader`); muzzle flashes, tracers, sparks and explosions draw
+   them as `effects.ron` says.
+
+See [docs/presentation.md](docs/presentation.md).
 
 Format notes live in [`docs/formats/`](docs/formats/).
 

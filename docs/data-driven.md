@@ -5,8 +5,9 @@ Everything about how rustlife plays is data: RON files under
 of things — a hitscan shot, a projectile, a health pickup — and the data
 says which exist and how they behave. This page lists the files and walks
 through adding a weapon and an item. How the game then uses them is in
-[combat.md](combat.md), [movement.md](movement.md) and
-[physics.md](physics.md).
+[combat.md](combat.md), [movement.md](movement.md),
+[physics.md](physics.md), [map-logic.md](map-logic.md) and
+[presentation.md](presentation.md).
 
 ## Files
 
@@ -20,10 +21,13 @@ through adding a weapon and an item. How the game then uses them is in
 | `weapons/<id>.ron` | One weapon per file; the file name is its id |
 | `items/<id>.ron` | One health, armor or ammo pickup per file |
 | `entity_map.ron` | What a map's entity classes become |
-| `player.ron` | Health, armor, player models |
+| `player.ron` | Health, armor, player models and how they animate |
 | `rules/deathmatch.ron` | Frag and time limits, respawning, the loadout, fall damage |
 | `hud.ron` | HUD layout and colours |
 | `net.ron` | Port, snapshot rate, interpolation delay, command redundancy and backlog, lag-compensation window ([netcode.md](netcode.md)) |
+| `map_logic.ron` | Use range, wall chargers' aim cone, map explosions, the per-tick event cap ([map-logic.md](map-logic.md)) |
+| `sounds.ron` | Footsteps, landings, deaths, explosions, impacts, breakables, buttons ([presentation.md](presentation.md)) |
+| `effects.ron` | Muzzle flash, tracer, spark and explosion sprites ([presentation.md](presentation.md)) |
 
 Every file documents its fields in comments, and every type in `rl_data`
 documents them in Rust.
@@ -102,7 +106,10 @@ Weapon(
     secondary: None,
     deploy_time: 0.5,
     pickup: Some((ammo: 50, respawn: 20.0, radius: 24.0)),
-    sounds: {"fire": "Weapon_SMG1.Single"},
+    // Players hold it with the smg1 sequences of HL2DM's player models
+    // (run_smg1, cidle_smg1, ...).
+    hold: Some("smg1"),
+    sounds: {"fire": "Weapon_SMG1.Single", "reload": "Weapon_SMG1.Reload"},
 )
 ```
 
@@ -128,6 +135,8 @@ an entity class to it so maps place it (`entity_map.ron`):
 | fire mode `shot` | `Hitscan((pellets, damage, spread, range, falloff, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
 | `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
 | projectile `explosion` | `None`, or `(radius, damage, knockback, force)` |
+| `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `physgun`); `None` takes `player.ron`'s `default_hold` |
+| `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire` |
 
 The ten built-in weapons cover every block: the Manipulator (a tool), the
 Pry Bar (melee), Sidearm and Hand Cannon (single bullets), SMG (automatic,
@@ -147,11 +156,29 @@ Item(
     gives: Health(100.0),       // or Armor(50.0), or Ammo({"smg": 45, "buckshot": 6})
     respawn: 60.0,
     radius: 24.0,
+    sounds: {"pickup": "HealthKit.Touch"},
 )
 ```
 
-and place it through the entity map, e.g. `"item_healthcharger":
+and place it through the entity map, e.g. `"item_healthkit":
 Item("megahealth")`. Health and armor top up to `player.ron`'s maximums.
+
+An item with a `station` is a wall charger: it is not touched but used,
+and gives its `gives` a little at a time, at `rate` points a second while
+use is held, recharging over `respawn` seconds once spent. Its `use` sound
+loops while someone draws from it:
+
+```ron
+Item(
+    name: "Health station",
+    model: "models/props_combine/health_charger001.mdl",
+    gives: Health(50.0),
+    respawn: 60.0,
+    radius: 40.0,
+    station: Some((rate: 25.0)),
+    sounds: {"use": "WallHealth.LoopingContinueCharge"},
+)
+```
 
 ## Mapping a map's entities
 
