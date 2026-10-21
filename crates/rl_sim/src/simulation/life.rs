@@ -337,6 +337,7 @@ impl Simulation {
             return;
         }
         self.projectiles.clear();
+        self.clear_grenades();
         self.thrown.clear();
         for pickup in &mut self.pickups {
             pickup.away = 0.0;

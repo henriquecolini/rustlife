@@ -80,11 +80,12 @@ pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsCo
 pub use player::{ArmorConfig, HealthConfig, PlayerAnimationConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, PointsConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;
-pub use sounds::{FootstepsConfig, SoundsConfig};
+pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig};
 pub use validate::Problem;
 pub use weapons::{
     ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig, MeleeConfig,
-    ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig,
+    ProjectileBodyConfig, ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig,
+    WeaponPickupConfig,
 };
 
 /// File name of the movement data.

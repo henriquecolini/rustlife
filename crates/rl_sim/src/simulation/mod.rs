@@ -60,12 +60,14 @@ use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
 
 mod breakables;
 mod fire;
+mod grenades;
 mod lag;
 mod life;
 mod map;
 mod replica;
 
-pub use breakables::{PropBreak, PropImpactEvent};
+pub use breakables::{PropBreak, PropImpactEvent, PropScrapeEvent};
+pub use grenades::GrenadeView;
 pub use map::MapEvent;
 
 pub use lag::History;
@@ -240,6 +242,8 @@ pub struct TickEvents {
     pub prop_breaks: Vec<PropBreak>,
     /// Props that struck props or the map.
     pub prop_impacts: Vec<PropImpactEvent>,
+    /// Props sliding along something.
+    pub prop_scrapes: Vec<PropScrapeEvent>,
 }
 
 /// What set off an explosion.
@@ -293,6 +297,11 @@ pub struct Simulation {
     /// Props players threw, punted or dropped: by whom and on which tick,
     /// so the harm they do is credited.
     thrown: Vec<(BodyId, PlayerId, u64)>,
+    /// Grenades in flight (the server's), and where clients see them.
+    grenades: Vec<grenades::Grenade>,
+    grenade_views: Vec<GrenadeView>,
+    /// Blasts to set off once the grenades' fuses have all been looked at.
+    pending_blasts: Vec<(PlayerId, WeaponId, Vec3, rl_data::ExplosionConfig)>,
     /// Props that can break, and the blows waiting to hurt them.
     breakables: breakables::Breakables,
     /// Impacts of props on props or the map this tick, for the events.
@@ -330,6 +339,9 @@ impl Simulation {
             projectiles: Vec::new(),
             next_projectile: 0,
             thrown: Vec::new(),
+            grenades: Vec::new(),
+            grenade_views: Vec::new(),
+            pending_blasts: Vec::new(),
             breakables: breakables::Breakables::default(),
             prop_impacts_pending: Vec::new(),
             game: Match::new(),
@@ -408,6 +420,12 @@ impl Simulation {
         &self.projectiles
     }
 
+    /// The grenades in flight, where they are.
+    #[must_use]
+    pub fn grenades(&self) -> &[GrenadeView] {
+        &self.grenade_views
+    }
+
     /// Adds a prop. Players and shots collide with it from the next tick
     /// (or [`Simulation::refresh_props`]) on.
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
@@ -423,6 +441,17 @@ impl Simulation {
     /// joint names a body that does not exist.
     pub fn add_joint(&mut self, joint: &JointDesc) -> bool {
         self.physics.add_joint(joint)
+    }
+
+    /// Lets the props fall and settle for `seconds` before anyone arrives,
+    /// as a map compiled with its props at rest would have them: nothing is
+    /// heard, nobody is hurt and nothing breaks.
+    pub fn settle(&mut self, seconds: f32) {
+        let ticks = (seconds / self.dt).ceil() as usize;
+        for _ in 0..ticks {
+            self.physics.step();
+        }
+        self.physics.take_contacts();
     }
 
     /// Brings collision up to date with props just added, without
@@ -637,12 +666,14 @@ impl Simulation {
             self.prop_impact(impact, &mut events);
         }
         self.hit_props_by_impacts();
+        self.advance_grenades(&mut events);
 
         self.advance_projectiles(&mut events);
         self.touch_pickups(&mut events);
         self.apply_hazards(&mut events);
         self.resolve_prop_hits(&mut events);
         self.respawn_props();
+        self.report_scrapes(&mut events);
         self.forget_old_throws();
         if let Some(event) = self.game.tick(self.dt, &self.data.rules) {
             self.on_match_event(event, &mut events);

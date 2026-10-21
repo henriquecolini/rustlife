@@ -67,6 +67,56 @@ impl ConvexHull {
         })
     }
 
+    /// A ball of `radius` about the origin, approximated by an icosahedron
+    /// (twenty faces: round enough to roll, cheap enough to collide).
+    #[must_use]
+    pub fn ball(radius: f32) -> Self {
+        const FACES: [[u16; 3]; 20] = [
+            [0, 11, 5],
+            [0, 5, 1],
+            [0, 1, 7],
+            [0, 7, 10],
+            [0, 10, 11],
+            [1, 5, 9],
+            [5, 11, 4],
+            [11, 10, 2],
+            [10, 7, 6],
+            [7, 1, 8],
+            [3, 9, 4],
+            [3, 4, 2],
+            [3, 2, 6],
+            [3, 6, 8],
+            [3, 8, 9],
+            [4, 9, 5],
+            [2, 4, 11],
+            [6, 2, 10],
+            [8, 6, 7],
+            [9, 8, 1],
+        ];
+        let phi = f32::midpoint(1.0, 5.0_f32.sqrt());
+        let scale = radius / (1.0 + phi * phi).sqrt();
+        let vertices: Vec<Vec3> = [
+            (-1.0, phi, 0.0),
+            (1.0, phi, 0.0),
+            (-1.0, -phi, 0.0),
+            (1.0, -phi, 0.0),
+            (0.0, -1.0, phi),
+            (0.0, 1.0, phi),
+            (0.0, -1.0, -phi),
+            (0.0, 1.0, -phi),
+            (phi, 0.0, -1.0),
+            (phi, 0.0, 1.0),
+            (-phi, 0.0, -1.0),
+            (-phi, 0.0, 1.0),
+        ]
+        .into_iter()
+        .map(|(x, y, z)| Vec3::new(x, y, z) * scale)
+        .collect();
+        // The icosahedron is a closed convex mesh: it always has a hull.
+        Self::from_triangles(vertices, &FACES)
+            .unwrap_or_else(|| Self::from_box(Vec3::splat(-radius), Vec3::splat(radius)))
+    }
+
     /// An axis-aligned box.
     #[must_use]
     pub fn from_box(mins: Vec3, maxs: Vec3) -> Self {
@@ -234,6 +284,21 @@ fn push_unique(directions: &mut Vec<Vec3>, direction: Vec3, either_sign: bool) {
 mod tests {
     use super::*;
     use crate::collision::clip::{Hit, Sweep, clip_convex};
+
+    #[test]
+    fn a_ball_is_a_closed_hull_of_its_radius() {
+        let ball = ConvexHull::ball(4.0);
+        assert_eq!(ball.vertices().len(), 12);
+        for vertex in ball.vertices() {
+            assert!((vertex.length() - 4.0).abs() < 1e-4, "{vertex}");
+        }
+        let (mins, maxs) = ball.bounds();
+        assert!(mins.max_element() < 0.0 && maxs.min_element() > 0.0);
+        assert!(maxs.max_element() <= 4.0 + 1e-4);
+        // Every face's plane is where an icosahedron's inscribed sphere is.
+        let inscribed = 4.0 * 0.794_654_5;
+        assert!(maxs.max_element() > inscribed);
+    }
 
     /// A tetrahedron with its right angle at the origin.
     fn tetrahedron() -> ConvexHull {

@@ -759,3 +759,72 @@ fn a_respawnable_barrel_comes_back_where_it_was_unless_someone_stands_there() {
         1
     );
 }
+
+#[test]
+fn a_frag_is_a_physics_body_that_bounces_and_bursts_when_its_fuse_runs_out() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    let events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    assert_eq!(events[0].fired.len(), 1);
+    assert_eq!(arena.sim.grenades().len(), 1, "one grenade in flight");
+    let first = arena.sim.grenades()[0];
+
+    // Watch it fall, bounce on the floor and roll about.
+    let mut heights = Vec::new();
+    let mut explosions = Vec::new();
+    for _ in 0..200 {
+        let events = arena.idle(1);
+        if let Some(grenade) = arena.sim.grenades().first() {
+            assert_eq!(grenade.id, first.id);
+            heights.push(grenade.position.z);
+        }
+        explosions.extend(events.into_iter().flat_map(|e| e.explosions));
+        if arena.sim.grenades().is_empty() {
+            break;
+        }
+    }
+    assert_eq!(explosions.len(), 1, "it burst once");
+    assert!(arena.sim.grenades().is_empty(), "and is gone");
+    let lowest = heights.iter().copied().fold(f32::MAX, f32::min);
+    assert!(lowest < 8.0, "it came down to the floor: {lowest}");
+    // A bounce: it was rising again after first touching down.
+    let touched = heights.iter().position(|&z| z < 8.0).expect("touched down");
+    assert!(
+        heights[touched..].iter().any(|&z| z > lowest + 6.0),
+        "it bounced"
+    );
+    // Its fuse is 2.5 s from the throw.
+    let burst_at = heights.len() as f32 / 66.0;
+    assert!((2.2..2.7).contains(&burst_at), "{burst_at}");
+}
+
+#[test]
+fn a_frag_thrown_at_someone_kills_them_for_the_thrower() {
+    let data = data();
+    let mut arena = Arena::new(&data, 120.0);
+    arena.arm("frag");
+    arena
+        .sim
+        .player_mut(arena.target)
+        .expect("target")
+        .vitals
+        .health = 20.0;
+    // Dropped at the thrower's feet, it goes off within reach of both.
+    arena.hold(Buttons::ATTACK, 85.0, 1);
+    let events = arena.idle(200);
+    let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
+    assert_eq!(kills.len(), 1, "{kills:?}");
+    assert_eq!(kills[0].victim, arena.target);
+    assert_eq!(kills[0].killer, Some(arena.shooter));
+    assert_eq!(
+        kills[0].cause,
+        Cause::Weapon(arena.weapon("frag")),
+        "credited to the frag"
+    );
+    let frag_points = data.rules.points.for_weapon("frag");
+    assert_eq!(
+        arena.sim.game().score(arena.shooter).points,
+        i32::try_from(frag_points).unwrap()
+    );
+}

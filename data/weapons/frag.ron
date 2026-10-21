@@ -1,5 +1,6 @@
-// A thrown fragmentation grenade: bounces, then bursts 2.5 seconds after
-// leaving the hand (or at once if it strikes a player).
+// A thrown fragmentation grenade: a physics body that tumbles and bounces
+// like any prop (and is shoved by blasts), then bursts 2.5 seconds after
+// leaving the hand.
 Weapon(
     name: "Frag",
     slot: 5,
@@ -22,6 +23,8 @@ Weapon(
             hit_damage: 0.0,
             explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
             lifetime: 3.0,
+            // Rolls and bounces as a rigid ball of metal.
+            body: Some((mass: 0.9, friction: 0.7, spin: 14.0, damping: 0.1)),
         )),
     )),
     secondary: None,

@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, VecDeque};
 use glam::Vec3;
 use rl_sim::logic::mover::MoverState;
 use rl_sim::physics::{BodyId, BodyPose};
-use rl_sim::simulation::{Life, PlayerId};
+use rl_sim::simulation::{GrenadeView, Life, PlayerId};
 use rl_sim::weapons::projectile::Projectile;
 
 use crate::snapshot::WorldState;
@@ -58,6 +58,8 @@ pub struct Interpolated {
     pub props: BTreeMap<BodyId, BodyPose>,
     /// Projectiles in flight, placed along their flight.
     pub projectiles: Vec<Projectile>,
+    /// Grenades in flight, blended between the two states.
+    pub grenades: Vec<GrenadeView>,
     /// The map's movers, in the logic's order, their positions blended.
     pub movers: Vec<MoverState>,
 }
@@ -179,6 +181,18 @@ impl StateBuffer {
                     projectile
                 })
                 .collect(),
+            grenades: to
+                .grenades
+                .iter()
+                .map(|now| {
+                    let mut grenade = *now;
+                    if let Some(then) = from.grenades.iter().find(|then| then.id == now.id) {
+                        grenade.position = then.position.lerp(now.position, alpha);
+                        grenade.rotation = then.rotation.slerp(now.rotation, alpha);
+                    }
+                    grenade
+                })
+                .collect(),
             movers: to
                 .logic
                 .movers
@@ -258,6 +272,7 @@ mod tests {
             broken: std::collections::BTreeSet::new(),
             pickups: Vec::new(),
             projectiles: Vec::new(),
+            grenades: Vec::new(),
             game: Match::new(),
             logic: rl_sim::logic::LogicState {
                 movers: vec![MoverState {

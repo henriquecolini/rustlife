@@ -34,4 +34,23 @@ Sounds(
     },
     // A button's press, by the sound number the map gives it.
     button: "Buttons.snd{}",
+    // Props striking things and sliding about. The sounds are each surface's
+    // own, from the game's surfaceproperties.txt.
+    props: (
+        // An impact faster than this is the surface's hard sound.
+        hard_speed: 320.0,
+        // Full volume at this closing speed (units/s) and this mass (kg);
+        // never quieter than min_volume.
+        loud_speed: 700.0,
+        loud_mass: 60.0,
+        min_volume: 0.15,
+        // The same prop is not heard again within this many seconds, and at
+        // most this many impacts start in a frame.
+        cooldown: 0.1,
+        max_per_frame: 4,
+        // A scrape stops this long after its last report; full volume when
+        // sliding this fast (units/s).
+        scrape_timeout: 0.3,
+        scrape_loud_speed: 400.0,
+    ),
 )

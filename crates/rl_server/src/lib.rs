@@ -59,6 +59,8 @@ const FIRST_LOCAL_ID: ClientId = u64::MAX;
 /// Most ticks the server runs in one update; beyond that it is too far
 /// behind (a debugger pause, a suspended laptop) and skips the time.
 const MAX_TICKS_PER_UPDATE: u32 = 10;
+/// Seconds the map's props are let fall into place before play begins.
+const SETTLE_SECONDS: f32 = 4.0;
 /// Pitch is clamped to this, degrees.
 const MAX_PITCH: f32 = 89.0;
 /// A refused client is disconnected this long after being told why, so
@@ -239,6 +241,10 @@ impl Server {
     /// Fails if the UDP address cannot be bound.
     pub fn new(level: &Level, options: ServerOptions) -> Result<Self, ServerError> {
         let mut built = level.simulation(&options.data);
+        let initial = snapshot::initial_props(&built.simulation);
+        // The props fall into place before anyone arrives; clients are told
+        // where they ended up, as the change from where the level put them.
+        built.simulation.settle(SETTLE_SECONDS);
         for _ in 0..options.dummies {
             built.simulation.join();
         }
@@ -250,7 +256,7 @@ impl Server {
         Ok(Self {
             renet: RenetServer::new(protocol::connection_config()),
             netcode,
-            initial: snapshot::initial_props(&built.simulation),
+            initial,
             sim: built.simulation,
             data_hash: rl_data::content_hash(&data_files),
             games: options.games,
@@ -477,10 +483,11 @@ impl Server {
         };
         tracing::info!(map = name, "changing map");
         let mut built = level.simulation(&self.data);
+        self.initial = snapshot::initial_props(&built.simulation);
+        built.simulation.settle(SETTLE_SECONDS);
         for _ in 0..self.dummies {
             built.simulation.join();
         }
-        self.initial = snapshot::initial_props(&built.simulation);
         self.sim = built.simulation;
         self.map = map_info(&level);
         let welcoming: Vec<ClientId> = self

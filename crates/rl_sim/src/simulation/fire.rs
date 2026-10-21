@@ -261,6 +261,10 @@ impl Simulation {
         projectile: &ProjectileConfig,
         aim: &Aim,
     ) {
+        if let Some(body) = &projectile.body {
+            self.throw_grenade(id, weapon, mode, projectile, body, aim);
+            return;
+        }
         let forward = view_direction(aim.pitch, aim.yaw);
         self.projectiles.push(Projectile {
             id: self.next_projectile,

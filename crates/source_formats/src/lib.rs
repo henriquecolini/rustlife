@@ -41,6 +41,7 @@ pub mod props;
 pub mod skybox;
 pub mod soundscape;
 pub mod soundscript;
+pub mod surfaceprops;
 pub mod vhv;
 pub mod visibility;
 pub mod vmt;

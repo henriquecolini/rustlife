@@ -14,7 +14,7 @@
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{
     DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, PropBreak, PropImpactEvent,
-    RespawnEvent, ShotEvent, TickEvents,
+    PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, WeaponId};
@@ -84,6 +84,8 @@ pub enum Event {
     PropBreak(PropBreak),
     /// A prop struck another prop or the map.
     PropImpact(PropImpactEvent),
+    /// A prop is sliding along something.
+    PropScrape(PropScrapeEvent),
 }
 
 /// The events of a tick that `viewer` should hear of: everything but the
@@ -171,6 +173,12 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
             .iter()
             .map(|&impact| Event::PropImpact(impact)),
     );
+    out.extend(
+        events
+            .prop_scrapes
+            .iter()
+            .map(|&scrape| Event::PropScrape(scrape)),
+    );
     out
 }
 
@@ -203,6 +211,7 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Map(event) => tick.map.push(event),
             Event::PropBreak(broke) => tick.prop_breaks.push(broke),
             Event::PropImpact(impact) => tick.prop_impacts.push(impact),
+            Event::PropScrape(scrape) => tick.prop_scrapes.push(scrape),
         }
     }
     tick
@@ -261,6 +270,11 @@ mod tests {
                 position: Vec3::ZERO,
                 speed: 300.0,
                 mass: 20.0,
+            }],
+            prop_scrapes: vec![PropScrapeEvent {
+                body: BodyId::from_index(9),
+                position: Vec3::X,
+                speed: 90.0,
             }],
             match_event: Some(MatchEvent::Restarted),
             ..TickEvents::default()

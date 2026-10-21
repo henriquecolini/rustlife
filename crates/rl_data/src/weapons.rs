@@ -233,6 +233,25 @@ pub struct ProjectileConfig {
     pub explosion: Option<ExplosionConfig>,
     /// Seconds before it disappears if nothing else ends it.
     pub lifetime: f32,
+    /// Simulated as a rigid body like any prop — it tumbles, rolls, bounces
+    /// off players and can be shoved by blasts — instead of flying as a
+    /// small box. Grenades are.
+    #[serde(default)]
+    pub body: Option<ProjectileBodyConfig>,
+}
+
+/// A projectile that is a physics body.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectileBodyConfig {
+    /// Mass, kg.
+    pub mass: f32,
+    /// Friction coefficient of its surface.
+    pub friction: f32,
+    /// Spin it leaves the hand with, radians/s.
+    pub spin: f32,
+    /// Fraction of its speed it loses per second to the air.
+    pub damping: f32,
 }
 
 /// A blast: damage and push falling off linearly from its centre.
@@ -440,6 +459,18 @@ fn validate_projectile(check: &mut Validator, field: &str, projectile: &Projecti
     }
     check.non_negative(&format!("{field}.hit_damage"), projectile.hit_damage);
     check.positive(&format!("{field}.lifetime"), projectile.lifetime);
+    if let Some(body) = &projectile.body {
+        check.positive(&format!("{field}.body.mass"), body.mass);
+        check.non_negative(&format!("{field}.body.friction"), body.friction);
+        check.non_negative(&format!("{field}.body.spin"), body.spin);
+        check.non_negative(&format!("{field}.body.damping"), body.damping);
+        if projectile.bounce.is_none() {
+            check.fail(
+                &format!("{field}.body"),
+                "a rigid body needs a bounce (its restitution)",
+            );
+        }
+    }
     if let Some(explosion) = &projectile.explosion {
         check.positive(&format!("{field}.explosion.radius"), explosion.radius);
         check.non_negative(&format!("{field}.explosion.damage"), explosion.damage);

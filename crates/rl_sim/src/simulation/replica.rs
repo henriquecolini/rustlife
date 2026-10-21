@@ -24,7 +24,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::Shot;
 
-use super::{Player, PlayerId, ShotEvent, Simulation, Spawn};
+use super::{GrenadeView, Player, PlayerId, ShotEvent, Simulation, Spawn};
 use crate::movement::{MoveEvents, UserCmd, simulate};
 use crate::physics::{BodyId, BodyPose};
 use crate::pickups::Pickup;
@@ -76,6 +76,11 @@ impl Simulation {
     /// The map's pickups, to update their state.
     pub fn pickups_mut(&mut self) -> &mut [Pickup] {
         &mut self.pickups
+    }
+
+    /// Replaces the grenades in flight.
+    pub fn set_grenades(&mut self, grenades: Vec<GrenadeView>) {
+        self.grenade_views = grenades;
     }
 
     /// Replaces the projectiles in flight.

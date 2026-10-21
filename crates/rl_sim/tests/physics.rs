@@ -426,6 +426,22 @@ fn a_prop_striking_a_prop_reports_both_and_not_the_map() {
 }
 
 #[test]
+fn a_prop_sliding_along_the_floor_scrapes_until_it_slows() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let body = physics.add_prop(&crate_at(Vec3::ZERO, 16.0, 20.0, Motion::Dynamic));
+    run(&mut physics, 20);
+    assert!(physics.scrapes().is_empty(), "at rest it is quiet");
+    physics.set_velocity(body, Vec3::new(400.0, 0.0, 0.0), Vec3::ZERO);
+    physics.step();
+    let scrape = physics.scrapes().into_iter().next().expect("sliding");
+    assert_eq!(scrape.body, body);
+    assert!(scrape.speed > 300.0, "{scrape:?}");
+    run(&mut physics, 120);
+    assert!(physics.scrapes().is_empty(), "it has come to rest");
+}
+
+#[test]
 fn a_broken_prop_leaves_the_world_but_keeps_its_id() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);

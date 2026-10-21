@@ -69,7 +69,7 @@ Physics(
         // min_energy breaks a prop that can break, at damage_per_joule.
         // Dropping a 20 kg crate from head height (about 400 units/s) takes
         // a quarter of a crate's health.
-        impact: (report_speed: 120.0, min_energy: 250.0, damage_per_joule: 0.04),
+        impact: (report_speed: 120.0, min_energy: 250.0, damage_per_joule: 0.04, scrape_speed: 70.0),
     ),
     impact_damage: (
         // Props must hit at least this fast to hurt, units/s.

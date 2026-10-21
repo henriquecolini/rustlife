@@ -40,6 +40,20 @@ enum Party {
     Prop(BodyId),
 }
 
+/// A prop sliding along something.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Scrape {
+    /// The prop.
+    pub body: BodyId,
+    /// Where it is, Source space.
+    pub position: Vec3,
+    /// How fast it slides, units/s.
+    pub speed: f32,
+}
+
+/// Most scrapes reported at once: the loudest ones.
+const MAX_SCRAPES: usize = 6;
+
 /// A contact that began during a step.
 #[derive(Debug, Clone, Copy)]
 struct Started {
@@ -112,6 +126,39 @@ impl Collector {
 }
 
 impl PhysicsWorld {
+    /// The props sliding along something right now, loudest first: awake
+    /// props in contact that move faster than the configured scrape speed
+    /// without rolling (a rolling prop spins about as fast as it travels).
+    #[must_use]
+    pub fn scrapes(&self) -> Vec<Scrape> {
+        let threshold = self.config.breakables.impact.scrape_speed;
+        let mut scrapes: Vec<Scrape> = self
+            .props()
+            .filter(|&body| self.holder(body).is_none())
+            .filter_map(|body| {
+                let rigid = self.rigid(body)?;
+                if !rigid.is_dynamic() || rigid.is_sleeping() {
+                    return None;
+                }
+                let speed = rigid.linvel().length();
+                let radius = self.radius(body)?.max(1.0);
+                let rolling = rigid.angvel().length() * radius > 0.65 * speed;
+                let touching = self
+                    .rapier
+                    .contact_pairs_with(self.bodies.get(body.index())?.collider)
+                    .any(ContactPair::has_any_active_contact);
+                (speed > threshold && !rolling && touching).then(|| Scrape {
+                    body,
+                    position: rigid.center_of_mass(),
+                    speed,
+                })
+            })
+            .collect();
+        scrapes.sort_by(|a, b| b.speed.total_cmp(&a.speed));
+        scrapes.truncate(MAX_SCRAPES);
+        scrapes
+    }
+
     /// The impacts of props on props and on the map that began during the
     /// step `collector` listened to, given every awake prop's velocity
     /// before it. Slower than `floor` units/s are left out.

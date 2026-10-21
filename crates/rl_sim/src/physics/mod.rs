@@ -50,7 +50,7 @@ mod statics;
 mod trace;
 
 pub use contacts::Impact;
-pub use impacts::ContactImpact;
+pub use impacts::{ContactImpact, Scrape};
 pub use joints::{JointDesc, JointKind, MapJoints, map_joints};
 pub use props::{Breakable, Motion, PropDesc, prop_desc};
 

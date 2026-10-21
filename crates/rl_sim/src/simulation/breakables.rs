@@ -89,6 +89,20 @@ pub struct PropImpactEvent {
     pub mass: f32,
 }
 
+/// A prop sliding along something, for sounds.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropScrapeEvent {
+    /// The prop.
+    pub body: BodyId,
+    /// Where it is.
+    pub position: Vec3,
+    /// How fast it slides, units/s.
+    pub speed: f32,
+}
+
+/// Ticks between reports of props that keep sliding.
+pub(super) const SCRAPE_INTERVAL: u64 = 5;
+
 /// The breakable props of a simulation, by body.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Breakables {
@@ -212,6 +226,25 @@ impl Simulation {
         self.hit_prop(body, amount, Blow::Impact, attacker);
         self.resolve_prop_hits(&mut events);
         events
+    }
+
+    /// Reports the props that are sliding along something, every few ticks.
+    pub(super) fn report_scrapes(&self, events: &mut TickEvents) {
+        if !self.tick.is_multiple_of(SCRAPE_INTERVAL) {
+            return;
+        }
+        events
+            .prop_scrapes
+            .extend(
+                self.physics
+                    .scrapes()
+                    .into_iter()
+                    .map(|scrape| PropScrapeEvent {
+                        body: scrape.body,
+                        position: scrape.position,
+                        speed: scrape.speed,
+                    }),
+            );
     }
 
     /// Brings back the props that respawn once their time is up, unless a

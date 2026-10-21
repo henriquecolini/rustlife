@@ -171,6 +171,7 @@ mod tests {
             hit_damage: 10.0,
             explosion: None,
             lifetime: 5.0,
+            body: None,
         }
     }
 

@@ -71,6 +71,8 @@ pub struct PropImpactConfig {
     pub min_energy: f32,
     /// ...and the damage per joule beyond it.
     pub damage_per_joule: f32,
+    /// A prop sliding (not rolling) faster than this, units/s, scrapes.
+    pub scrape_speed: f32,
 }
 
 impl PropImpactConfig {
@@ -241,6 +243,10 @@ impl PhysicsConfig {
             breakables.impact.report_speed,
         );
         check.non_negative("breakables.impact.min_energy", breakables.impact.min_energy);
+        check.positive(
+            "breakables.impact.scrape_speed",
+            breakables.impact.scrape_speed,
+        );
         check.non_negative(
             "breakables.impact.damage_per_joule",
             breakables.impact.damage_per_joule,

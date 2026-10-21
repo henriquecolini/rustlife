@@ -32,7 +32,7 @@ use rl_sim::logic::{LogicState, SoundState};
 use rl_sim::movement::PlayerState;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::rules::Match;
-use rl_sim::simulation::{Life, Player, PlayerId, Simulation};
+use rl_sim::simulation::{GrenadeView, Life, Player, PlayerId, Simulation};
 use rl_sim::tools::manipulator::Manipulator;
 use rl_sim::weapons::projectile::Projectile;
 use rl_sim::weapons::{Inventory, WeaponId};
@@ -109,6 +109,8 @@ pub struct WorldState {
     pub pickups: Vec<bool>,
     /// Projectiles in flight.
     pub projectiles: Vec<Projectile>,
+    /// Grenades in flight.
+    pub grenades: Vec<GrenadeView>,
     /// Scores and clock.
     pub game: Match,
     /// What the map's logic shows.
@@ -152,6 +154,8 @@ pub struct Snapshot {
     pub pickups: Vec<(u16, bool)>,
     /// The projectiles in flight, if they changed.
     pub projectiles: Option<Vec<Projectile>>,
+    /// The grenades in flight, if they changed.
+    pub grenades: Option<Vec<GrenadeView>>,
     /// The match, if it changed.
     pub game: Option<Match>,
     /// Movers that changed: `(index, state)`.
@@ -207,6 +211,7 @@ impl WorldState {
                 .map(rl_sim::pickups::Pickup::available)
                 .collect(),
             projectiles: sim.projectiles().to_vec(),
+            grenades: sim.grenades().to_vec(),
             game: sim.game().clone(),
             logic: sim.logic_state(),
         }
@@ -287,6 +292,9 @@ impl WorldState {
             projectiles: baseline
                 .is_none_or(|base| base.projectiles != self.projectiles)
                 .then(|| self.projectiles.clone()),
+            grenades: baseline
+                .is_none_or(|base| base.grenades != self.grenades)
+                .then(|| self.grenades.clone()),
             game: baseline
                 .is_none_or(|base| base.game != self.game)
                 .then(|| self.game.clone()),
@@ -379,6 +387,11 @@ impl WorldState {
                 .clone()
                 .or_else(|| base.map(|base| base.projectiles.clone()))
                 .unwrap_or_default(),
+            grenades: snapshot
+                .grenades
+                .clone()
+                .or_else(|| base.map(|base| base.grenades.clone()))
+                .unwrap_or_default(),
             game: snapshot
                 .game
                 .clone()
@@ -423,6 +436,7 @@ impl WorldState {
             };
         }
         sim.set_projectiles(self.projectiles.clone());
+        sim.set_grenades(self.grenades.clone());
         sim.set_match(self.game.clone());
         if sim.logic_state() != self.logic {
             sim.set_logic_state(&self.logic);

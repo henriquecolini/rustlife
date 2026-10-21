@@ -36,6 +36,7 @@ use crate::world::MapScoped;
 use crate::{AppState, CurrentMap, GameVfs};
 
 mod events;
+mod props;
 mod soundscape;
 mod steps;
 mod world;
@@ -54,11 +55,14 @@ pub struct SoundPlugin;
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Sounds>()
-            .add_systems(Startup, load_soundscripts)
-            .add_systems(OnEnter(AppState::InGame), load_level_sounds)
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (load_soundscripts, load_level_sounds).chain(),
+            )
             .add_systems(Update, (add_listener, start_emitters, apply_volumes))
             .add_plugins((
                 events::EventSoundsPlugin,
+                props::PropSoundsPlugin,
                 world::WorldSoundsPlugin,
                 steps::StepsPlugin,
                 soundscape::SoundscapePlugin,

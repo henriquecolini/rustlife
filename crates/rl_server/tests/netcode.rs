@@ -745,3 +745,53 @@ fn players_vote_for_the_next_map_and_move_to_it() {
     game.run(30, UserCmd::default());
     assert!(game.player(alice).is_some() && game.player(bob).is_some());
 }
+
+#[test]
+fn a_thrown_grenade_is_seen_by_every_client_until_it_bursts() {
+    let data = data();
+    let mut game = Game::new(data.clone());
+    let a = game.join("A", "30ms", local_hash(&data));
+    let b = game.join("B", "30ms", local_hash(&data));
+    let frag = game
+        .server
+        .sim()
+        .arsenal()
+        .find_weapon("frag")
+        .expect("frag");
+    let thrower = game.player(a).expect("a");
+    game.server
+        .sim_mut()
+        .teleport_player(thrower, Vec3::new(0.0, -600.0, 1.0));
+    game.run(20, UserCmd::default());
+    // Take the frag in hand, then throw it.
+    game.step_with(|index, _| {
+        (index == a).then(|| UserCmd {
+            select: Some(frag),
+            ..UserCmd::default()
+        })
+    });
+    game.run(60, UserCmd::default());
+    game.step_with(|index, _| {
+        (index == a).then(|| UserCmd {
+            buttons: Buttons::ATTACK,
+            ..UserCmd::default()
+        })
+    });
+    let mut seen = [false; 2];
+    let mut burst = [false; 2];
+    for _ in 0..250 {
+        game.step_with(|_, _| Some(UserCmd::default()));
+        for (index, client) in game.clients.iter_mut().enumerate() {
+            let sim = client.session().expect("session").sim();
+            seen[index] |= !sim.grenades().is_empty();
+            burst[index] |= client
+                .take_events()
+                .iter()
+                .any(|events| !events.explosions.is_empty());
+        }
+    }
+    assert_eq!(seen, [true; 2], "both saw the grenade in flight");
+    assert_eq!(burst, [true; 2], "both heard it burst");
+    let sim = game.clients[b].session().expect("session").sim();
+    assert!(sim.grenades().is_empty(), "and then it was gone");
+}

@@ -39,6 +39,32 @@ pub struct SoundsConfig {
     /// A button's press: its `sounds` number replaces `{}`
     /// (`Buttons.snd{}`).
     pub button: String,
+    /// Props knocking about: impacts and scraping.
+    pub props: PropSoundsConfig,
+}
+
+/// How props sound as they strike things and slide about. The sounds
+/// themselves are the surfaces' own (`surfaceproperties.txt`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PropSoundsConfig {
+    /// Impacts closing faster than this, units/s, are the surface's hard
+    /// sound; slower ones its soft sound.
+    pub hard_speed: f32,
+    /// Closing speed, units/s, at which an impact reaches full volume.
+    pub loud_speed: f32,
+    /// Mass, kg, at which an impact reaches full volume.
+    pub loud_mass: f32,
+    /// Quietest an impact is, `0..=1`.
+    pub min_volume: f32,
+    /// Seconds before the same prop makes another impact sound.
+    pub cooldown: f32,
+    /// Most impact sounds started in one frame.
+    pub max_per_frame: u32,
+    /// Seconds without news of a sliding prop before its scraping stops.
+    pub scrape_timeout: f32,
+    /// Sliding speed, units/s, at which scraping reaches full volume.
+    pub scrape_loud_speed: f32,
 }
 
 /// Footsteps: one every so often while moving on the ground, left and
@@ -90,6 +116,14 @@ impl SoundsConfig {
         for (material, name) in &self.breaking {
             named(check, &format!("breaking.{material}"), name);
         }
+        let props = &self.props;
+        check.positive("props.hard_speed", props.hard_speed);
+        check.positive("props.loud_speed", props.loud_speed);
+        check.positive("props.loud_mass", props.loud_mass);
+        check.range("props.min_volume", props.min_volume, 0.0, 1.0);
+        check.non_negative("props.cooldown", props.cooldown);
+        check.positive("props.scrape_timeout", props.scrape_timeout);
+        check.positive("props.scrape_loud_speed", props.scrape_loud_speed);
         if !self.button.contains("{}") {
             check.fail("button", "must contain {} for the button's sound number");
         }
@@ -137,6 +171,16 @@ mod tests {
                 ("glass".to_owned(), "Breakable.MatGlass".to_owned()),
             ]),
             button: "Buttons.snd{}".to_owned(),
+            props: PropSoundsConfig {
+                hard_speed: 320.0,
+                loud_speed: 700.0,
+                loud_mass: 60.0,
+                min_volume: 0.15,
+                cooldown: 0.1,
+                max_per_frame: 4,
+                scrape_timeout: 0.3,
+                scrape_loud_speed: 400.0,
+            },
         }
     }
 
@@ -160,8 +204,10 @@ mod tests {
         bad.explosion = " ".to_owned();
         bad.breaking.remove("default");
         bad.button = "Buttons.snd".to_owned();
+        bad.props.min_volume = 3.0;
+        bad.props.scrape_timeout = 0.0;
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 6);
+        assert_eq!(check.finish().len(), 8);
     }
 }
