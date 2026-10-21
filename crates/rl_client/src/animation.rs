@@ -123,6 +123,8 @@ struct Track {
     blend: f32,
     /// Playback rate.
     rate: f32,
+    /// Holds its last frame even if the sequence loops.
+    hold: bool,
 }
 
 /// What a model plays: set by the game, carried out every frame.
@@ -154,6 +156,15 @@ impl SequencePlayer {
         self.start(sequence, 0.0, rate);
     }
 
+    /// Plays sequence `sequence` from its start and stays on its last
+    /// frame, whether or not it loops (a grenade drawn back).
+    pub fn restart_held(&mut self, sequence: usize, rate: f32) {
+        self.start(sequence, 0.0, rate);
+        if let Some(track) = &mut self.current {
+            track.hold = true;
+        }
+    }
+
     /// The sequence playing, and how far into it (seconds).
     #[must_use]
     pub fn current(&self) -> Option<(usize, f32)> {
@@ -175,6 +186,7 @@ impl SequencePlayer {
             weight,
             blend,
             rate,
+            hold: false,
         });
     }
 
@@ -189,7 +201,7 @@ impl SequencePlayer {
             };
             track.time += dt * track.rate;
             let duration = sequence.duration.max(f32::EPSILON);
-            track.time = if sequence.looping {
+            track.time = if sequence.looping && !track.hold {
                 track.time.rem_euclid(duration)
             } else {
                 track.time.min(duration)
@@ -342,6 +354,15 @@ mod tests {
             events: Vec::new(),
         };
         vec![sequence(true, 1), sequence(false, 1)]
+    }
+
+    #[test]
+    fn a_held_sequence_stays_on_its_last_frame_even_if_it_loops() {
+        let all = sequences();
+        let mut player = SequencePlayer::default();
+        player.restart_held(0, 1.0);
+        player.advance(3.5, &all);
+        assert_eq!(player.current(), Some((0, 1.0)));
     }
 
     #[test]

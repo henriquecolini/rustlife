@@ -249,7 +249,7 @@ rustlife --map dm_lockdown --dummies 3 --weapon launcher --shoot-for 0.3 --scree
 | `rl_data` unit tests | Schema validation per file, references between files, adding weapons by file, falloff, blast and armor arithmetic |
 | `rl_sim/src/weapons/tests.rs` | Loadouts, automatic and semi-automatic fire, reloads (whole, round by round, interrupted), reserve ammo, deploying, the Manipulator as a tool, weapon choice |
 | `rl_sim/src/weapons/projectile.rs` | Rockets ending at walls, striking players but never their thrower, grenades bouncing, settling and fusing, expiry |
-| `rl_sim/src/weapons/tests.rs` | Grenades primed while held, thrown on release, rolled with secondary, not put away while primed, thrown one at a time, the last one retiring the weapon |
+| `rl_sim/src/weapons/tests.rs` | Grenades primed while held, thrown on release, rolled with secondary, cancelled by switching away while primed, thrown one at a time, the last one retiring the weapon |
 | `rl_sim/tests/combat.rs` | Bullets, armor, swings, rockets, rocket jumps, shelter, grenades as centred cylinders thrown only on release and rolled along the floor, deaths and frags, forced and requested respawns, pickups, falls, hazards, thrown-prop kills, the match ending and restarting, bullets shoving props, determinism |
 | `rl_sim/tests/real_map.rs` | Every stock map stocked with pickups (`RUSTLIFE_TEST_BSP`) |
 | `rl_client/tests/local_play.rs` | The running client: dummies, pickups, firing and weapon keys (`RUSTLIFE_TEST_GAME_DIR`) |

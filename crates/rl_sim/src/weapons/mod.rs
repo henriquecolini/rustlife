@@ -454,10 +454,8 @@ impl Inventory {
         let pressed = Buttons::from_bits(cmd.buttons.bits() & !self.old_buttons.bits());
         self.old_buttons = cmd.buttons;
         self.cooldown = (self.cooldown - dt).max(0.0);
-        // A weapon drawn back stays in hand until it is let go.
-        if let Some(weapon) = cmd.select
-            && !matches!(self.phase, Phase::Priming(_))
-        {
+        // Switching away from a weapon drawn back cancels the throw.
+        if let Some(weapon) = cmd.select {
             result.switched = self.select(arsenal, weapon);
         }
         self.advance_phase(arsenal, dt);

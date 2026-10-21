@@ -332,17 +332,25 @@ fn secondary_fire_primes_a_roll() {
 }
 
 #[test]
-fn a_primed_grenade_cannot_be_put_away() {
+fn switching_away_from_a_primed_grenade_cancels_the_throw() {
     let arsenal = arsenal();
     let mut inventory = with_frags(&arsenal, 2);
+    let frags = ammo(&arsenal, "frag");
     inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
     let swap = UserCmd {
         buttons: Buttons::ATTACK,
         select: Some(id(&arsenal, "smg")),
         ..UserCmd::default()
     };
-    assert!(!inventory.tick(&arsenal, &swap, DT).switched);
-    assert_eq!(inventory.active(), Some(id(&arsenal, "frag")));
+    assert!(inventory.tick(&arsenal, &swap, DT).switched);
+    assert_eq!(inventory.active(), Some(id(&arsenal, "smg")));
+    assert!(!matches!(inventory.phase(), Phase::Priming(_)));
+    // Letting go throws nothing, and nothing was spent.
+    for _ in 0..60 {
+        let tick = inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+        assert_eq!(tick.fired, None);
+    }
+    assert_eq!(inventory.ammo(frags), 2);
 }
 
 #[test]

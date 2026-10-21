@@ -301,7 +301,11 @@ fn animate_view_model(
     if let Some(activity) = wanted
         && let Some(sequence) = animated.activity(activity)
     {
-        player.restart(sequence, 1.0);
+        if view.primed.is_some() && activity.starts_with("ACT_VM_PULLBACK") {
+            player.restart_held(sequence, 1.0);
+        } else {
+            player.restart(sequence, 1.0);
+        }
         return;
     }
     // The idle follows a swing or shot as it ends, faded in over it (a
