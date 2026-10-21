@@ -20,4 +20,6 @@ Weapon(
         "drop": "Weapon_PhysCannon.Drop",
         "dryfire": "Weapon_PhysCannon.DryFire",
     },
+    // Players hold it as HL2DM's models hold a physgun (run_physgun, ...).
+    hold: Some("physgun"),
 )

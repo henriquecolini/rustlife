@@ -17,4 +17,6 @@ Weapon(
     deploy_time: 0.3,
     pickup: Some((ammo: 0, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Crowbar.Single", "hit": "Weapon_Crowbar.Melee_Hit"},
+    // Players hold it as HL2DM's models hold a melee (run_melee, ...).
+    hold: Some("melee"),
 )

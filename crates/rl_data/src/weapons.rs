@@ -61,6 +61,10 @@ pub struct WeaponConfig {
     /// Soundscript names (or files under `sound/`) by purpose, played by
     /// the client; see [`WEAPON_SOUNDS`] for the purposes.
     pub sounds: BTreeMap<String, String>,
+    /// How players hold it: the suffix of their model's sequences while it
+    /// is in hand (`smg1` for `run_smg1`); `player.ron`'s default if none.
+    #[serde(default)]
+    pub hold: Option<String>,
 }
 
 /// A weapon's magazine.
@@ -477,6 +481,7 @@ mod tests {
             deploy_time: 0.5,
             pickup: None,
             sounds: BTreeMap::new(),
+            hold: None,
         }
     }
 

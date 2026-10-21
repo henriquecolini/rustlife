@@ -72,7 +72,7 @@ pub use movement::{
 };
 pub use net::NetConfig;
 pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};
-pub use player::{ArmorConfig, HealthConfig, PlayerConfig};
+pub use player::{ArmorConfig, HealthConfig, PlayerAnimationConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;
 pub use sounds::{FootstepsConfig, SoundsConfig};

@@ -44,4 +44,6 @@ Weapon(
         "fire2": "Weapon_SMG1.Double",
         "reload": "Weapon_SMG1.Reload",
     },
+    // Players hold it as HL2DM's models hold a smg1 (run_smg1, ...).
+    hold: Some("smg1"),
 )

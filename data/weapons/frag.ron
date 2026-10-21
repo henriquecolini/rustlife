@@ -28,4 +28,6 @@ Weapon(
     deploy_time: 0.4,
     pickup: Some((ammo: 1, respawn: 15.0, radius: 24.0)),
     sounds: {"fire": "WeaponFrag.Throw"},
+    // Players hold it as HL2DM's models hold a grenade (run_grenade, ...).
+    hold: Some("grenade"),
 )

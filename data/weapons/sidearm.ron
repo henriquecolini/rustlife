@@ -23,4 +23,6 @@ Weapon(
     deploy_time: 0.4,
     pickup: Some((ammo: 30, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Pistol.Single", "reload": "Weapon_Pistol.Reload"},
+    // Players hold it as HL2DM's models hold a pistol (run_pistol, ...).
+    hold: Some("pistol"),
 )

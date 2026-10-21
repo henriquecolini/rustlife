@@ -22,4 +22,24 @@ Player(
         "models/humans/group03/male_02.mdl",
         "models/combine_soldier_prisonguard.mdl",
     ],
+    // Player models are animated by their own sequences, named
+    // <stance>_<hold> as HL2DM's models name them (run_smg1, cidle_pistol);
+    // the hold comes from the weapon in hand.
+    animation: (
+        // Below this speed a player stands still.
+        still_speed: 10.0,
+        // Running (and crouch-walking) at these speeds plays the sequence
+        // at its own pace; other speeds play it faster or slower.
+        run_speed: 190.0,
+        crouch_speed: 70.0,
+        idle: "idle",
+        run: "run",
+        crouch: "cidle",
+        crouch_walk: "cwalk",
+        jump: "jump",
+        // For weapons whose data names no hold.
+        default_hold: "smg1",
+        // Seconds over which one sequence fades into the next.
+        fade: 0.2,
+    ),
 )
