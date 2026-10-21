@@ -24,6 +24,15 @@ const LEAF_BRUSHES_OFFSET: usize = 24;
 pub(crate) struct LeafRecord {
     /// `CONTENTS_*` flags of the leaf.
     pub(crate) contents: i32,
+    /// The visibility cluster the leaf belongs to; negative for leaves
+    /// outside the map (solid space).
+    pub(crate) cluster: i16,
+    /// The area the leaf belongs to (areas are what area portals join).
+    pub(crate) area: u16,
+    /// First entry of the leaf's range in the leaf-face lump.
+    pub(crate) first_face: u16,
+    /// Number of faces in the leaf.
+    pub(crate) face_count: u16,
     /// Leaf bounds, Source space.
     pub(crate) mins: [f32; 3],
     /// Leaf bounds, Source space.
@@ -43,6 +52,11 @@ impl LeafRecord {
         let i16_at = |at: usize| f32::from(i16::from_le_bytes([leaf[at], leaf[at + 1]]));
         Self {
             contents: i32::from_le_bytes([leaf[0], leaf[1], leaf[2], leaf[3]]),
+            cluster: i16::from_le_bytes([leaf[4], leaf[5]]),
+            // The low 9 bits; the high 7 are flags.
+            area: u16_at(6) & 0x1ff,
+            first_face: u16_at(20),
+            face_count: u16_at(22),
             mins: [i16_at(8), i16_at(10), i16_at(12)],
             maxs: [i16_at(14), i16_at(16), i16_at(18)],
             first_brush: u16_at(LEAF_BRUSHES_OFFSET),
@@ -86,6 +100,10 @@ mod tests {
     fn reads_the_leaf_prefix() {
         let mut leaf = [0u8; LEAF_SIZE_V1];
         leaf[0..4].copy_from_slice(&0x21i32.to_le_bytes());
+        leaf[4..6].copy_from_slice(&(-1i16).to_le_bytes());
+        leaf[6..8].copy_from_slice(&(0xfe00u16 | 5).to_le_bytes());
+        leaf[20..22].copy_from_slice(&11u16.to_le_bytes());
+        leaf[22..24].copy_from_slice(&2u16.to_le_bytes());
         leaf[8..10].copy_from_slice(&(-64i16).to_le_bytes());
         leaf[18..20].copy_from_slice(&128i16.to_le_bytes());
         leaf[24..26].copy_from_slice(&7u16.to_le_bytes());
@@ -96,6 +114,8 @@ mod tests {
         assert_eq!(record.mins[0], -64.0);
         assert_eq!(record.maxs[2], 128.0);
         assert_eq!((record.first_brush, record.brush_count), (7, 3));
+        assert_eq!((record.cluster, record.area), (-1, 5), "flags masked off");
+        assert_eq!((record.first_face, record.face_count), (11, 2));
     }
 
     #[test]

@@ -24,6 +24,7 @@ use crate::ambient::{self, AmbientLighting};
 use crate::entities::{self, MapEntity};
 use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, Placement, decode_luxel};
 use crate::props::{self, PropPlacement};
+use crate::visibility::{FaceRegions, Visibility};
 
 /// BSP lump index of the low-dynamic-range lighting data the face lump's
 /// `light_offset`s point into.
@@ -41,9 +42,17 @@ const MAX_LIGHTMAP_SIZE: usize = 1024;
 const LUMP_ENTRY_SIZE: usize = 16;
 /// Offset of the lump directory: after the `"VBSP"` magic and the version.
 const LUMP_DIRECTORY_OFFSET: usize = 8;
+/// Side of the cubes the world's surfaces are split into, units: small
+/// enough for visibility and frustum culling to leave most of a map out,
+/// large enough to keep the number of meshes in the low thousands.
+const CHUNK_SIZE: f32 = 1024.0;
+/// The 3D skybox's scale when its `sky_camera` gives none.
+const DEFAULT_SKY_SCALE: f32 = 16.0;
 
 /// One mesh's worth of triangles: every three consecutive vertices form a
-/// triangle (a triangle list), all sharing one `material`.
+/// triangle (a triangle list), all sharing one `material` and lying in one
+/// cube of the map (1024 units across, by each face's first
+/// vertex).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MapSurface {
     /// Material path as stored in the BSP, e.g. `concrete/concretefloor001a`
@@ -62,6 +71,23 @@ pub struct MapSurface {
     /// textures (0 = `$basetexture`, 1 = `$basetexture2`), painted by the mapper
     /// on displacements; 0 for every other face.
     pub blend: Vec<f32>,
+    /// The visibility clusters its faces lie in, sorted; empty when not
+    /// known (a face in no leaf, a map without visibility): always drawn.
+    pub clusters: Vec<u16>,
+    /// Whether it belongs to the 3D skybox (the area of the `sky_camera`).
+    pub skybox: bool,
+}
+
+/// The 3D skybox's camera: the scenery around `origin` is drawn behind the
+/// sky, as seen from `origin + eye / scale`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkyCamera {
+    /// Where the skybox's miniature of the map's centre is, Source space.
+    pub origin: [f32; 3],
+    /// How many times smaller than the map the skybox is built.
+    pub scale: f32,
+    /// The skybox's area.
+    pub area: Option<u16>,
 }
 
 /// A player spawn point, in Source space.
@@ -119,6 +145,10 @@ pub struct MapGeometry {
     pub ambient: Option<AmbientLighting>,
     /// Every entity of the map, for the simulation to interpret.
     pub entities: Vec<MapEntity>,
+    /// What can be seen from where, if the map has visibility data.
+    pub visibility: Option<Visibility>,
+    /// The 3D skybox's camera, if the map has one.
+    pub sky_camera: Option<SkyCamera>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -216,11 +246,25 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
                 .collect()
         })
     };
-    let surfaces = build_surfaces(&bsp, &model_faces(0), lightmaps.as_ref());
+    let visibility = Visibility::load(bytes);
+    let sky_camera = sky_camera(&bsp, visibility.as_ref());
+    let regions = visibility
+        .as_ref()
+        .map(|visibility| visibility.face_regions(bsp.faces.len()))
+        .unwrap_or_default();
+    let world = Regions {
+        faces: &regions,
+        sky_area: sky_camera.and_then(|camera| camera.area),
+    };
+    let surfaces = build_surfaces(&bsp, &model_faces(0), lightmaps.as_ref(), &world);
+    let none = Regions {
+        faces: &[],
+        sky_area: None,
+    };
     let brush_entities = brush_entities(&bsp)
         .into_iter()
         .map(|(model, mut entity)| {
-            entity.surfaces = build_surfaces(&bsp, &model_faces(model), lightmaps.as_ref());
+            entity.surfaces = build_surfaces(&bsp, &model_faces(model), lightmaps.as_ref(), &none);
             entity
         })
         .filter(|entity| !entity.surfaces.is_empty())
@@ -235,7 +279,50 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         props: props::props(&bsp),
         ambient: ambient::load(&bsp, bytes),
         entities: entities::entities(&bsp),
+        visibility,
+        sky_camera,
     })
+}
+
+/// The map's `sky_camera`, with the area it stands in.
+fn sky_camera(bsp: &Bsp, visibility: Option<&Visibility>) -> Option<SkyCamera> {
+    let entity = bsp
+        .entities
+        .iter()
+        .find(|entity| entity.prop("classname") == Some("sky_camera"))?;
+    let origin = entity.prop("origin").and_then(parse_vector)?;
+    let scale = entity
+        .prop("scale")
+        .and_then(|scale| scale.trim().parse::<f32>().ok())
+        .filter(|&scale| scale > 0.0 && scale.is_finite())
+        .unwrap_or(DEFAULT_SKY_SCALE);
+    Some(SkyCamera {
+        origin,
+        scale,
+        area: visibility.and_then(|visibility| visibility.area_at(origin)),
+    })
+}
+
+/// Where each face lies, for grouping surfaces: its clusters and areas
+/// (none known for faces past the end), and the 3D skybox's area.
+struct Regions<'a> {
+    faces: &'a [FaceRegions],
+    sky_area: Option<u16>,
+}
+
+impl Regions<'_> {
+    /// Face `face`'s clusters, and whether it is part of the 3D skybox:
+    /// every area it lies in is the skybox's (area 0, solid space, aside).
+    fn of(&self, face: usize) -> (&[u16], bool) {
+        let Some(region) = self.faces.get(face) else {
+            return (&[], false);
+        };
+        let skybox = self.sky_area.is_some_and(|sky| {
+            let mut areas = region.areas.iter().filter(|&&area| area != 0).peekable();
+            areas.peek().is_some() && areas.all(|&area| area == sky)
+        });
+        (&region.clusters, skybox)
+    }
 }
 
 /// Triangulates `faces` into one [`MapSurface`] per material, with texture
@@ -244,9 +331,12 @@ fn build_surfaces(
     bsp: &Bsp,
     faces: &[usize],
     lightmaps: Option<&PackedLightmaps>,
+    regions: &Regions,
 ) -> Vec<MapSurface> {
-    let mut by_material: HashMap<String, usize> = HashMap::new();
+    let mut by_key: HashMap<(String, [i32; 3], bool), usize> = HashMap::new();
     let mut surfaces: Vec<MapSurface> = Vec::new();
+    // Surfaces with a face in no known cluster, which must always be drawn.
+    let mut unplaced: Vec<bool> = Vec::new();
     for &index in faces {
         let Some(face) = bsp.face(index) else {
             continue;
@@ -257,18 +347,33 @@ fn build_surfaces(
         let normal = face.normal();
         let normal = [normal.x, normal.y, normal.z];
 
-        let surface_index = *by_material.entry(material.clone()).or_insert_with(|| {
-            surfaces.push(MapSurface {
-                material: material.clone(),
-                positions: Vec::new(),
-                normals: Vec::new(),
-                uvs: Vec::new(),
-                lightmap_uvs: Vec::new(),
-                blend: Vec::new(),
-            });
-            surfaces.len() - 1
+        let (clusters, skybox) = regions.of(index);
+        let chunk = face.vertex_positions().next().map_or([0; 3], |first| {
+            [first.x, first.y, first.z].map(|coordinate| (coordinate / CHUNK_SIZE).floor() as i32)
         });
+        let surface_index = *by_key
+            .entry((material.clone(), chunk, skybox))
+            .or_insert_with(|| {
+                surfaces.push(MapSurface {
+                    material: material.clone(),
+                    positions: Vec::new(),
+                    normals: Vec::new(),
+                    uvs: Vec::new(),
+                    lightmap_uvs: Vec::new(),
+                    blend: Vec::new(),
+                    clusters: Vec::new(),
+                    skybox,
+                });
+                unplaced.push(false);
+                surfaces.len() - 1
+            });
+        unplaced[surface_index] |= clusters.is_empty();
         let surface = &mut surfaces[surface_index];
+        for &cluster in clusters {
+            if let Err(at) = surface.clusters.binary_search(&cluster) {
+                surface.clusters.insert(at, cluster);
+            }
+        }
 
         let blend = face.displacement().map(|displacement| {
             let alphas: Vec<f32> = displacement
@@ -299,6 +404,11 @@ fn build_surfaces(
                     .lightmap_uvs
                     .push(lightmaps.uv(index, &face, &texture, position));
             }
+        }
+    }
+    for (surface, unplaced) in surfaces.iter_mut().zip(unplaced) {
+        if unplaced {
+            surface.clusters.clear();
         }
     }
     surfaces

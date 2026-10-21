@@ -41,6 +41,7 @@ pub mod skybox;
 pub mod soundscape;
 pub mod soundscript;
 pub mod vhv;
+pub mod visibility;
 pub mod vmt;
 mod vmt_fallback;
 pub mod vtf;

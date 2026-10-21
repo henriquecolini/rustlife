@@ -82,7 +82,28 @@ pub struct MaterialDesc {
     pub alpha_test: Option<f32>,
     /// Whether back-face culling is disabled (`$nocull`).
     pub no_cull: bool,
+    /// A `Water` material's fog: what is seen through it and from under it.
+    pub water_fog: Option<WaterFog>,
 }
+
+/// A water surface's fog: the colour water fades to with depth, and the
+/// distances over which it does, units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaterFog {
+    /// Linear RGB, `0..=1`.
+    pub color: [f32; 3],
+    /// Where the fog starts.
+    pub start: f32,
+    /// Where it is complete.
+    pub end: f32,
+}
+
+/// Fog of water without one of its own: murky green, as Source's default.
+const DEFAULT_WATER_FOG: WaterFog = WaterFog {
+    color: [0.06, 0.08, 0.06],
+    start: 0.0,
+    end: 512.0,
+};
 
 /// Errors from parsing a VMT.
 #[derive(Debug, Error)]
@@ -108,7 +129,87 @@ impl From<VdfError> for VmtError {
 ///
 /// Returns [`VmtError::Parse`] on malformed input.
 pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
-    Ok(describe(&read(text)?))
+    let mut desc = describe(&read(text)?);
+    if desc.kind == MaterialKind::Water {
+        desc.water_fog = Some(water_fog(&[text]));
+    }
+    Ok(desc)
+}
+
+/// The fog of a water material from its text (a patch's first, then its
+/// base's: the patch's values win). Colours are written `{r g b}` in bytes
+/// or `[r g b]` in `0..=1`, both in sRGB.
+fn water_fog(texts: &[&str]) -> WaterFog {
+    let mut fog = DEFAULT_WATER_FOG;
+    let mut found = [false; 3];
+    for text in texts {
+        let Ok(document) = source_fs::keyvalues::parse(text) else {
+            continue;
+        };
+        let Some(block) = document.root.iter().find_map(|pair| pair.value.as_block()) else {
+            continue;
+        };
+        // A patch keeps its values under `replace` or `insert`.
+        let blocks = [
+            Some(block),
+            block.get_block("replace"),
+            block.get_block("insert"),
+        ];
+        for block in blocks.into_iter().flatten() {
+            if !found[0]
+                && let Some(color) = block.get_str("$fogcolor").and_then(parse_color)
+            {
+                fog.color = color;
+                found[0] = true;
+            }
+            for (slot, key) in [(1, "$fogstart"), (2, "$fogend")] {
+                if found[slot] {
+                    continue;
+                }
+                if let Some(value) = block
+                    .get_str(key)
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                {
+                    found[slot] = true;
+                    if slot == 1 {
+                        fog.start = value;
+                    } else {
+                        fog.end = value;
+                    }
+                }
+            }
+        }
+    }
+    if fog.end <= fog.start {
+        fog.end = fog.start + 1.0;
+    }
+    fog
+}
+
+/// An sRGB colour, `{r g b}` (bytes) or `[r g b]` (fractions), as linear
+/// RGB.
+fn parse_color(text: &str) -> Option<[f32; 3]> {
+    let text = text.trim();
+    let (inner, scale) =
+        if let Some(inner) = text.strip_prefix('{').and_then(|t| t.strip_suffix('}')) {
+            (inner, 255.0)
+        } else if let Some(inner) = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+            (inner, 1.0)
+        } else {
+            (text, 255.0)
+        };
+    let mut parts = inner
+        .split_whitespace()
+        .map(|part| part.parse::<f32>().ok());
+    let mut channel = || -> Option<f32> {
+        let srgb = (parts.next()?? / scale).clamp(0.0, 1.0);
+        Some(if srgb <= 0.04045 {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).powf(2.4)
+        })
+    };
+    Some([channel()?, channel()?, channel()?])
 }
 
 /// Parses VMT text with its fallback blocks applied.
@@ -145,10 +246,19 @@ where
     F: FnOnce(&str) -> Result<String, VmtError>,
 {
     let material = read(text)?;
+    let mut base_text = String::new();
     let resolved = material.resolve(|include| {
-        load_base(include).map(|base| vmt_fallback::apply(&base).into_owned())
+        load_base(include).map(|base| {
+            let applied = vmt_fallback::apply(&base).into_owned();
+            base_text.clone_from(&applied);
+            applied
+        })
     })?;
-    Ok(describe(&resolved))
+    let mut desc = describe(&resolved);
+    if desc.kind == MaterialKind::Water {
+        desc.water_fog = Some(water_fog(&[text, &base_text]));
+    }
+    Ok(desc)
 }
 
 /// Reduces a parsed [`Material`] to a [`MaterialDesc`].
@@ -165,6 +275,7 @@ fn describe(material: &Material) -> MaterialDesc {
         translucent: material.translucent(),
         alpha_test: material.alpha_test(),
         no_cull: material.no_cull(),
+        water_fog: None,
     }
 }
 
@@ -205,6 +316,48 @@ fn kind_of(material: &Material) -> MaterialKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn water_reads_its_fog_and_patches_override_it() {
+        let water = r#"
+            "Water"
+            {
+                "$normalmap" "nature/water_dx70_normal"
+                "$fogenable" "1"
+                "$fogcolor" "{255 128 0}"
+                "$fogstart" "10"
+                "$fogend" "400"
+            }
+        "#;
+        let desc = parse(water).expect("parse");
+        assert_eq!(desc.kind, MaterialKind::Water);
+        let fog = desc.water_fog.expect("fog");
+        assert_eq!((fog.start, fog.end), (10.0, 400.0));
+        assert!((fog.color[0] - 1.0).abs() < 1e-6 && fog.color[2] == 0.0);
+        assert!(
+            (fog.color[1] - 0.2158).abs() < 1e-3,
+            "sRGB decoded: {:?}",
+            fog.color
+        );
+
+        let patch = r#"
+            "patch"
+            {
+                "include" "materials/nature/water.vmt"
+                "replace" { "$fogcolor" "[0 0 1]" }
+            }
+        "#;
+        let desc = parse_resolved(patch, |_| Ok(water.to_owned())).expect("patched");
+        let fog = desc.water_fog.expect("fog");
+        assert_eq!(fog.color, [0.0, 0.0, 1.0], "the patch's colour");
+        assert_eq!(fog.end, 400.0, "the base's distance");
+        assert!(
+            parse(r#""LightmappedGeneric" { "$basetexture" "a" }"#)
+                .expect("parse")
+                .water_fog
+                .is_none()
+        );
+    }
 
     #[test]
     fn reads_a_lightmapped_world_material() {
