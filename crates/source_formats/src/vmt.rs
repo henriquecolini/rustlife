@@ -22,6 +22,8 @@
 //! the `vmt_fallback` module): many model materials set their base texture
 //! only there.
 
+use std::borrow::Cow;
+
 use thiserror::Error;
 use vmt_parser::VdfError;
 use vmt_parser::material::Material;
@@ -212,9 +214,33 @@ fn parse_color(text: &str) -> Option<[f32; 3]> {
     Some([channel()?, channel()?, channel()?])
 }
 
+/// Model shaders the parser does not know that draw like
+/// `VertexLitGeneric` from their `$basetexture`: a face's teeth and eyes.
+const VERTEX_LIT_ALIKE: [&str; 2] = ["teeth", "eyes"];
+
 /// Parses VMT text with its fallback blocks applied.
 fn read(text: &str) -> Result<Material, VmtError> {
-    Ok(vmt_parser::from_str(&vmt_fallback::apply(text))?)
+    let text = vmt_fallback::apply(text);
+    Ok(vmt_parser::from_str(&as_vertex_lit(&text))?)
+}
+
+/// `text` with a [`VERTEX_LIT_ALIKE`] shader renamed `VertexLitGeneric`.
+fn as_vertex_lit(text: &str) -> Cow<'_, str> {
+    let body = text.trim_start();
+    let quoted = body.starts_with('"');
+    let name_start = usize::from(quoted);
+    let name_len = body[name_start..]
+        .find(|c: char| c == '"' || c.is_whitespace() || c == '{')
+        .unwrap_or(body.len() - name_start);
+    let name = &body[name_start..name_start + name_len];
+    if !VERTEX_LIT_ALIKE
+        .iter()
+        .any(|alike| name.eq_ignore_ascii_case(alike))
+    {
+        return Cow::Borrowed(text);
+    }
+    let rest = &body[name_start + name_len + usize::from(quoted)..];
+    Cow::Owned(format!("\"VertexLitGeneric\"{rest}"))
 }
 
 /// Returns the `include` path of a `patch` material, or `None` for any other
@@ -316,6 +342,20 @@ fn kind_of(material: &Material) -> MaterialKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teeth_and_eyes_draw_as_vertex_lit() {
+        for text in [
+            r#""Teeth" { "$basetexture" "models/humans/male/mouth" }"#,
+            "Eyes\n{\n\"$basetexture\" \"models/humans/male/eyeball_l\"\n}",
+        ] {
+            let desc = parse(text).expect("parses");
+            assert_eq!(desc.kind, MaterialKind::VertexLitGeneric);
+            assert!(desc.base_texture.is_some());
+        }
+        let other = r#""UnlitGeneric" { "$basetexture" "a" }"#;
+        assert_eq!(as_vertex_lit(other), other);
+    }
 
     #[test]
     fn water_reads_its_fog_and_patches_override_it() {
