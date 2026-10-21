@@ -29,10 +29,10 @@ use crate::player::{LocalPlayer, Ticked, ViewMode};
 use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
 
 /// The render layer only the view model camera sees.
-const VIEW_LAYER: usize = 1;
+pub(crate) const VIEW_LAYER: usize = 1;
 /// The view model camera's vertical field of view, degrees: Source's
 /// `viewmodel_fov` of 54° across a 4:3 screen.
-const VIEW_FOV_DEGREES: f32 = 42.0;
+pub(crate) const VIEW_FOV_DEGREES: f32 = 42.0;
 /// The view model camera's near plane, metres: weapons sit just in front
 /// of the eyes.
 const VIEW_NEAR: f32 = 0.01;
@@ -63,7 +63,7 @@ struct ViewCamera;
 
 /// The view model of a weapon.
 #[derive(Component)]
-struct ViewModel {
+pub(crate) struct ViewModel {
     weapon: WeaponId,
     /// Whether its draw sequence has been started.
     drawn: bool,

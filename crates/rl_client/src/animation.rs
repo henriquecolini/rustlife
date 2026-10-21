@@ -60,8 +60,14 @@ impl Animated {
     }
 }
 
+/// A named point on a model's bone (`muzzle`, `eyes`), which follows the
+/// bone as it moves: effects start from these.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct Attachment(pub String);
+
 /// Spawns `animation`'s joints at rest under `root`, each animated by
-/// `root`'s player; returns them in joint order, for skinning.
+/// `root`'s player, and its attachments under their joints; returns the
+/// joints in order, for skinning.
 pub(crate) fn spawn_skeleton(
     commands: &mut Commands,
     root: Entity,
@@ -85,6 +91,11 @@ pub(crate) fn spawn_skeleton(
             ))
             .id();
         joints.push(entity);
+    }
+    for (name, joint, offset) in &animation.attachments {
+        if let Some(&joint) = joints.get(*joint) {
+            commands.spawn((Attachment(name.clone()), *offset, ChildOf(joint)));
+        }
     }
     joints
 }

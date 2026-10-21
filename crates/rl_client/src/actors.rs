@@ -64,7 +64,7 @@ struct PickupView(usize);
 
 /// The model of another player.
 #[derive(Component)]
-struct PlayerView(PlayerId);
+pub(crate) struct PlayerView(pub(crate) PlayerId);
 
 /// The world model of a weapon a player holds, and who holds it.
 #[derive(Component)]
