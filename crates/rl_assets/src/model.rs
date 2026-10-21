@@ -14,21 +14,33 @@
 //! The loader also reads the model's `.phy` collision model when there is
 //! one, which the simulation builds the prop's physics body from; it stays in
 //! Source space, like everything the simulation consumes.
+//!
+//! A skeletal model (more than one bone) also gets its [`Skeleton`], the
+//! inverse bind poses its meshes are skinned with, and a clip per blend of
+//! each of its sequences — its own and those of the models it includes
+//! (`$includemodel`), which may include more in turn.
 
 use std::sync::Arc;
 
+use bevy_animation::prelude::AnimationClip;
 use bevy_asset::io::Reader;
 use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, RenderAssetUsages};
 use bevy_math::Vec3;
-use bevy_mesh::{Mesh, PrimitiveTopology};
+use bevy_mesh::skinning::SkinnedMeshInverseBindposes;
+use bevy_mesh::{Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
+use source_formats::anim::{self, ModelAnimation};
 use source_formats::mdl::{self, ModelError, ModelGeometry, ModelMesh};
 use source_formats::phy::{self, PhysicsModel};
 use thiserror::Error;
 
 use crate::coords;
+use crate::skeleton::{self, SequenceClips, Skeleton};
 use crate::source::SOURCE;
+
+/// How deep `$includemodel`s nest before the loader stops following them.
+const MAX_INCLUDE_DEPTH: usize = 4;
 
 /// The `.vtx` variants tried, best first. Every stock model ships `dx90`;
 /// older community models may only have the others.
@@ -69,6 +81,40 @@ pub struct ModelAsset {
     pub surface_prop: String,
     /// The model's physics collision model, if it ships a readable `.phy`.
     pub physics: Option<Arc<PhysicsModel>>,
+    /// A skeletal model's skeleton and animation.
+    pub animation: Option<Arc<ModelAnimationAsset>>,
+}
+
+/// What animating a skeletal model takes.
+#[derive(Debug, Clone)]
+pub struct ModelAnimationAsset {
+    /// Its joints.
+    pub skeleton: Skeleton,
+    /// The inverse bind poses its meshes are skinned with.
+    pub inverse_bindposes: Handle<SkinnedMeshInverseBindposes>,
+    /// Its sequences and those of the models it includes, in the engine's
+    /// order (its own first).
+    pub sequences: Vec<SequenceClips>,
+    /// Named points on its bones: name (lower case), joint and offset.
+    pub attachments: Vec<(String, usize, bevy_transform::components::Transform)>,
+}
+
+impl ModelAnimationAsset {
+    /// The first sequence labelled `label` (any case).
+    #[must_use]
+    pub fn sequence(&self, label: &str) -> Option<&SequenceClips> {
+        self.sequences
+            .iter()
+            .find(|sequence| sequence.label.eq_ignore_ascii_case(label))
+    }
+
+    /// The first sequence of activity `activity` (any case).
+    #[must_use]
+    pub fn activity(&self, activity: &str) -> Option<&SequenceClips> {
+        self.sequences
+            .iter()
+            .find(|sequence| sequence.activity.eq_ignore_ascii_case(activity))
+    }
 }
 
 impl ModelAsset {
@@ -134,12 +180,15 @@ impl AssetLoader for MdlLoader {
         let geometry = mdl::load_model(&mdl, &vtx, &vvd)?;
         let skins = resolve_skins(load_context, &geometry).await;
         let physics = load_physics(load_context, &stem).await;
+        let animation = load_animation(load_context, &mdl).await;
+        let skinned = animation.is_some();
         let parts = geometry
             .meshes
             .iter()
             .enumerate()
             .map(|(index, mesh)| ModelPart {
-                mesh: load_context.add_labeled_asset(format!("mesh{index}"), mesh_of(mesh)),
+                mesh: load_context
+                    .add_labeled_asset(format!("mesh{index}"), mesh_of(mesh, skinned)),
                 material: mesh.material,
                 vertex_ids: mesh.vertex_ids.clone(),
             })
@@ -153,6 +202,7 @@ impl AssetLoader for MdlLoader {
             source_bounds: geometry.bounds,
             surface_prop: geometry.surface_prop.to_ascii_lowercase(),
             physics,
+            animation: animation.map(Arc::new),
         })
     }
 
@@ -170,6 +220,115 @@ fn model_stem(path: &str) -> String {
             path[..cut].to_owned()
         }
         _ => path,
+    }
+}
+
+/// A model's animation file: its `.ani` blocks, if it streams them.
+async fn read_ani(load_context: &mut LoadContext<'_>, model: &ModelAnimation) -> Option<Vec<u8>> {
+    let file = model.anim_blocks_file.as_ref()?;
+    load_context
+        .read_asset_bytes(format!("{SOURCE}://{file}"))
+        .await
+        .ok()
+}
+
+/// A skeletal model's skeleton and sequences, its included models'
+/// sequences after its own; `None` for a model of one bone (a prop) or one
+/// whose skeleton cannot be read.
+async fn load_animation(
+    load_context: &mut LoadContext<'_>,
+    mdl: &[u8],
+) -> Option<ModelAnimationAsset> {
+    let first = anim::read(mdl, None).ok()?;
+    if first.bones.len() < 2 || first.static_prop {
+        return None;
+    }
+    let main = match read_ani(load_context, &first).await {
+        Some(ani) => anim::read(mdl, Some(&ani)).unwrap_or(first),
+        None => first,
+    };
+    let skeleton = Skeleton::of(&main);
+    let inverse_bindposes = load_context.add_labeled_asset(
+        "bindposes".to_owned(),
+        SkinnedMeshInverseBindposes::from(skeleton.inverse_bindposes()),
+    );
+    let mut clip_count = 0;
+    let mut sequences = Vec::new();
+    // The model, then its includes breadth first, each once.
+    let mut queue: Vec<(ModelAnimation, usize)> = vec![(main.clone(), 0)];
+    let mut seen: Vec<String> = Vec::new();
+    while !queue.is_empty() {
+        let (model, depth) = queue.remove(0);
+        let mut add = |clip: AnimationClip| {
+            clip_count += 1;
+            load_context.add_labeled_asset(format!("clip{clip_count}"), clip)
+        };
+        sequences.extend(skeleton::sequence_clips(&skeleton, &model, &mut add));
+        if depth >= MAX_INCLUDE_DEPTH {
+            continue;
+        }
+        for include in &model.includes {
+            let path = include.to_ascii_lowercase();
+            if seen.contains(&path) {
+                continue;
+            }
+            seen.push(path.clone());
+            let Ok(bytes) = load_context
+                .read_asset_bytes(format!("{SOURCE}://{path}"))
+                .await
+            else {
+                tracing::debug!(include = path, "included model not found");
+                continue;
+            };
+            let Ok(included) = anim::read(&bytes, None) else {
+                tracing::debug!(include = path, "unreadable included model");
+                continue;
+            };
+            let included = match read_ani(load_context, &included).await {
+                Some(ani) => anim::read(&bytes, Some(&ani)).unwrap_or(included),
+                None => included,
+            };
+            queue.push((included, depth + 1));
+        }
+    }
+    let attachments = main
+        .attachments
+        .iter()
+        .map(|attachment| {
+            (
+                attachment.name.to_ascii_lowercase(),
+                attachment.bone,
+                attachment_transform(&attachment.local),
+            )
+        })
+        .collect();
+    Some(ModelAnimationAsset {
+        skeleton,
+        inverse_bindposes,
+        sequences,
+        attachments,
+    })
+}
+
+/// An attachment's 3×4 offset from its bone as a Bevy transform.
+fn attachment_transform(local: &[[f32; 4]; 3]) -> bevy_transform::components::Transform {
+    let columns = |column: usize| [local[0][column], local[1][column], local[2][column]];
+    let rotation = bevy_math::Mat3::from_cols(
+        coords::direction(columns(0)),
+        coords::direction(columns(1)),
+        coords::direction(columns(2)),
+    );
+    // The rotation's columns map the frame's axes; in Bevy space the frame
+    // itself is remapped too.
+    let frame = bevy_math::Mat3::from_cols(
+        coords::direction([1.0, 0.0, 0.0]),
+        coords::direction([0.0, 1.0, 0.0]),
+        coords::direction([0.0, 0.0, 1.0]),
+    );
+    bevy_transform::components::Transform {
+        translation: coords::position(columns(3)),
+        rotation: bevy_math::Quat::from_mat3(&(rotation * frame.transpose())),
+        scale: Vec3::ONE,
     }
 }
 
@@ -242,12 +401,13 @@ fn bevy_bounds((min, max): ([f32; 3], [f32; 3])) -> (Vec3, Vec3) {
     (a.min(b), a.max(b))
 }
 
-/// Converts one model mesh (Source space) into a Bevy [`Mesh`].
+/// Converts one model mesh (Source space) into a Bevy [`Mesh`], with its
+/// joints and weights when `skinned`.
 ///
 /// The mesh stays readable on the CPU after upload: props with baked
 /// lighting draw a vertex-coloured copy of it (see
 /// [`crate::vertex_lighting::vertex_lit_mesh`]).
-fn mesh_of(mesh: &ModelMesh) -> Mesh {
+fn mesh_of(mesh: &ModelMesh, skinned: bool) -> Mesh {
     let positions: Vec<[f32; 3]> = mesh
         .positions
         .iter()
@@ -258,13 +418,22 @@ fn mesh_of(mesh: &ModelMesh) -> Mesh {
         .iter()
         .map(|&n| coords::direction(n).normalize_or_zero().to_array())
         .collect();
-    Mesh::new(
+    let built = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, mesh.uvs.clone())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, mesh.uvs.clone());
+    if !skinned || mesh.joints.len() != mesh.positions.len() {
+        return built;
+    }
+    built
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_JOINT_INDEX,
+            VertexAttributeValues::Uint16x4(mesh.joints.clone()),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, mesh.weights.clone())
 }
 
 #[cfg(test)]
@@ -307,6 +476,7 @@ mod tests {
             source_bounds: ([0.0; 3], [0.0; 3]),
             surface_prop: String::new(),
             physics: None,
+            animation: None,
         };
         assert_eq!(model.material(1, 0), Some("b"));
         assert_eq!(model.material(7, 0), Some("a"));
@@ -316,14 +486,21 @@ mod tests {
 
     #[test]
     fn meshes_carry_positions_normals_and_uvs() {
-        let mesh = mesh_of(&ModelMesh {
+        let source = ModelMesh {
             material: 0,
             positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             normals: vec![[0.0, 0.0, 1.0]; 3],
             uvs: vec![[0.0; 2]; 3],
             vertex_ids: vec![0, 1, 2],
-        });
+            joints: vec![[1, 0, 0, 0]; 3],
+            weights: vec![[1.0, 0.0, 0.0, 0.0]; 3],
+        };
+        let mesh = mesh_of(&source, false);
         assert_eq!(mesh.count_vertices(), 3);
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_JOINT_INDEX).is_none());
+        let skinned = mesh_of(&source, true);
+        assert!(skinned.attribute(Mesh::ATTRIBUTE_JOINT_INDEX).is_some());
+        assert!(skinned.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT).is_some());
     }
 }

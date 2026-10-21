@@ -5570,6 +5570,7 @@ dependencies = [
 name = "rl_assets"
 version = "0.1.0"
 dependencies = [
+ "bevy_animation",
  "bevy_app",
  "bevy_asset",
  "bevy_audio",
@@ -5577,6 +5578,7 @@ dependencies = [
  "bevy_math",
  "bevy_mesh",
  "bevy_reflect",
+ "bevy_transform",
  "futures-lite",
  "half",
  "proptest",
