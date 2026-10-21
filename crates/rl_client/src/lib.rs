@@ -19,6 +19,7 @@ use rl_data::GameData;
 use source_fs::Vfs;
 
 use crate::actors::ActorsPlugin;
+use crate::animation::ModelAnimationPlugin;
 use crate::audio::SoundPlugin;
 use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
@@ -30,9 +31,11 @@ use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
 use crate::script::InputScript;
+use crate::viewmodel::ViewModelPlugin;
 use crate::world::WorldPlugin;
 
 pub mod actors;
+pub mod animation;
 pub mod audio;
 pub mod browser;
 pub mod camera;
@@ -45,6 +48,7 @@ pub mod net;
 pub mod player;
 pub mod props;
 pub mod script;
+pub mod viewmodel;
 pub mod world;
 
 /// Top-level client state.
@@ -133,6 +137,8 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         EffectsPlugin,
         MoversPlugin,
         SoundPlugin,
+        ModelAnimationPlugin,
+        ViewModelPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);

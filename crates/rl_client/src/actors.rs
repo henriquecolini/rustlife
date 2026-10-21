@@ -8,8 +8,11 @@
 //! - **projectiles** along their flight, turned to face where they fly,
 //!   appearing and vanishing with them;
 //! - **other players** at their feet, turned to their view's yaw, hidden
-//!   while dead; models come and go as players join and leave. Models show
-//!   their reference pose until animation arrives (M7).
+//!   while dead; models come and go as players join and leave. Each plays
+//!   the sequence of what they are doing with the weapon in hand
+//!   (`animate_players`), and holds that weapon's world model: its
+//!   `ValveBiped.Weapon_bone` laid on the hand's bone of that name, as the
+//!   engine merges a weapon's bones with its holder's.
 //!
 //! Projectiles and other players are drawn where [`Drawn`] places them:
 //! interpolated between two of the server's snapshots, a little in the
@@ -17,12 +20,15 @@
 
 use bevy::prelude::*;
 use rl_assets::coords;
-use rl_sim::simulation::PlayerId;
+use rl_data::PlayerAnimationConfig;
+use rl_sim::movement::PlayerState;
+use rl_sim::simulation::{PlayerId, Simulation};
 
 use crate::AppState;
+use crate::animation::{Animated, SequencePlayer};
 use crate::net::{Drawn, Game};
 use crate::player::Gameplay;
-use crate::props::{ModelHandles, Moving, spawn_model};
+use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
 
 /// Draws the game's pickups, projectiles and other players.
 pub struct ActorsPlugin;
@@ -33,7 +39,15 @@ impl Plugin for ActorsPlugin {
             .add_systems(OnEnter(AppState::InGame), reset)
             .add_systems(
                 Update,
-                (spawn_pickups, show_pickups, draw_players, draw_projectiles)
+                (
+                    spawn_pickups,
+                    show_pickups,
+                    draw_players,
+                    animate_players,
+                    hold_weapons,
+                    grip_weapons,
+                    draw_projectiles,
+                )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -51,6 +65,24 @@ struct PickupView(usize);
 /// The model of another player.
 #[derive(Component)]
 struct PlayerView(PlayerId);
+
+/// The world model of a weapon a player holds, and who holds it.
+#[derive(Component)]
+struct HeldWeapon {
+    holder: Entity,
+}
+
+/// Which weapon a player model holds, and the entity of its model.
+#[derive(Component)]
+struct Holding {
+    weapon: Option<rl_sim::weapons::WeaponId>,
+    model: Option<Entity>,
+}
+
+/// A held weapon not yet laid in its holder's hand (its model, or the
+/// holder's skeleton, is loading).
+#[derive(Component)]
+struct Gripping;
 
 /// The model of a projectile, by its id.
 #[derive(Component)]
@@ -169,6 +201,250 @@ fn draw_players(
     }
 }
 
+/// What a player is doing, as their model shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stance {
+    Idle,
+    Run,
+    Crouch,
+    CrouchWalk,
+    Jump,
+}
+
+impl Stance {
+    /// The stance of a player in `state`.
+    fn of(state: &PlayerState, config: &PlayerAnimationConfig) -> Self {
+        let moving = state.speed_2d() > config.still_speed;
+        match (
+            state.on_ground || state.ladder.is_some(),
+            state.ducked,
+            moving,
+        ) {
+            (false, ..) => Self::Jump,
+            (true, true, false) => Self::Crouch,
+            (true, true, true) => Self::CrouchWalk,
+            (true, false, false) => Self::Idle,
+            (true, false, true) => Self::Run,
+        }
+    }
+
+    fn prefix(self, config: &PlayerAnimationConfig) -> &str {
+        match self {
+            Self::Idle => &config.idle,
+            Self::Run => &config.run,
+            Self::Crouch => &config.crouch,
+            Self::CrouchWalk => &config.crouch_walk,
+            Self::Jump => &config.jump,
+        }
+    }
+}
+
+/// The direction a player moves relative to where they face, degrees in
+/// `-180..=180` (the `move_yaw` of a run's blends).
+fn move_yaw(state: &PlayerState, yaw: f32) -> f32 {
+    let heading = state.velocity.y.atan2(state.velocity.x).to_degrees();
+    (heading - yaw + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// Plays on each other player's model the sequence of their stance with
+/// the weapon in hand (`run_smg1`), a run blended by direction and paced by
+/// speed.
+fn animate_players(
+    game: Game,
+    drawn: Res<Drawn>,
+    mut views: Query<(&PlayerView, &Animated, &mut SequencePlayer)>,
+) {
+    let Some(sim) = game.sim() else {
+        return;
+    };
+    let config = &sim.data().player.animation;
+    for (view, animated, mut sequences) in &mut views {
+        let Some(player) = sim.player(view.0) else {
+            continue;
+        };
+        let yaw = drawn
+            .0
+            .as_ref()
+            .and_then(|world| world.players.get(&view.0))
+            .map_or(player.look.1, |pose| pose.yaw);
+        let state = &player.state;
+        let stance = Stance::of(state, config);
+        let hold = hold_of(sim, player.inventory.active(), config);
+        let Some(sequence) = player_sequence(animated, stance.prefix(config), hold, config) else {
+            continue;
+        };
+        let rate = match stance {
+            Stance::Run => state.speed_2d() / config.run_speed,
+            Stance::CrouchWalk => state.speed_2d() / config.crouch_speed,
+            _ => 1.0,
+        };
+        sequences.fade = config.fade;
+        sequences.play(sequence, move_yaw(state, yaw), rate.clamp(0.25, 2.5));
+    }
+}
+
+/// Gives each other player the world model of the weapon in their hand,
+/// changing it when they switch; keeps it lit where its holder is.
+fn hold_weapons(
+    mut commands: Commands,
+    game: Game,
+    mut models: ResMut<ModelHandles>,
+    asset_server: Res<AssetServer>,
+    mut views: Query<(Entity, &PlayerView, &GlobalTransform, Option<&mut Holding>), With<Animated>>,
+    mut lights: Query<&mut LightAt, With<HeldWeapon>>,
+) {
+    let Some(sim) = game.sim() else {
+        return;
+    };
+    for (holder, view, global, holding) in &mut views {
+        let light = global.translation() + Vec3::Y * HELD_LIGHT_HEIGHT;
+        let weapon = sim
+            .player(view.0)
+            .and_then(|player| player.inventory.active());
+        if let Some(holding) = &holding
+            && holding.weapon == weapon
+        {
+            if let Some(mut at) = holding.model.and_then(|model| lights.get_mut(model).ok()) {
+                at.0 = light;
+            }
+            continue;
+        }
+        if let Some(old) = holding.as_ref().and_then(|holding| holding.model) {
+            commands.entity(old).try_despawn();
+        }
+        let model = weapon
+            .and_then(|weapon| sim.arsenal().weapon(weapon))
+            .map(|config| {
+                let entity = spawn_model(
+                    &mut commands,
+                    &mut models,
+                    &asset_server,
+                    &config.world_model,
+                    Transform::IDENTITY,
+                );
+                commands.entity(entity).insert((
+                    HeldWeapon { holder },
+                    Gripping,
+                    Moving,
+                    LightAt(light),
+                    ChildOf(holder),
+                    Visibility::Hidden,
+                ));
+                entity
+            });
+        commands.entity(holder).insert(Holding { weapon, model });
+    }
+}
+
+/// How high above its holder's feet a held weapon is lit, metres (40
+/// units).
+const HELD_LIGHT_HEIGHT: f32 = 40.0 * coords::METERS_PER_UNIT;
+
+/// Lays each newly loaded held weapon on its holder's hand, as the engine
+/// merges bones: the first of the weapon's bones that the holder also has
+/// (`ValveBiped.Bip01_R_Hand`) is laid on the holder's, by placing the
+/// weapon's root at the inverse of that bone's rest pose.
+fn grip_weapons(
+    mut commands: Commands,
+    mut weapons: Query<(Entity, &HeldWeapon, &crate::props::Prop, &mut Transform), With<Gripping>>,
+    holders: Query<&Children>,
+    joints: Query<(Entity, &Name, Option<&Children>)>,
+    models: Res<Assets<rl_assets::ModelAsset>>,
+    asset_server: Res<AssetServer>,
+) {
+    for (entity, held, prop, mut transform) in &mut weapons {
+        let Some(model) = models.get(&prop.model) else {
+            if asset_server.load_state(&prop.model).is_failed() {
+                commands.entity(entity).remove::<Gripping>();
+            }
+            continue;
+        };
+        let Ok(children) = holders.get(held.holder) else {
+            continue;
+        };
+        let Some(animation) = &model.animation else {
+            // A one-bone weapon model: in the hand as it is, if the holder
+            // has one.
+            if let Some(hand) = find_joint(children, &joints, HAND_BONE) {
+                commands
+                    .entity(entity)
+                    .insert((ChildOf(hand), Visibility::Inherited));
+            }
+            commands.entity(entity).remove::<Gripping>();
+            continue;
+        };
+        let skeleton = &animation.skeleton;
+        let shared = skeleton
+            .joints
+            .iter()
+            .enumerate()
+            .find_map(|(index, joint)| Some((index, find_joint(children, &joints, &joint.name)?)));
+        // The holder's joints may not be spawned yet; try again then.
+        let Some((bone, joint)) = shared else {
+            continue;
+        };
+        if let Some(rest) = skeleton.rest_globals().get(bone) {
+            *transform = Transform::from_matrix(rest.inverse());
+        }
+        commands
+            .entity(entity)
+            .remove::<Gripping>()
+            .insert((ChildOf(joint), Visibility::Inherited));
+    }
+}
+
+/// The holder's bone a weapon model without a skeleton goes in.
+const HAND_BONE: &str = "ValveBiped.Bip01_R_Hand";
+
+/// The joint named `name` among the descendants of an entity with
+/// `children`.
+fn find_joint(
+    children: &Children,
+    joints: &Query<(Entity, &Name, Option<&Children>)>,
+    name: &str,
+) -> Option<Entity> {
+    let mut stack: Vec<Entity> = children.iter().collect();
+    // Skeletons are a few dozen joints; the bound stops a malformed tree.
+    for _ in 0..1024 {
+        let entity = stack.pop()?;
+        let Ok((entity, joint, below)) = joints.get(entity) else {
+            continue;
+        };
+        if joint.as_str().eq_ignore_ascii_case(name) {
+            return Some(entity);
+        }
+        if let Some(below) = below {
+            stack.extend(below.iter());
+        }
+    }
+    None
+}
+
+/// How the weapon in hand is held: its data's hold, else the default.
+fn hold_of<'a>(
+    sim: &'a Simulation,
+    weapon: Option<rl_sim::weapons::WeaponId>,
+    config: &'a PlayerAnimationConfig,
+) -> &'a str {
+    weapon
+        .and_then(|weapon| sim.arsenal().weapon(weapon))
+        .and_then(|weapon| weapon.hold.as_deref())
+        .unwrap_or(&config.default_hold)
+}
+
+/// The model's `<prefix>_<hold>` sequence, or `<prefix>_<default hold>`
+/// when it has none for this hold.
+fn player_sequence(
+    animated: &Animated,
+    prefix: &str,
+    hold: &str,
+    config: &PlayerAnimationConfig,
+) -> Option<usize> {
+    animated
+        .sequence(&format!("{prefix}_{hold}"))
+        .or_else(|| animated.sequence(&format!("{prefix}_{}", config.default_hold)))
+}
+
 /// Places every projectile where it is drawn this frame: new ones get a
 /// model, gone ones lose theirs.
 fn draw_projectiles(
@@ -247,6 +523,36 @@ mod tests {
         let transform = projectile_transform(Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0));
         let facing = transform.rotation * Vec3::X;
         assert!(facing.y > 0.6, "{facing}");
+    }
+
+    #[test]
+    fn stances_follow_movement() {
+        let config = rl_data::GameData::builtin().expect("data").player.animation;
+        let mut state = PlayerState::at(Vec3::ZERO);
+        state.on_ground = true;
+        assert_eq!(Stance::of(&state, &config), Stance::Idle);
+        state.velocity = Vec3::new(200.0, 0.0, 0.0);
+        assert_eq!(Stance::of(&state, &config), Stance::Run);
+        state.ducked = true;
+        assert_eq!(Stance::of(&state, &config), Stance::CrouchWalk);
+        state.on_ground = false;
+        assert_eq!(Stance::of(&state, &config), Stance::Jump);
+    }
+
+    #[test]
+    fn runs_blend_by_direction_relative_to_the_view() {
+        let mut state = PlayerState::at(Vec3::ZERO);
+        state.velocity = Vec3::new(0.0, 100.0, 0.0);
+        assert!((move_yaw(&state, 90.0)).abs() < 1e-4, "forward");
+        assert!((move_yaw(&state, 0.0) - 90.0).abs() < 1e-4, "to the left");
+        assert!(
+            (move_yaw(&state, 180.0) + 90.0).abs() < 1e-4,
+            "to the right"
+        );
+        assert!(
+            (move_yaw(&state, -90.0).abs() - 180.0).abs() < 1e-4,
+            "backwards"
+        );
     }
 
     #[test]

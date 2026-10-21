@@ -32,7 +32,9 @@
 //! times a second.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use rl_assets::coords;
 use rl_assets::vertex_lighting::{colors_by_vertex, cube_lit_mesh, vertex_lit_mesh};
@@ -41,6 +43,7 @@ use rl_sim::physics::{BodyId, BodyPose};
 use source_formats::ambient::{AmbientCube, AmbientLighting};
 
 use crate::AppState;
+use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::player::{LocalPlayer, Movement, ViewAngles};
 use crate::world::{MapHandle, MapScoped, MaterialMaps, Placeholder, Surface, VertexLit};
@@ -101,6 +104,12 @@ pub struct Prop {
 /// relit as it goes.
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct Moving;
+
+/// Where a model is lit from, Bevy space, when that is not where its root
+/// stands: a view model hangs off the camera but is lit where the player's
+/// eyes are. Its rotation for lighting is its global one.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct LightAt(pub Vec3);
 
 /// A prop that can move: its body in the game.
 #[derive(Component, Debug, Clone, Copy)]
@@ -257,7 +266,7 @@ enum PropLight {
 /// (the asset server has already logged why) and stay empty.
 fn attach_models(
     mut commands: Commands,
-    waiting: Query<(Entity, &Prop, &Transform), With<AwaitingModel>>,
+    waiting: Query<(Entity, &Prop, &Transform, Option<&LightAt>), With<AwaitingModel>>,
     models: Res<Assets<ModelAsset>>,
     lightings: Res<Assets<VertexLightingAsset>>,
     map: Option<Res<MapHandle>>,
@@ -270,7 +279,8 @@ fn attach_models(
     let map_lighting = map
         .and_then(|map| maps.get(&map.0))
         .and_then(|map| map.lighting.clone());
-    for (entity, prop, transform) in &waiting {
+    for (entity, prop, transform, light_at) in &waiting {
+        let transform = &lighting_transform(transform, light_at, None);
         let Some(model) = models.get(&prop.model) else {
             if asset_server.load_state(&prop.model).is_failed() {
                 // Without its model a prop has no shape to collide with.
@@ -302,6 +312,21 @@ fn attach_models(
                 }),
         };
 
+        // A skeletal model's joints, which its meshes are skinned to.
+        let skin = model.animation.as_ref().map(|animation| {
+            let joints = spawn_skeleton(&mut commands, entity, animation);
+            commands.entity(entity).insert((
+                Animated {
+                    model: prop.model.clone(),
+                    animation: Arc::clone(animation),
+                },
+                SequencePlayer::default(),
+            ));
+            SkinnedMesh {
+                inverse_bindposes: animation.inverse_bindposes.clone(),
+                joints,
+            }
+        });
         let mut root = commands.entity(entity);
         root.remove::<AwaitingModel>();
         if matches!(light, PropLight::Cube(..)) {
@@ -321,6 +346,9 @@ fn attach_models(
                 let lit = lit_mesh.is_some();
                 let mesh = lit_mesh.map_or_else(|| part.mesh.clone(), |mesh| meshes.add(mesh));
                 let mut child = parent.spawn((Mesh3d(mesh), MeshMaterial3d(placeholder.0.clone())));
+                if let Some(skin) = &skin {
+                    child.insert(skin.clone());
+                }
                 if lit {
                     child.insert(VertexLit);
                 }
@@ -432,12 +460,22 @@ impl HeldView<'_> {
     }
 }
 
+/// What relighting a moving prop reads and writes.
+type MovingProp<'a> = (
+    &'a Prop,
+    &'a Transform,
+    &'a GlobalTransform,
+    Option<&'a LightAt>,
+    &'a mut CubeLit,
+    &'a Children,
+);
+
 /// Relights moving, engine-lit props that have moved or turned noticeably
 /// since they were last lit, rebuilding their meshes' vertex colours in
 /// place.
 fn relight_moved_props(
     time: Res<Time>,
-    mut props: Query<(&Prop, &Transform, &mut CubeLit, &Children), With<Moving>>,
+    mut props: Query<MovingProp, With<Moving>>,
     parts: Query<(&LitPart, &Mesh3d)>,
     models: Res<Assets<ModelAsset>>,
     map: Option<Res<MapHandle>>,
@@ -451,7 +489,8 @@ fn relight_moved_props(
         return;
     };
     let now = time.elapsed_secs();
-    for (prop, transform, mut lit, children) in &mut props {
+    for (prop, transform, global, light_at, mut lit, children) in &mut props {
+        let transform = &lighting_transform(transform, light_at, Some(global));
         let moved = transform.translation.distance(lit.translation) > RELIGHT_DISTANCE
             || transform.rotation.angle_between(lit.rotation) > RELIGHT_ANGLE;
         if !moved || now - lit.at_secs < RELIGHT_INTERVAL {
@@ -479,6 +518,26 @@ fn relight_moved_props(
             rotation: transform.rotation,
             at_secs: now,
         };
+    }
+}
+
+/// Where a model is lit as: its own placement, or — for one hanging off
+/// another entity, with a [`LightAt`] — that point, turned as the model is
+/// in the world.
+fn lighting_transform(
+    transform: &Transform,
+    light_at: Option<&LightAt>,
+    global: Option<&GlobalTransform>,
+) -> Transform {
+    match light_at {
+        Some(at) => Transform {
+            translation: at.0,
+            rotation: global.map_or(transform.rotation, |global| {
+                global.compute_transform().rotation
+            }),
+            scale: transform.scale,
+        },
+        None => *transform,
     }
 }
 
