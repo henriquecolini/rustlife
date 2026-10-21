@@ -171,6 +171,10 @@ impl PhysicsWorld {
         parameters.dt = dt;
         parameters.length_unit = statics::UNITS_PER_METRE;
         parameters.num_solver_iterations = config.solver_iterations as usize;
+        parameters.num_internal_pgs_iterations = config.pgs_iterations as usize;
+        parameters.max_ccd_substeps = config.ccd_substeps as usize;
+        parameters.normalized_max_corrective_velocity =
+            config.max_corrective_speed / statics::UNITS_PER_METRE;
         let colliders = statics::add_map(&mut rapier, map, interaction(GROUP_WORLD));
         let movers = statics::add_movers(&mut rapier, map, interaction(GROUP_WORLD));
         tracing::debug!(
@@ -213,7 +217,7 @@ impl PhysicsWorld {
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
         let id = self.next_id();
         let builder = match desc.motion {
-            Motion::Dynamic => RigidBodyBuilder::dynamic().ccd_enabled(true),
+            Motion::Dynamic => RigidBodyBuilder::dynamic(),
             Motion::Fixed => RigidBodyBuilder::fixed(),
         };
         let handle = self.rapier.insert_body(
@@ -353,6 +357,7 @@ impl PhysicsWorld {
     /// players that began during it.
     pub fn step(&mut self) -> Vec<Impact> {
         let before = self.prop_velocities();
+        self.sweep_fast_props(&before);
         let hooks = contacts::HeldFilter {
             pairs: self
                 .held
@@ -496,7 +501,6 @@ impl PhysicsWorld {
         if let Some(rigid) = self.rigid_mut(prop) {
             if player.is_some() && free && !rigid.is_dynamic() {
                 rigid.set_body_type(RigidBodyType::Dynamic, true);
-                rigid.enable_ccd(true);
             }
             rigid.set_gravity_scale(if player.is_some() { 0.0 } else { 1.0 }, true);
         }
@@ -584,6 +588,24 @@ impl PhysicsWorld {
                 (rigid.is_dynamic() && !rigid.is_sleeping()).then(|| (id, rigid.linvel()))
             })
             .collect()
+    }
+
+    /// Makes the props moving faster than `ccd_min_speed` bullets for this
+    /// step: rapier sweeps those against the other props in their way, which
+    /// stops a hard throw from passing through a crate, while slow props
+    /// (almost all of them, almost all of the time) cost nothing extra.
+    /// Rapier never sweeps one bullet against another, which is why
+    /// bullets are not made of every prop.
+    fn sweep_fast_props(&mut self, velocities: &[(BodyId, Vec3)]) {
+        let threshold = self.config.ccd_min_speed;
+        for &(id, velocity) in velocities {
+            let fast = velocity.length() > threshold;
+            if let Some(rigid) = self.rigid_mut(id)
+                && rigid.is_ccd_enabled() != fast
+            {
+                rigid.enable_ccd(fast);
+            }
+        }
     }
 
     /// Enforces the configured speed limits.

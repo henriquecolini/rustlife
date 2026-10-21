@@ -6,11 +6,14 @@
 //! have come apart: [`HeldFilter`] drops those contact pairs before the
 //! solver sees them.
 //!
-//! A prop that *starts* touching a player during a step has hit them. The
-//! impact's speed is the prop's speed before the step relative to the
-//! player's, along the contact normal; `physics.ron`'s impact damage turns
-//! it and the prop's mass into damage. Props held by someone deal none, and
-//! a prop never hits the player who just let go of it.
+//! A prop that *starts* touching a player during a step may have hit them.
+//! The impact's speed is how fast the prop was moving *towards the player*
+//! before the step, limited by its speed relative to the player along the
+//! contact; `physics.ron`'s impact damage turns it and the prop's mass into
+//! damage. So a player walking or falling onto a prop that is not moving
+//! towards them is not hurt (a hard landing is fall damage), however heavy
+//! it is. Props held by someone deal none, and a prop never hits the player
+//! who just let go of it.
 
 use glam::Vec3;
 use rapier3d::prelude::{PairFilterContext, PhysicsHooks, RigidBodyHandle, SolverFlags};
@@ -101,7 +104,16 @@ impl PhysicsWorld {
                     .iter()
                     .find(|(id, _)| *id == prop)
                     .map_or(Vec3::ZERO, |&(_, velocity)| velocity);
-                let speed = (prop_velocity - velocity).dot(normal).abs();
+                // Rapier's normal points from the first collider to the
+                // second; this one points from the prop to the player.
+                let towards_player = if pair.collider1 == body.collider {
+                    -normal
+                } else {
+                    normal
+                };
+                let speed = prop_velocity
+                    .dot(towards_player)
+                    .min((prop_velocity - velocity).dot(towards_player));
                 let damage = self.config.impact_damage.damage(mass, speed);
                 if damage > 0.0 {
                     impacts.push(Impact {

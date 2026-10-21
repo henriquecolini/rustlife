@@ -261,6 +261,101 @@ fn a_falling_prop_hurts_the_player_it_lands_on() {
 }
 
 #[test]
+fn walking_into_a_heavy_prop_does_not_hurt() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let hull = Hull::from(&movement_config().hulls.standing);
+    // A heavy crate in the player's way.
+    physics.add_prop(&crate_at(
+        Vec3::new(40.0, 0.0, 0.0),
+        12.0,
+        200.0,
+        Motion::Dynamic,
+    ));
+    let player = physics.add_player(Vec3::ZERO, &hull);
+    let mut impacts = Vec::new();
+    for step in 0..60 {
+        let at = Vec3::new(step as f32 * 3.0, 0.0, 0.0);
+        physics.set_player(player, at, Vec3::new(320.0, 0.0, 0.0), &hull);
+        impacts.extend(physics.step());
+    }
+    assert!(
+        impacts.is_empty(),
+        "no damage from running into it: {impacts:?}"
+    );
+}
+
+/// The smallest distance between two crates' centres over `ticks` steps
+/// of the world.
+fn closest_approach(physics: &mut PhysicsWorld, a: BodyId, b: BodyId, ticks: usize) -> f32 {
+    let mut closest = f32::INFINITY;
+    for _ in 0..ticks {
+        physics.step();
+        let (ca, cb) = (
+            physics.center_of_mass(a).unwrap_or(Vec3::NAN),
+            physics.center_of_mass(b).unwrap_or(Vec3::NAN),
+        );
+        closest = closest.min(ca.distance(cb));
+    }
+    closest
+}
+
+#[test]
+fn a_fast_prop_does_not_sink_into_one_pinned_against_a_wall() {
+    // A wall behind a resting crate, and another crate thrown hard at it.
+    let world = floor()
+        .solid_box(
+            Vec3::new(-80.0, -200.0, 0.0),
+            Vec3::new(-60.0, 200.0, 200.0),
+        )
+        .build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let resting = physics.add_prop(&crate_at(
+        Vec3::new(-40.0, 0.0, 0.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    let thrown = physics.add_prop(&crate_at(
+        Vec3::new(300.0, 0.0, 0.0),
+        8.0,
+        60.0,
+        Motion::Dynamic,
+    ));
+    run(&mut physics, 20);
+    physics.set_velocity(thrown, Vec3::new(-2400.0, 0.0, 0.0), Vec3::ZERO);
+    // Two half-sizes of 8 keep the centres at least 16 apart (less a
+    // little slop) whatever the crates' turn.
+    let closest = closest_approach(&mut physics, resting, thrown, 120);
+    assert!(closest > 14.0, "the crates stayed apart, got {closest}");
+    let wall = physics.center_of_mass(resting).expect("resting").x;
+    assert!(wall > -60.0 + 6.0, "not pushed into the wall: {wall}");
+}
+
+#[test]
+fn a_prop_thrown_at_the_player_still_hurts() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let hull = Hull::from(&movement_config().hulls.standing);
+    let player = physics.add_player(Vec3::ZERO, &hull);
+    let heavy = physics.add_prop(&crate_at(
+        Vec3::new(160.0, 0.0, 20.0),
+        12.0,
+        60.0,
+        Motion::Dynamic,
+    ));
+    physics.set_velocity(heavy, Vec3::new(-1200.0, 0.0, 0.0), Vec3::ZERO);
+    let mut impacts = Vec::new();
+    for _ in 0..60 {
+        physics.set_player(player, Vec3::ZERO, Vec3::ZERO, &hull);
+        impacts.extend(physics.step());
+    }
+    assert_eq!(impacts.len(), 1, "{impacts:?}");
+    assert_eq!(impacts[0].prop, heavy);
+    assert!(impacts[0].damage > 0.0);
+}
+
+#[test]
 fn held_props_ignore_their_holder_and_gravity() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
@@ -459,7 +554,11 @@ fn a_hung_lamp_swings_when_hit_and_comes_back() {
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
     let spawn = Vec3::new(0.0, 0.0, 200.0);
     let pivot = spawn + Vec3::Z * 40.0;
-    let lamp = physics.add_prop(&crate_at(spawn, 8.0, 10.0, Motion::Dynamic));
+    // Air drag, as real props have, brings the swing to rest.
+    let lamp = physics.add_prop(&PropDesc {
+        linear_damping: 0.4,
+        ..crate_at(spawn, 8.0, 10.0, Motion::Dynamic)
+    });
     assert!(physics.add_joint(&hung_from(lamp, pivot)));
     physics.push(lamp, Vec3::X, 300.0);
     run(&mut physics, 10);
