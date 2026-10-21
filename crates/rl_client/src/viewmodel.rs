@@ -11,15 +11,20 @@
 //! predicted events: `ACT_VM_DRAW` when the weapon comes up,
 //! `ACT_VM_PRIMARYATTACK` / `ACT_VM_SECONDARYATTACK` (a swing:
 //! `ACT_VM_HITCENTER` / `ACT_VM_MISSCENTER`) when it fires, `ACT_VM_RELOAD`
-//! when it reloads, and `ACT_VM_IDLE` once any of those is over. It is lit
-//! like a moving prop, where the player's eyes are.
+//! when it reloads, and `ACT_VM_IDLE` once any of those is over. A weapon
+//! that goes off on release (a grenade) is drawn back while its button is
+//! held (`ACT_VM_PULLBACK_HIGH` for the overhand throw, `ACT_VM_PULLBACK_LOW`
+//! for the roll), holding the pose until it is let go, then thrown
+//! (`ACT_VM_THROW`, or the roll's `ACT_VM_SECONDARYATTACK`); the next one is
+//! brought up (`ACT_VM_DRAW`) if there is one. It is lit like a moving prop,
+//! where the player's eyes are.
 
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
-use rl_data::Shot;
+use rl_data::{FireConfig, Shot};
 use rl_sim::combat::hitscan::Struck;
-use rl_sim::weapons::{Mode, WeaponId};
+use rl_sim::weapons::{Mode, Phase, WeaponId};
 
 use crate::AppState;
 use crate::animation::{Animated, SequencePlayer};
@@ -67,6 +72,11 @@ pub(crate) struct ViewModel {
     weapon: WeaponId,
     /// Whether its draw sequence has been started.
     drawn: bool,
+    /// The fire mode being held primed, whose pull-back has been started.
+    primed: Option<Mode>,
+    /// The weapon was just thrown: when that ends the next one is drawn
+    /// rather than the weapon idling.
+    thrown: bool,
 }
 
 /// Gives the main camera a child camera for the view model.
@@ -154,6 +164,8 @@ fn swap_view_model(
         ViewModel {
             weapon,
             drawn: false,
+            primed: None,
+            thrown: false,
         },
         Moving,
         // Lit from where the eyes are from the first frame: a model that
@@ -206,9 +218,18 @@ fn layer_meshes(
     }
 }
 
+/// The activity of drawing back a fire mode that goes off on release.
+fn prime_activity(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Primary => "ACT_VM_PULLBACK_HIGH",
+        Mode::Secondary => "ACT_VM_PULLBACK_LOW",
+    }
+}
+
 /// The activity a fire mode's shot plays.
-fn fire_activity(shot: &Shot, mode: Mode, struck: Option<Struck>) -> &'static str {
-    match (shot, mode) {
+fn fire_activity(fire: &FireConfig, mode: Mode, struck: Option<Struck>) -> &'static str {
+    match (&fire.shot, mode) {
+        (_, Mode::Primary) if fire.on_release => "ACT_VM_THROW",
         (Shot::Melee(_), _) => match struck {
             Some(Struck::Nothing) | None => "ACT_VM_MISSCENTER",
             Some(_) => "ACT_VM_HITCENTER",
@@ -239,6 +260,19 @@ fn animate_view_model(
         player.fade = VIEW_FADE_SECS;
         wanted = Some("ACT_VM_DRAW");
     }
+    // A weapon drawn back keeps its pose for as long as it is held.
+    let primed = sim
+        .player(local.id)
+        .and_then(|player| match player.inventory.phase() {
+            Phase::Priming(mode) => Some(mode),
+            _ => None,
+        });
+    if primed != view.primed {
+        view.primed = primed;
+        if let Some(mode) = primed {
+            wanted = Some(prime_activity(mode));
+        }
+    }
     for Ticked(events) in ticks.read() {
         let mine = |id| id == local.id;
         if events.reloads.iter().any(|&(id, _)| mine(id)) {
@@ -256,7 +290,8 @@ fn animate_view_model(
                 .iter()
                 .find(|shot| mine(shot.player))
                 .map(|shot| shot.trace.struck);
-            wanted = Some(fire_activity(&fire.shot, mode, struck));
+            view.thrown = fire.on_release;
+            wanted = Some(fire_activity(fire, mode, struck));
         }
         if events.tools.iter().any(|&(id, _)| mine(id)) && wanted.is_none() {
             wanted = Some("ACT_VM_PRIMARYATTACK");
@@ -269,10 +304,19 @@ fn animate_view_model(
         player.restart(sequence, 1.0);
         return;
     }
-    // The idle follows a swing or shot as it ends, faded in over it.
+    // The idle follows a swing or shot as it ends, faded in over it (a
+    // thrown weapon's next one is brought up instead); a weapon drawn back
+    // stays so.
     let idle = player.current().is_none() || player.ends_within(sequences, player.fade);
-    if idle && let Some(sequence) = animated.activity("ACT_VM_IDLE") {
-        player.play(sequence, 0.0, 1.0);
+    if idle && view.primed.is_none() {
+        if view.thrown {
+            view.thrown = false;
+            if let Some(sequence) = animated.activity("ACT_VM_DRAW") {
+                player.restart(sequence, 1.0);
+            }
+        } else if let Some(sequence) = animated.activity("ACT_VM_IDLE") {
+            player.play(sequence, 0.0, 1.0);
+        }
     }
 }
 
@@ -315,14 +359,27 @@ mod tests {
         assert!(up.abs_diff_eq(Vec3::Y, 1e-5), "{up}");
     }
 
+    fn fire(shot: Shot, on_release: bool) -> FireConfig {
+        FireConfig {
+            interval: 1.0,
+            automatic: false,
+            ammo: rl_data::FireAmmo::Unlimited,
+            shot,
+            on_release,
+        }
+    }
+
     #[test]
     fn swings_play_hit_or_miss() {
-        let swing = Shot::Melee(rl_data::MeleeConfig {
-            range: 1.0,
-            size: 1.0,
-            damage: 1.0,
-            force: 1.0,
-        });
+        let swing = fire(
+            Shot::Melee(rl_data::MeleeConfig {
+                range: 1.0,
+                size: 1.0,
+                damage: 1.0,
+                force: 1.0,
+            }),
+            false,
+        );
         assert_eq!(
             fire_activity(&swing, Mode::Primary, Some(Struck::World)),
             "ACT_VM_HITCENTER"
@@ -330,6 +387,21 @@ mod tests {
         assert_eq!(
             fire_activity(&swing, Mode::Primary, Some(Struck::Nothing)),
             "ACT_VM_MISSCENTER"
+        );
+    }
+
+    #[test]
+    fn grenades_are_drawn_back_then_thrown_or_rolled() {
+        let data = rl_data::GameData::builtin().expect("data");
+        let frag = data.weapons.get("frag").expect("frag");
+        let overhand = frag.primary.as_ref().expect("primary");
+        let roll = frag.secondary.as_ref().expect("secondary");
+        assert_eq!(prime_activity(Mode::Primary), "ACT_VM_PULLBACK_HIGH");
+        assert_eq!(prime_activity(Mode::Secondary), "ACT_VM_PULLBACK_LOW");
+        assert_eq!(fire_activity(overhand, Mode::Primary, None), "ACT_VM_THROW");
+        assert_eq!(
+            fire_activity(roll, Mode::Secondary, None),
+            "ACT_VM_SECONDARYATTACK"
         );
     }
 }

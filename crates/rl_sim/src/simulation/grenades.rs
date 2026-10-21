@@ -3,9 +3,12 @@
 //! A projectile whose weapon gives it a `body` is not flown as a box but
 //! thrown into the physics world like any prop: it tumbles, bounces off
 //! walls, floors, props and players, rolls to rest, and is shoved by
-//! blasts, until its fuse runs out and it explodes. Like every body it is
-//! simulated only on the server; clients are sent each live grenade's pose
-//! ([`GrenadeView`]) with every snapshot and draw it where it is.
+//! blasts, until its fuse runs out and it explodes. Its collision shape is a
+//! cylinder about its centre of mass, as the game's grenade is. A grenade
+//! is thrown overhand, or rolled along the floor on its side. Like every
+//! body it is simulated only on the server; clients are sent each live
+//! grenade's pose ([`GrenadeView`]) with every snapshot and draw it where
+//! it is.
 
 use glam::{Quat, Vec3};
 use rl_data::{ProjectileBodyConfig, ProjectileConfig};
@@ -21,6 +24,11 @@ use crate::weapons::{Mode, WeaponId};
 
 /// How far in front of the eyes a grenade leaves the hand, units.
 const RELEASE_DISTANCE: f32 = 14.0;
+/// How far ahead of a player a rolled grenade is set down, units: just
+/// beyond their box.
+const ROLL_DISTANCE: f32 = 24.0;
+/// Flat faces of a grenade's cylinder.
+const CYLINDER_SIDES: u16 = 12;
 /// Density of the metal a grenade is made of, kg/m³.
 const DENSITY: f32 = 7000.0;
 /// A grenade this far below the world is lost.
@@ -43,11 +51,13 @@ pub(super) struct Grenade {
 pub struct GrenadeView {
     /// Which, so a client can follow it from snapshot to snapshot.
     pub id: u32,
+    /// Its physics body, which the impacts and scrapes it makes name.
+    pub body: BodyId,
     /// The weapon thrown (which names its model).
     pub weapon: WeaponId,
     /// The fire mode thrown with.
     pub mode: Mode,
-    /// Where it is, Source space.
+    /// Where its centre is, Source space.
     pub position: Vec3,
     /// How it is turned.
     pub rotation: Quat,
@@ -70,18 +80,44 @@ impl Simulation {
         let Some(thrower) = self.player(owner) else {
             return;
         };
-        let (thrower_body, inherited) = (thrower.body, thrower.state.velocity);
+        let (thrower_body, inherited, feet) =
+            (thrower.body, thrower.state.velocity, thrower.state.origin);
         let mut rng = Rng::seeded(&[self.tick, u64::from(self.next_projectile)]);
-        let radius = projectile.size.max(1.0);
-        let desc = PropDesc {
-            pieces: vec![ConvexHull::ball(radius)],
-            origin: aim.eye + forward * RELEASE_DISTANCE,
-            rotation: Quat::from_euler(
+        let (origin, direction, rotation, spin) = if body.rolled {
+            let along = forward.with_z(0.0).try_normalize().unwrap_or(Vec3::X);
+            let origin = (feet + along * ROLL_DISTANCE).with_z(feet.z + body.radius + 0.5);
+            // On its side, turning forward as it runs along the floor.
+            let across = Vec3::Z.cross(along);
+            let rotation = Quat::from_rotation_arc(Vec3::Z, across);
+            (
+                origin,
+                along,
+                rotation,
+                across * (projectile.speed / body.radius),
+            )
+        } else {
+            let tumble = Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5);
+            let rotation = Quat::from_euler(
                 glam::EulerRot::XYZ,
                 rng.unit() * std::f32::consts::TAU,
                 rng.unit() * std::f32::consts::TAU,
                 0.0,
-            ),
+            );
+            (
+                aim.eye + forward * RELEASE_DISTANCE,
+                forward,
+                rotation,
+                tumble * body.spin * 2.0,
+            )
+        };
+        let desc = PropDesc {
+            pieces: vec![ConvexHull::cylinder(
+                body.radius,
+                body.height,
+                CYLINDER_SIDES,
+            )],
+            origin,
+            rotation,
             motion: Motion::Dynamic,
             mass: body.mass,
             material: rl_data::MaterialConfig {
@@ -96,15 +132,13 @@ impl Simulation {
             grabbable: false,
             free_on_grab: false,
             breakable: None,
-            surface: "grenade".to_owned(),
+            surface: body.surface.to_ascii_lowercase(),
         };
         let handle = self.physics.add_prop(&desc);
         // It leaves the thrower's hand without bumping them.
         self.physics.set_held(handle, Some(thrower_body));
         self.physics.set_held(handle, None);
-        let velocity = forward * projectile.speed + Vec3::Z * projectile.lift + inherited;
-        let spin =
-            Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5) * body.spin * 2.0;
+        let velocity = direction * projectile.speed + Vec3::Z * projectile.lift + inherited;
         self.physics.set_velocity(handle, velocity, spin);
         self.grenades.push(Grenade {
             id: self.next_projectile,
@@ -171,6 +205,23 @@ impl Simulation {
         self.refresh_grenade_views();
     }
 
+    /// The surface property of a body: a grenade's from its weapon's data
+    /// (clients have no body for it, only its [`GrenadeView`]), a prop's
+    /// from the physics world. Empty if unknown.
+    #[must_use]
+    pub fn surface_of(&self, body: BodyId) -> &str {
+        let grenade = self.grenade_views.iter().find(|view| view.body == body);
+        let surface = grenade.and_then(|grenade| {
+            match self.arsenal.fire(grenade.weapon, grenade.mode)?.shot {
+                rl_data::Shot::Projectile(ref projectile) => {
+                    projectile.body.as_ref().map(|body| body.surface.as_str())
+                }
+                _ => None,
+            }
+        });
+        surface.unwrap_or_else(|| self.physics.surface(body))
+    }
+
     /// Takes every grenade out of the world (a new match begins).
     pub(super) fn clear_grenades(&mut self) {
         for grenade in std::mem::take(&mut self.grenades) {
@@ -188,6 +239,7 @@ impl Simulation {
                 let pose = self.physics.pose(grenade.body)?;
                 Some(GrenadeView {
                     id: grenade.id,
+                    body: grenade.body,
                     weapon: grenade.weapon,
                     mode: grenade.mode,
                     position: self.physics.center_of_mass(grenade.body)?,

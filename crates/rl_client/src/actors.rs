@@ -47,7 +47,6 @@ impl Plugin for ActorsPlugin {
                     hold_weapons,
                     grip_weapons,
                     draw_projectiles,
-                    draw_grenades,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
@@ -88,10 +87,6 @@ struct Gripping;
 /// The model of a projectile, by its id.
 #[derive(Component)]
 struct ProjectileView(u32);
-
-/// A grenade being drawn, by the id the server gave it.
-#[derive(Component)]
-pub(crate) struct GrenadeEntity(pub(crate) u32);
 
 fn reset(mut spawned: ResMut<PickupsSpawned>) {
     spawned.0 = false;
@@ -498,58 +493,6 @@ fn draw_projectiles(
         commands
             .entity(entity)
             .insert((ProjectileView(projectile.id), Moving));
-    }
-}
-
-/// Places every grenade where it is drawn this frame, turned as it
-/// tumbles: new ones get a model, gone ones lose theirs.
-fn draw_grenades(
-    mut commands: Commands,
-    drawn: Res<Drawn>,
-    game: Game,
-    mut models: ResMut<ModelHandles>,
-    asset_server: Res<AssetServer>,
-    mut views: Query<(Entity, &GrenadeEntity, &mut Transform)>,
-) {
-    let (Some(world), Some(sim)) = (&drawn.0, game.sim()) else {
-        return;
-    };
-    let transform_of = |grenade: &rl_sim::simulation::GrenadeView| Transform {
-        translation: coords::position(grenade.position.to_array()),
-        rotation: coords::rotation_from_source(grenade.rotation),
-        ..default()
-    };
-    let mut shown = Vec::new();
-    for (entity, view, mut transform) in &mut views {
-        match world.grenades.iter().find(|grenade| grenade.id == view.0) {
-            Some(grenade) => {
-                *transform = transform_of(grenade);
-                shown.push(view.0);
-            }
-            None => commands.entity(entity).try_despawn(),
-        }
-    }
-    let arsenal = sim.arsenal();
-    for grenade in &world.grenades {
-        if shown.contains(&grenade.id) {
-            continue;
-        }
-        let Some(rl_data::Shot::Projectile(config)) = arsenal
-            .fire(grenade.weapon, grenade.mode)
-            .map(|fire| &fire.shot)
-        else {
-            continue;
-        };
-        let entity = spawn_model(
-            &mut commands,
-            &mut models,
-            &asset_server,
-            &config.model,
-            transform_of(grenade),
-        );
-        commands
-            .entity(entity)
-            .insert((GrenadeEntity(grenade.id), Moving));
     }
 }
 

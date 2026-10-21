@@ -6,7 +6,8 @@
 //! striking props or the map (`prop_impacts`) and, every few ticks, those
 //! that are sliding (`prop_scrapes`); this turns them into sounds:
 //!
-//! - an **impact** plays the struck prop's surface's hard or soft sound,
+//! - an **impact** plays the struck prop's surface's hard or soft sound
+//!   (a thrown grenade's surface is its own: only the server has its body),
 //!   louder for faster and heavier blows, at most once in a short while per
 //!   prop so a tumbling crate does not machine-gun;
 //! - a **scrape** keeps a looping emitter on the sliding prop, its volume
@@ -106,7 +107,7 @@ fn hear_props(
             if heard {
                 continue;
             }
-            let sounds = surfaces.0.sounds(sim.physics().surface(impact.body));
+            let sounds = surfaces.0.sounds(sim.surface_of(impact.body));
             let name = if impact.speed > config.hard_speed {
                 &sounds.impact_hard
             } else {
@@ -121,7 +122,7 @@ fn hear_props(
             player.play(name, Some(impact.position), volume);
         }
         for scrape in &events.prop_scrapes {
-            let sounds = surfaces.0.sounds(sim.physics().surface(scrape.body));
+            let sounds = surfaces.0.sounds(sim.surface_of(scrape.body));
             // Smooth surfaces (metal, glass) scrape high; the rest rough.
             let name = if sounds.scrape_rough.is_empty() {
                 &sounds.scrape_smooth

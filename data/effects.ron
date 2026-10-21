@@ -39,4 +39,19 @@ Effects(
         smoke_duration: 4.5,
         shake: 0.85,
     ),
+    // A thrown grenade: a red dot on its top that flashes with each tick of
+    // its fuse (the dot's size at the flash, how bright it stays between
+    // ticks, how long a flash takes to fade) and a red trail of where it has
+    // been (its life, its width at the grenade and at its far end).
+    grenade: (
+        dot_size: 9.0,
+        dot_offset: (0.0, 0.0, 5.2),
+        dot_color: (1.6, 0.08, 0.03),
+        dot_dim: 0.4,
+        flash_fade: 0.22,
+        trail_life: 0.55,
+        trail_width: (3.0, 0.3),
+        trail_color: (1.4, 0.05, 0.02),
+        trail_alpha: 0.85,
+    ),
 )

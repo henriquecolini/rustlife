@@ -1,6 +1,13 @@
-// A thrown fragmentation grenade: a physics body that tumbles and bounces
-// like any prop (and is shoved by blasts), then bursts 2.5 seconds after
-// leaving the hand.
+// A fragmentation grenade. It is a literal grenade, not a weapon with ammo:
+// the weapon is carried while there are grenades to throw and is put away
+// with the last one.
+//
+// Holding the button primes it (the pin is pulled and the arm drawn back);
+// letting go throws it: primary overhand, secondary a gentle roll along the
+// floor. Once thrown it is a physics body — a metal cylinder that tumbles and
+// bounces like any prop (and is shoved by blasts) — that ticks like the
+// original (a red dot flashing in step with each tick, a red trail behind
+// it) and bursts 2.5 seconds after leaving the hand.
 Weapon(
     name: "Frag",
     slot: 5,
@@ -12,6 +19,7 @@ Weapon(
         interval: 1.0,
         automatic: false,
         ammo: Reserve(ammo: "frag", count: 1),
+        on_release: true,
         shot: Projectile((
             model: "models/weapons/w_grenade.mdl",
             speed: 900.0,
@@ -23,14 +31,61 @@ Weapon(
             hit_damage: 0.0,
             explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
             lifetime: 3.0,
-            // Rolls and bounces as a rigid ball of metal.
-            body: Some((mass: 0.9, friction: 0.7, spin: 14.0, damping: 0.1)),
+            body: Some((
+                // The collision model of the game's grenade: a cylinder
+                // about nine units tall, standing along the model's Z axis,
+                // its middle at the body's centre of mass.
+                radius: 1.75,
+                height: 9.0,
+                model_center: (0.0, 0.0, 4.5),
+                surface: "grenade",
+                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                mass: 0.9,
+                friction: 0.7,
+                spin: 14.0,
+                damping: 0.1,
+            )),
         )),
     )),
-    secondary: None,
+    secondary: Some((
+        interval: 1.0,
+        automatic: false,
+        ammo: Reserve(ammo: "frag", count: 1),
+        on_release: true,
+        shot: Projectile((
+            model: "models/weapons/w_grenade.mdl",
+            speed: 340.0,
+            lift: 0.0,
+            gravity: 1.0,
+            size: 3.0,
+            bounce: Some(0.45),
+            fuse: Some(2.5),
+            hit_damage: 0.0,
+            explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
+            lifetime: 3.0,
+            body: Some((
+                radius: 1.75,
+                height: 9.0,
+                model_center: (0.0, 0.0, 4.5),
+                surface: "grenade",
+                // Leaves the hand at the feet, rolling on its side.
+                rolled: true,
+                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                mass: 0.9,
+                friction: 0.7,
+                spin: 0.0,
+                damping: 0.1,
+            )),
+        )),
+    )),
+    consumable: true,
     deploy_time: 0.4,
     pickup: Some((ammo: 1, respawn: 15.0, radius: 24.0)),
-    sounds: {"fire": "WeaponFrag.Throw"},
+    sounds: {
+        "fire": "WeaponFrag.Throw",
+        "fire2": "WeaponFrag.Roll",
+        "blip": "Grenade.Blip",
+    },
     // Players hold it with the grenade sequences of HL2DM's player models (run_grenade, ...).
     hold: Some("grenade"),
 )

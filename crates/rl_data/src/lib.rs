@@ -64,7 +64,8 @@ pub mod weapons;
 
 pub use ammo::{AmmoConfig, AmmoType};
 pub use effects::{
-    EffectsConfig, ExplosionEffectConfig, MuzzleFlashConfig, SpriteEffectConfig, TracerConfig,
+    EffectsConfig, ExplosionEffectConfig, GrenadeEffectConfig, MuzzleFlashConfig,
+    SpriteEffectConfig, TracerConfig,
 };
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};
@@ -83,8 +84,8 @@ pub use simulation::SimulationConfig;
 pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig};
 pub use validate::Problem;
 pub use weapons::{
-    ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig, MeleeConfig,
-    ProjectileBodyConfig, ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig,
+    BlipConfig, ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig,
+    MeleeConfig, ProjectileBodyConfig, ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig,
     WeaponPickupConfig,
 };
 

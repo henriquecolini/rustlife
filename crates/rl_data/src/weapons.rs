@@ -28,9 +28,11 @@ pub const MAX_SLOT: u8 = 9;
 /// - `deploy`: the weapon coming up;
 /// - `pickup`, `drop`, `launch`, `punt`, `dryfire`: the Manipulator
 ///   picking a prop up, letting it go, throwing it, knocking one away, or
-///   finding nothing to throw.
-pub const WEAPON_SOUNDS: [&str; 10] = [
+///   finding nothing to throw;
+/// - `blip`: a thrown projectile's fuse ticking (see [`BlipConfig`]).
+pub const WEAPON_SOUNDS: [&str; 11] = [
     "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
+    "blip",
 ];
 
 /// One weapon.
@@ -65,6 +67,11 @@ pub struct WeaponConfig {
     /// is in hand (`smg1` for `run_smg1`); `player.ron`'s default if none.
     #[serde(default)]
     pub hold: Option<String>,
+    /// The weapon is itself what it throws, like a grenade: it is carried
+    /// only while rounds of its ammo are, and is put away for good with the
+    /// last one.
+    #[serde(default)]
+    pub consumable: bool,
 }
 
 /// A weapon's magazine.
@@ -111,6 +118,11 @@ pub struct FireConfig {
     pub ammo: FireAmmo,
     /// What a shot is.
     pub shot: Shot,
+    /// The shot goes off when the button is let go rather than pressed: the
+    /// weapon is *primed* while it is held (a grenade's pin pulled, the arm
+    /// drawn back) and nothing is used up until it is released.
+    #[serde(default)]
+    pub on_release: bool,
 }
 
 /// What a shot uses up.
@@ -241,9 +253,28 @@ pub struct ProjectileConfig {
 }
 
 /// A projectile that is a physics body.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectileBodyConfig {
+    /// Radius of its collision cylinder, units. The cylinder stands along
+    /// the model's own Z axis.
+    pub radius: f32,
+    /// Height of its collision cylinder, units.
+    pub height: f32,
+    /// The point of the model, in its own frame (Source units), that sits at
+    /// the body's centre of mass: where the model's middle is, so that it
+    /// is drawn where it collides.
+    pub model_center: [f32; 3],
+    /// The surface property it is made of (a key of the game's
+    /// `surfaceproperties.txt`), which names the sounds of its impacts.
+    pub surface: String,
+    /// It leaves the hand at the feet, flat along the view, and rolls on its
+    /// side instead of tumbling: a grenade rolled along the floor.
+    #[serde(default)]
+    pub rolled: bool,
+    /// The fuse's ticking, if it ticks.
+    #[serde(default)]
+    pub blip: Option<BlipConfig>,
     /// Mass, kg.
     pub mass: f32,
     /// Friction coefficient of its surface.
@@ -252,6 +283,44 @@ pub struct ProjectileBodyConfig {
     pub spin: f32,
     /// Fraction of its speed it loses per second to the air.
     pub damping: f32,
+}
+
+/// A fuse's ticking: the sound and the red flash of a grenade, in step.
+///
+/// It blips as it leaves the hand, then every `interval` seconds, and every
+/// `fast_interval` once no more than `warn_time` seconds of the fuse are
+/// left. The schedule is a function of the grenade's age alone, so the sound
+/// and the flash agree on every machine ([`BlipConfig::last`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlipConfig {
+    /// Seconds between blips at first.
+    pub interval: f32,
+    /// Seconds between blips once the end is near.
+    pub fast_interval: f32,
+    /// How many seconds before the fuse runs out the blips quicken.
+    pub warn_time: f32,
+}
+
+impl BlipConfig {
+    /// The latest blip of a grenade `age` seconds old with a `fuse` seconds
+    /// long: its number (the first is 0) and when it happened.
+    #[must_use]
+    pub fn last(&self, age: f32, fuse: f32) -> (u32, f32) {
+        let (mut number, mut at) = (0, 0.0);
+        loop {
+            let step = if fuse - at <= self.warn_time {
+                self.fast_interval
+            } else {
+                self.interval
+            };
+            if step <= 0.0 || at + step > age {
+                return (number, at);
+            }
+            number += 1;
+            at += step;
+        }
+    }
 }
 
 /// A blast: damage and push falling off linearly from its centre.
@@ -357,6 +426,12 @@ impl WeaponConfig {
         if self.primary.is_none() && self.secondary.is_none() {
             check.fail("primary", "a weapon needs at least one fire mode");
         }
+        if self.consumable && (self.clip.is_some() || self.ammo_type().is_none()) {
+            check.fail(
+                "consumable",
+                "a weapon that is its own ammo has no clip and fires from carried ammo",
+            );
+        }
         for (field, fire) in [("primary", &self.primary), ("secondary", &self.secondary)] {
             if let Some(fire) = fire {
                 self.validate_fire(check, field, fire);
@@ -460,6 +535,19 @@ fn validate_projectile(check: &mut Validator, field: &str, projectile: &Projecti
     check.non_negative(&format!("{field}.hit_damage"), projectile.hit_damage);
     check.positive(&format!("{field}.lifetime"), projectile.lifetime);
     if let Some(body) = &projectile.body {
+        check.positive(&format!("{field}.body.radius"), body.radius);
+        check.positive(&format!("{field}.body.height"), body.height);
+        if body.surface.trim().is_empty() {
+            check.fail(&format!("{field}.body.surface"), "must name a surface");
+        }
+        if let Some(blip) = &body.blip {
+            check.positive(&format!("{field}.body.blip.interval"), blip.interval);
+            check.positive(
+                &format!("{field}.body.blip.fast_interval"),
+                blip.fast_interval,
+            );
+            check.non_negative(&format!("{field}.body.blip.warn_time"), blip.warn_time);
+        }
         check.positive(&format!("{field}.body.mass"), body.mass);
         check.non_negative(&format!("{field}.body.friction"), body.friction);
         check.non_negative(&format!("{field}.body.spin"), body.spin);
@@ -507,12 +595,14 @@ mod tests {
                     falloff: None,
                     force: 100.0,
                 }),
+                on_release: false,
             }),
             secondary: None,
             deploy_time: 0.5,
             pickup: None,
             sounds: BTreeMap::new(),
             hold: None,
+            consumable: false,
         }
     }
 
@@ -580,6 +670,40 @@ mod tests {
         assert_eq!(falloff.scale(50.0), 1.0);
         assert_eq!(falloff.scale(200.0), 0.75);
         assert_eq!(falloff.scale(1000.0), 0.5);
+    }
+
+    #[test]
+    fn a_consumable_weapon_fires_from_carried_ammo_alone() {
+        let mut weapon = pistol();
+        weapon.consumable = true;
+        assert_eq!(problems(&weapon), ["consumable"], "it has a clip");
+        weapon.clip = None;
+        if let Some(fire) = &mut weapon.primary {
+            fire.ammo = FireAmmo::Reserve {
+                ammo: "frag".to_owned(),
+                count: 1,
+            };
+        }
+        assert!(problems(&weapon).is_empty());
+    }
+
+    #[test]
+    fn fuses_tick_slowly_then_quicken_near_the_end() {
+        let blip = BlipConfig {
+            interval: 1.0,
+            fast_interval: 0.3,
+            warn_time: 1.5,
+        };
+        // A 2.5 s fuse: at 0 and 1 s, then every 0.3 s.
+        assert_eq!(blip.last(0.0, 2.5), (0, 0.0));
+        assert_eq!(blip.last(0.99, 2.5), (0, 0.0));
+        assert_eq!(blip.last(1.0, 2.5), (1, 1.0));
+        assert_eq!(blip.last(1.29, 2.5), (1, 1.0));
+        let (number, at) = blip.last(1.65, 2.5);
+        assert_eq!(number, 3);
+        assert!((at - 1.6).abs() < 1e-5, "{at}");
+        let (number, _) = blip.last(2.5, 2.5);
+        assert_eq!(number, 6);
     }
 
     #[test]

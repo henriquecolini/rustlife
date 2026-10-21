@@ -235,10 +235,12 @@ struct Particle {
 
 /// The textures and quad every particle is made from.
 #[derive(Resource)]
-struct Looks {
-    quad: Handle<Mesh>,
+pub(crate) struct Looks {
+    /// The unit quad particles are drawn on.
+    pub(crate) quad: Handle<Mesh>,
     puff: Handle<Image>,
-    dot: Handle<Image>,
+    /// A bright point with a soft halo.
+    pub(crate) dot: Handle<Image>,
     streak: Handle<Image>,
     ring: Handle<Image>,
 }

@@ -279,3 +279,129 @@ fn next_and_previous_skip_weapons_without_ammo() {
     inventory.select(&arsenal, id(&arsenal, "frag"));
     assert!(inventory.usable(&arsenal, id(&arsenal, "frag")));
 }
+
+/// A player with the SMG in hand and `frags` grenades, the frag selected.
+fn with_frags(arsenal: &Arsenal, frags: u32) -> Inventory {
+    let data = GameData::builtin().expect("data");
+    let mut inventory = Inventory::loadout(arsenal, &data.rules.loadout);
+    inventory.give_ammo(arsenal, ammo(arsenal, "frag"), frags.saturating_sub(1));
+    let frag = id(arsenal, "frag");
+    inventory.select(arsenal, frag);
+    // Let it come up.
+    run(&mut inventory, arsenal, &UserCmd::default(), 40);
+    inventory
+}
+
+#[test]
+fn a_grenade_is_primed_while_held_and_thrown_on_release() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 2);
+    let frag = id(&arsenal, "frag");
+    let frags = ammo(&arsenal, "frag");
+
+    let pull = inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    assert_eq!(pull.primed, Some((frag, Mode::Primary)));
+    assert_eq!(pull.fired, None);
+    assert_eq!(inventory.phase(), Phase::Priming(Mode::Primary));
+    // Held for as long as the player likes: nothing is thrown or spent.
+    for _ in 0..200 {
+        let held = inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+        assert_eq!((held.fired, held.primed), (None, None));
+    }
+    assert_eq!(inventory.ammo(frags), 2);
+
+    let thrown = inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+    assert_eq!(thrown.fired, Some((frag, Mode::Primary)));
+    assert_eq!(inventory.ammo(frags), 1);
+    assert_eq!(inventory.phase(), Phase::Ready);
+}
+
+#[test]
+fn secondary_fire_primes_a_roll() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 2);
+    let frag = id(&arsenal, "frag");
+    let pull = inventory.tick(&arsenal, &holding(Buttons::ATTACK2), DT);
+    assert_eq!(pull.primed, Some((frag, Mode::Secondary)));
+    // The other button does not change what is primed.
+    let both = Buttons::from_bits(Buttons::ATTACK.bits() | Buttons::ATTACK2.bits());
+    let held = inventory.tick(&arsenal, &holding(both), DT);
+    assert_eq!(held.fired, None);
+    let thrown = inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    assert_eq!(thrown.fired, Some((frag, Mode::Secondary)));
+}
+
+#[test]
+fn a_primed_grenade_cannot_be_put_away() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 2);
+    inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    let swap = UserCmd {
+        buttons: Buttons::ATTACK,
+        select: Some(id(&arsenal, "smg")),
+        ..UserCmd::default()
+    };
+    assert!(!inventory.tick(&arsenal, &swap, DT).switched);
+    assert_eq!(inventory.active(), Some(id(&arsenal, "frag")));
+}
+
+#[test]
+fn grenades_are_thrown_one_at_a_time() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 3);
+    let frag = id(&arsenal, "frag");
+    let mut thrown = 0;
+    // The button is held and let go over and over.
+    for tick in 0..400 {
+        let button = if tick % 40 < 20 {
+            Buttons::ATTACK
+        } else {
+            Buttons::NONE
+        };
+        // (With the last one gone the SMG is back in hand, and fires.)
+        if let Some((weapon, _)) = inventory.tick(&arsenal, &holding(button), DT).fired
+            && weapon == frag
+        {
+            thrown += 1;
+        }
+    }
+    assert_eq!(thrown, 3);
+}
+
+#[test]
+fn the_last_grenade_leaves_no_weapon_in_hand() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 1);
+    let frag = id(&arsenal, "frag");
+    inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    let thrown = inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+    assert_eq!(thrown.fired, Some((frag, Mode::Primary)));
+    // The throw plays out with the grenade still in hand...
+    assert_eq!(inventory.active(), Some(frag));
+    assert!(inventory.has(frag));
+    // ...and then it is gone, and the weapon before it is back.
+    let mut retired = None;
+    for _ in 0..120 {
+        retired = retired.or(inventory
+            .tick(&arsenal, &holding(Buttons::NONE), DT)
+            .retired);
+    }
+    assert_eq!(retired, Some(frag));
+    assert!(!inventory.has(frag));
+    assert_eq!(inventory.active(), Some(id(&arsenal, "smg")));
+}
+
+#[test]
+fn picking_a_grenade_up_brings_the_weapon_back() {
+    let arsenal = arsenal();
+    let mut inventory = with_frags(&arsenal, 1);
+    let frag = id(&arsenal, "frag");
+    inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+    run(&mut inventory, &arsenal, &UserCmd::default(), 120);
+    assert!(!inventory.has(frag));
+    assert!(inventory.give_weapon(&arsenal, frag));
+    inventory.give_ammo(&arsenal, ammo(&arsenal, "frag"), 1);
+    assert!(inventory.usable(&arsenal, frag));
+    assert!(inventory.select(&arsenal, frag));
+}

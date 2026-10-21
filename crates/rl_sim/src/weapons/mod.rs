@@ -191,6 +191,9 @@ pub enum Phase {
     /// Reloading; this many seconds until the clip (or the next round)
     /// goes in.
     Reloading(f32),
+    /// Primed, a fire mode that [goes off on release](rl_data::FireConfig::on_release)
+    /// held: a grenade drawn back, to be thrown when its button is let go.
+    Priming(Mode),
 }
 
 /// A carried weapon and its clip.
@@ -210,6 +213,10 @@ pub struct WeaponTick {
     pub switched: bool,
     /// A reload began.
     pub reloading: bool,
+    /// A fire mode that goes off on release began to be held.
+    pub primed: Option<(WeaponId, Mode)>,
+    /// A consumable weapon that ran out was put away.
+    pub retired: Option<WeaponId>,
 }
 
 /// One player's weapons and ammo.
@@ -447,10 +454,17 @@ impl Inventory {
         let pressed = Buttons::from_bits(cmd.buttons.bits() & !self.old_buttons.bits());
         self.old_buttons = cmd.buttons;
         self.cooldown = (self.cooldown - dt).max(0.0);
-        if let Some(weapon) = cmd.select {
+        // A weapon drawn back stays in hand until it is let go.
+        if let Some(weapon) = cmd.select
+            && !matches!(self.phase, Phase::Priming(_))
+        {
             result.switched = self.select(arsenal, weapon);
         }
         self.advance_phase(arsenal, dt);
+        if let Some(retired) = self.retire_spent(arsenal) {
+            result.retired = Some(retired);
+            result.switched = true;
+        }
 
         let Some((weapon, config)) = self
             .active
@@ -460,6 +474,9 @@ impl Inventory {
         };
         if is_tool(config) || matches!(self.phase, Phase::Deploying(_)) {
             return result;
+        }
+        if let Phase::Priming(mode) = self.phase {
+            return self.release(arsenal, weapon, mode, cmd, result);
         }
         let wanted = |fire: &Option<FireConfig>, button: Buttons| {
             fire.as_ref().is_some_and(|fire| {
@@ -488,7 +505,15 @@ impl Inventory {
             if !wanted {
                 continue;
             }
-            if self.spend(arsenal, weapon, mode) {
+            if arsenal
+                .fire(weapon, mode)
+                .is_some_and(|fire| fire.on_release)
+            {
+                if self.affords(arsenal, weapon, mode) {
+                    self.phase = Phase::Priming(mode);
+                    result.primed = Some((weapon, mode));
+                }
+            } else if self.spend(arsenal, weapon, mode) {
                 if let Some(fire) = arsenal.fire(weapon, mode) {
                     self.cooldown = fire.interval;
                 }
@@ -502,6 +527,85 @@ impl Inventory {
             result.reloading = self.start_reload(arsenal);
         }
         result
+    }
+
+    /// Whether the ammo for one shot of `mode` is there.
+    fn affords(&self, arsenal: &Arsenal, weapon: WeaponId, mode: Mode) -> bool {
+        let Some(fire) = arsenal.fire(weapon, mode) else {
+            return false;
+        };
+        match &fire.ammo {
+            FireAmmo::Unlimited => true,
+            FireAmmo::Clip(count) => self.clip(weapon).is_some_and(|clip| clip >= *count),
+            FireAmmo::Reserve { ammo, count } => arsenal
+                .find_ammo(ammo)
+                .is_some_and(|ammo| self.ammo(ammo) >= *count),
+        }
+    }
+
+    /// A primed weapon: while the button of `mode` is held nothing happens;
+    /// let go, the shot goes off.
+    fn release(
+        &mut self,
+        arsenal: &Arsenal,
+        weapon: WeaponId,
+        mode: Mode,
+        cmd: &UserCmd,
+        mut result: WeaponTick,
+    ) -> WeaponTick {
+        let button = match mode {
+            Mode::Primary => Buttons::ATTACK,
+            Mode::Secondary => Buttons::ATTACK2,
+        };
+        if cmd.buttons.contains(button) {
+            return result;
+        }
+        self.phase = Phase::Ready;
+        if self.spend(arsenal, weapon, mode) {
+            if let Some(fire) = arsenal.fire(weapon, mode) {
+                self.cooldown = fire.interval;
+            }
+            result.fired = Some((weapon, mode));
+        }
+        result
+    }
+
+    /// Puts away the weapon in hand if it is a
+    /// [consumable](rl_data::WeaponConfig::consumable) that has nothing
+    /// left to throw and is done throwing, taking up the best of what
+    /// remains. Returns the weapon put away.
+    fn retire_spent(&mut self, arsenal: &Arsenal) -> Option<WeaponId> {
+        let weapon = self.active?;
+        let config = arsenal.weapon(weapon)?;
+        if !config.consumable
+            || self.phase != Phase::Ready
+            || self.cooldown > 0.0
+            || self.usable(arsenal, weapon)
+        {
+            return None;
+        }
+        self.weapons.retain(|carried| carried.weapon != weapon);
+        self.active = None;
+        let best = self
+            .last()
+            .filter(|&last| self.usable(arsenal, last))
+            .or_else(|| {
+                let mut usable: Vec<WeaponId> = self
+                    .weapons()
+                    .filter(|&other| self.usable(arsenal, other))
+                    .collect();
+                usable.sort_by_key(|other| {
+                    arsenal
+                        .weapon(*other)
+                        .map_or((0, 0), |config| (config.slot, config.position))
+                });
+                usable.last().copied()
+            });
+        self.last = None;
+        if let Some(best) = best {
+            self.select(arsenal, best);
+        }
+        Some(weapon)
     }
 
     /// Spends the ammo of one shot of `mode`; `false` (spending nothing)
@@ -563,7 +667,7 @@ impl Inventory {
     /// complete.
     fn advance_phase(&mut self, arsenal: &Arsenal, dt: f32) {
         match self.phase {
-            Phase::Ready => {}
+            Phase::Ready | Phase::Priming(_) => {}
             Phase::Deploying(left) => {
                 self.phase = if left > dt {
                     Phase::Deploying(left - dt)

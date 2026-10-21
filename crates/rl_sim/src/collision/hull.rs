@@ -117,6 +117,34 @@ impl ConvexHull {
             .unwrap_or_else(|| Self::from_box(Vec3::splat(-radius), Vec3::splat(radius)))
     }
 
+    /// A cylinder of `radius` and `height` standing along Z about the
+    /// origin, approximated by a prism of `sides` (at least 3) flat faces.
+    #[must_use]
+    pub fn cylinder(radius: f32, height: f32, sides: u16) -> Self {
+        let sides = sides.max(3);
+        let half = height / 2.0;
+        let ring = |z: f32| {
+            (0..sides).map(move |side| {
+                let angle = f32::from(side) / f32::from(sides) * std::f32::consts::TAU;
+                Vec3::new(radius * angle.cos(), radius * angle.sin(), z)
+            })
+        };
+        // Bottom ring first, then the top: vertex `side` is below `sides + side`.
+        let vertices: Vec<Vec3> = ring(-half).chain(ring(half)).collect();
+        let mut triangles = Vec::new();
+        for side in 0..sides {
+            let next = (side + 1) % sides;
+            triangles.push([side, next, sides + side]);
+            triangles.push([next, sides + next, sides + side]);
+        }
+        for side in 1..sides - 1 {
+            triangles.push([0, side, side + 1]);
+            triangles.push([sides, sides + side, sides + side + 1]);
+        }
+        Self::from_triangles(vertices, &triangles)
+            .unwrap_or_else(|| Self::from_box(Vec3::splat(-radius), Vec3::splat(radius)))
+    }
+
     /// An axis-aligned box.
     #[must_use]
     pub fn from_box(mins: Vec3, maxs: Vec3) -> Self {
@@ -298,6 +326,31 @@ mod tests {
         // Every face's plane is where an icosahedron's inscribed sphere is.
         let inscribed = 4.0 * 0.794_654_5;
         assert!(maxs.max_element() > inscribed);
+    }
+
+    #[test]
+    fn a_cylinder_stands_along_z_about_its_middle() {
+        let can = ConvexHull::cylinder(2.0, 9.0, 12);
+        assert_eq!(can.vertices().len(), 24);
+        let (mins, maxs) = can.bounds();
+        assert!((mins.z + 4.5).abs() < 1e-5 && (maxs.z - 4.5).abs() < 1e-5);
+        assert!((maxs.x - 2.0).abs() < 1e-5);
+        for vertex in can.vertices() {
+            assert!((vertex.truncate().length() - 2.0).abs() < 1e-4, "{vertex}");
+        }
+        // Side faces, two caps: a planes set that closes the volume.
+        let mut planes = Vec::new();
+        can.world_planes(Quat::IDENTITY, Vec3::ZERO, &mut planes);
+        assert!(
+            planes
+                .iter()
+                .any(|p| p.normal.abs_diff_eq(Vec3::Z, 1e-5) && (p.dist - 4.5).abs() < 1e-4)
+        );
+        assert!(
+            planes
+                .iter()
+                .any(|p| p.normal.abs_diff_eq(Vec3::NEG_Z, 1e-5) && (p.dist - 4.5).abs() < 1e-4)
+        );
     }
 
     /// A tetrahedron with its right angle at the origin.

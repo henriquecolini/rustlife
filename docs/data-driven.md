@@ -132,11 +132,14 @@ an entity class to it so maps place it (`entity_map.ron`):
 |-------|---------|
 | `clip` | `None` (fire modes take from carried ammo or need none), or `(ammo, size, reload)` with `reload` `Whole(time)` or `PerRound(start, each)` |
 | fire mode `ammo` | `Unlimited`, `Clip(n)` (rounds from the clip), `Reserve(ammo, count)` (rounds from carried ammo) |
+| fire mode `on_release` | `true`: the shot goes off when the button is let go, the weapon primed while it is held (a grenade) |
+| `consumable` | `true`: the weapon is its own ammo, carried only while it has rounds and put away with the last |
 | fire mode `shot` | `Hitscan((pellets, damage, spread, range, falloff, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
 | `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
+| projectile `body` | `None`, or a rigid cylinder `(radius, height, model_center, surface, rolled, blip, mass, friction, spin, damping)`; `blip` is `None` or `(interval, fast_interval, warn_time)` |
 | projectile `explosion` | `None`, or `(radius, damage, knockback, force)` |
 | `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `physgun`); `None` takes `player.ron`'s `default_hold` |
-| `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire` |
+| `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`, `blip` (a fuse ticking) |
 
 The ten built-in weapons cover every block: the Manipulator (a tool), the
 Pry Bar (melee), Sidearm and Hand Cannon (single bullets), SMG (automatic,

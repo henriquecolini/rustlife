@@ -131,6 +131,8 @@ Combat effects draw the game's own sprite materials, named in
 | Tracer | a bullet flies | a streak of `tracer.length` flying at `tracer.speed` from the muzzle to where the bullet stopped, turned about its line to face the camera |
 | Sparks | a bullet or swing strikes the map or a prop | the `impact` sprite just off the surface |
 | Explosion | something blows up | particles the game makes itself (below) |
+| Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |
+| Grenade trail | a grenade is in flight | a red ribbon of where it has been, turned to face the camera, tapering and fading over `grenade.trail_life` |
 
 ### Explosions
 
@@ -193,4 +195,5 @@ skybox, or into water), and `--log-fps` logs the frame rate every second.
 | `source_formats/src/soundscript.rs`, `soundscape.rs` | Entries' waves, ranges and levels, manifests, soundscapes with their children flattened |
 | `rl_client/tests/sounds.rs` | Every sound the data names resolving and decoding (needs an install) |
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
+| `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |
 | `rl_client/src/fog.rs`, `effects.rs` | Fog from entity keys, sprite frames, tracers' stretch and turn, view model points seen by the main camera |

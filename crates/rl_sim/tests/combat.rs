@@ -106,6 +106,18 @@ impl Arena {
         self.sim.tick(&[(self.shooter, *cmd)])
     }
 
+    /// Pulls the pin of a grenade with `buttons` aiming at `pitch`, holds
+    /// it for `held` ticks and lets go: the events of the tick it is
+    /// released.
+    fn throw(&mut self, buttons: Buttons, pitch: f32, held: usize) -> TickEvents {
+        self.hold(buttons, pitch, held);
+        let release = UserCmd {
+            pitch,
+            ..UserCmd::default()
+        };
+        self.tick(&release)
+    }
+
     fn idle(&mut self, ticks: usize) -> Vec<TickEvents> {
         (0..ticks).map(|_| self.tick(&UserCmd::default())).collect()
     }
@@ -256,7 +268,7 @@ fn walls_shelter_from_grenades() {
     arena.arm("frag");
     // A frag lobbed into the wall drops at its foot, on the shooter's
     // side, and bursts on its fuse.
-    arena.hold(Buttons::ATTACK, 30.0, 1);
+    arena.throw(Buttons::ATTACK, 30.0, 1);
     let events = arena.idle(200);
     assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 1);
     assert_eq!(arena.health(arena.target), 100.0, "sheltered");
@@ -919,8 +931,8 @@ fn a_frag_is_a_physics_body_that_bounces_and_bursts_when_its_fuse_runs_out() {
     let data = data();
     let mut arena = Arena::new(&data, 3000.0);
     arena.arm("frag");
-    let events = arena.hold(Buttons::ATTACK, 0.0, 1);
-    assert_eq!(events[0].fired.len(), 1);
+    let events = arena.throw(Buttons::ATTACK, 0.0, 1);
+    assert_eq!(events.fired.len(), 1);
     assert_eq!(arena.sim.grenades().len(), 1, "one grenade in flight");
     let first = arena.sim.grenades()[0];
 
@@ -942,10 +954,11 @@ fn a_frag_is_a_physics_body_that_bounces_and_bursts_when_its_fuse_runs_out() {
     assert!(arena.sim.grenades().is_empty(), "and is gone");
     let lowest = heights.iter().copied().fold(f32::MAX, f32::min);
     assert!(lowest < 8.0, "it came down to the floor: {lowest}");
-    // A bounce: it was rising again after first touching down.
+    // A bounce: it was rising again after first touching down (a can
+    // coming in at a flat angle gives up much of its fall to spin).
     let touched = heights.iter().position(|&z| z < 8.0).expect("touched down");
     assert!(
-        heights[touched..].iter().any(|&z| z > lowest + 6.0),
+        heights[touched..].iter().any(|&z| z > lowest + 2.5),
         "it bounced"
     );
     // Its fuse is 2.5 s from the throw.
@@ -956,7 +969,7 @@ fn a_frag_is_a_physics_body_that_bounces_and_bursts_when_its_fuse_runs_out() {
 #[test]
 fn a_frag_thrown_at_someone_kills_them_for_the_thrower() {
     let data = data();
-    let mut arena = Arena::new(&data, 120.0);
+    let mut arena = Arena::new(&data, 60.0);
     arena.arm("frag");
     arena
         .sim
@@ -964,8 +977,9 @@ fn a_frag_thrown_at_someone_kills_them_for_the_thrower() {
         .expect("target")
         .vitals
         .health = 20.0;
-    // Dropped at the thrower's feet, it goes off within reach of both.
-    arena.hold(Buttons::ATTACK, 85.0, 1);
+    // Dropped at the thrower's feet, it skitters about and goes off within
+    // reach of both.
+    arena.throw(Buttons::ATTACK, 85.0, 1);
     let events = arena.idle(200);
     let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
     assert_eq!(kills.len(), 1, "{kills:?}");
@@ -981,4 +995,123 @@ fn a_frag_thrown_at_someone_kills_them_for_the_thrower() {
         arena.sim.game().score(arena.shooter).points,
         i32::try_from(frag_points).unwrap()
     );
+}
+
+#[test]
+fn a_grenade_is_only_thrown_when_the_button_is_let_go() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    let frag = arena.weapon("frag");
+    // However long it is held, nothing leaves the hand.
+    let held = arena.hold(Buttons::ATTACK, 0.0, 120);
+    assert!(held.iter().all(|events| events.fired.is_empty()));
+    assert!(arena.sim.grenades().is_empty());
+    let player = arena.sim.player(arena.shooter).expect("shooter");
+    assert_eq!(
+        player.inventory.phase(),
+        rl_sim::weapons::Phase::Priming(rl_sim::weapons::Mode::Primary)
+    );
+    let events = arena.tick(&UserCmd::default());
+    assert_eq!(
+        events.fired,
+        [(arena.shooter, frag, rl_sim::weapons::Mode::Primary)]
+    );
+    assert_eq!(arena.sim.grenades().len(), 1);
+    // The fuse starts at the throw, not at the pin.
+    assert!(arena.sim.grenades()[0].age < 0.05);
+}
+
+#[test]
+fn a_grenade_is_a_cylinder_whose_mass_is_in_the_middle() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    arena.throw(Buttons::ATTACK, 0.0, 1);
+    let grenade = arena.sim.grenades()[0];
+    let body = grenade.body;
+    let physics = arena.sim.physics();
+    let pose = physics.pose(body).expect("pose");
+    let centre = physics.center_of_mass(body).expect("centre");
+    // The mass is at the body's origin: the middle of the cylinder.
+    assert!(pose.position.distance(centre) < 0.05, "{pose:?} {centre}");
+    assert_eq!(grenade.position, centre);
+    // Its surface is its own, which names a metal grenade's sounds.
+    assert_eq!(arena.sim.surface_of(body), "grenade");
+    // It is small: nine units long and three and a half across, so the
+    // corners of its ends are (1.75² + 4.5²)^½ from the middle.
+    let reach = physics.radius(body).expect("radius");
+    assert!((reach - 4.83).abs() < 0.05, "{reach}");
+}
+
+#[test]
+fn a_grenade_comes_to_rest_lying_on_its_side_not_balanced_on_a_point() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    arena.throw(Buttons::ATTACK, -10.0, 1);
+    let mut last = Vec3::ZERO;
+    for _ in 0..150 {
+        arena.idle(1);
+        if let Some(grenade) = arena.sim.grenades().first() {
+            last = grenade.position;
+        }
+    }
+    // Resting upright its middle would be 4.5 above the floor, on its side
+    // 1.75.
+    assert!(last.z > 1.0 && last.z < 5.0, "{last}");
+}
+
+#[test]
+fn the_secondary_button_rolls_a_grenade_gently_along_the_floor() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    let events = arena.throw(Buttons::ATTACK2, -20.0, 5);
+    assert_eq!(events.fired.len(), 1);
+    assert_eq!(events.fired[0].2, rl_sim::weapons::Mode::Secondary);
+    let start = arena.sim.grenades()[0];
+    assert!(start.position.z < 6.0, "from the feet: {}", start.position);
+    let origin = Vec3::new(0.0, 0.0, 1.0);
+    let mut highest = 0.0_f32;
+    let mut farthest = 0.0_f32;
+    for _ in 0..60 {
+        arena.idle(1);
+        let grenade = arena.sim.grenades()[0];
+        highest = highest.max(grenade.position.z);
+        farthest = farthest.max(grenade.position.x - origin.x);
+    }
+    // Looking down, it still goes along the floor, forward, and rolls far
+    // (an overhand throw at 900 u/s would be metres up and away).
+    assert!(highest < 12.0, "never leaves the floor: {highest}");
+    assert!((100.0..400.0).contains(&farthest), "{farthest}");
+}
+
+#[test]
+fn the_last_grenade_thrown_leaves_nothing_in_hand() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    let frag = arena.weapon("frag");
+    let smg = arena.weapon("smg");
+    // Exactly one grenade: the loadout's.
+    let arsenal = arena.sim.arsenal().clone();
+    let frags = arsenal.find_ammo("frag").expect("ammo");
+    let player = arena.sim.player(arena.shooter).expect("shooter");
+    assert_eq!(player.inventory.ammo(frags), 1);
+    let select = UserCmd {
+        select: Some(frag),
+        ..UserCmd::default()
+    };
+    arena.tick(&select);
+    arena.idle(66);
+    arena.throw(Buttons::ATTACK, 0.0, 3);
+    let after = arena.idle(120);
+    let retired = after
+        .iter()
+        .flat_map(|events| &events.deploys)
+        .any(|&(player, weapon)| player == arena.shooter && weapon == smg);
+    assert!(retired, "the weapon before it is brought up");
+    let player = arena.sim.player(arena.shooter).expect("shooter");
+    assert!(!player.inventory.has(frag), "the grenade weapon is gone");
+    assert_eq!(player.inventory.active(), Some(smg));
 }

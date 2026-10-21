@@ -3,7 +3,8 @@
 //! Effects are drawn with the game's own sprite materials (named relative
 //! to `materials/`, without extension), on quads facing the camera: muzzle
 //! flashes, bullet tracers, sparks where bullets strike, and explosions,
-//! whose sprites may be animated.
+//! whose sprites may be animated, and what a thrown grenade shows: a red dot
+//! flashing with its ticking and a red trail behind it.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,8 @@ pub struct EffectsConfig {
     pub impact: SpriteEffectConfig,
     /// A blast.
     pub explosion: ExplosionEffectConfig,
+    /// A grenade in flight.
+    pub grenade: GrenadeEffectConfig,
 }
 
 /// Most particles of one kind an explosion may ask for.
@@ -93,6 +96,34 @@ pub struct ExplosionEffectConfig {
     pub shake: f32,
 }
 
+/// What a grenade in flight shows: a glowing red dot on its top that
+/// flashes with each tick of its fuse and dims between, and a red trail of
+/// where it has been.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrenadeEffectConfig {
+    /// The dot's size at its brightest, units.
+    pub dot_size: f32,
+    /// Where the dot sits, in the grenade's own frame relative to its
+    /// centre, units.
+    pub dot_offset: [f32; 3],
+    /// The dot's colour (linear RGB; values above one burn white).
+    pub dot_color: [f32; 3],
+    /// How bright the dot stays between ticks, `0..=1` of its brightest.
+    pub dot_dim: f32,
+    /// Seconds a tick's flash takes to fade to the dim.
+    pub flash_fade: f32,
+    /// How long the trail lasts behind the grenade, seconds.
+    pub trail_life: f32,
+    /// The trail's width at the grenade and at its far end, units.
+    pub trail_width: (f32, f32),
+    /// The trail's colour (linear RGB).
+    pub trail_color: [f32; 3],
+    /// The trail's opacity at the grenade, `0..=1`; it fades to nothing at
+    /// its far end.
+    pub trail_alpha: f32,
+}
+
 impl EffectsConfig {
     pub(crate) fn validate(&self, check: &mut Validator) {
         let named = |check: &mut Validator, field: &str, sprite: &str| {
@@ -117,6 +148,14 @@ impl EffectsConfig {
         named(check, "impact.sprite", &self.impact.sprite);
         check.positive("impact.size", self.impact.size);
         check.positive("impact.duration", self.impact.duration);
+        let grenade = &self.grenade;
+        check.positive("grenade.dot_size", grenade.dot_size);
+        check.range("grenade.dot_dim", grenade.dot_dim, 0.0, 1.0);
+        check.positive("grenade.flash_fade", grenade.flash_fade);
+        check.positive("grenade.trail_life", grenade.trail_life);
+        check.non_negative("grenade.trail_width.0", grenade.trail_width.0);
+        check.non_negative("grenade.trail_width.1", grenade.trail_width.1);
+        check.range("grenade.trail_alpha", grenade.trail_alpha, 0.0, 1.0);
         let blast = &self.explosion;
         check.positive("explosion.size_per_radius", blast.size_per_radius);
         check.range("explosion.rise", blast.rise, 0.0, 1.0);
@@ -168,6 +207,17 @@ mod tests {
                 smoke_duration: 3.0,
                 shake: 0.6,
             },
+            grenade: GrenadeEffectConfig {
+                dot_size: 6.0,
+                dot_offset: [0.0, 0.0, 5.0],
+                dot_color: [1.0, 0.1, 0.05],
+                dot_dim: 0.2,
+                flash_fade: 0.2,
+                trail_life: 0.5,
+                trail_width: (3.0, 0.5),
+                trail_color: [1.0, 0.05, 0.02],
+                trail_alpha: 0.8,
+            },
         }
     }
 
@@ -187,8 +237,9 @@ mod tests {
         bad.explosion.duration = -1.0;
         bad.explosion.sparks = 5000;
         bad.explosion.rise = 2.0;
+        bad.grenade.flash_fade = 0.0;
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 6);
+        assert_eq!(check.finish().len(), 7);
     }
 }

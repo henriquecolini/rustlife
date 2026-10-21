@@ -25,6 +25,7 @@ use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::effects::EffectsPlugin;
 use crate::fog::FogPlugin;
+use crate::grenades::GrenadesPlugin;
 use crate::hud::HudPlugin;
 use crate::movers::MoversPlugin;
 use crate::net::{NetPlugin, NetSettings};
@@ -46,6 +47,7 @@ pub mod content;
 pub mod debris;
 pub mod effects;
 pub mod fog;
+pub mod grenades;
 pub mod hud;
 pub mod input;
 pub mod menu;
@@ -173,7 +175,11 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         SkyPlugin,
         FogPlugin,
     ));
-    app.add_plugins((debris::DebrisPlugin, particles::ParticlesPlugin));
+    app.add_plugins((
+        debris::DebrisPlugin,
+        particles::ParticlesPlugin,
+        GrenadesPlugin,
+    ));
     if let Some(script) = options.script {
         app.insert_resource(script);
     }

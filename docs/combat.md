@@ -85,6 +85,37 @@ includes grates) and players' boxes:
 - A `fuse` bursts it that many seconds after launch, wherever it is.
 - Past its `lifetime` it is gone, without a burst.
 
+### Grenades
+
+A projectile whose weapon gives it a `body` is not flown as a box but thrown
+into the physics world (`rl_sim/src/simulation/grenades.rs`): a rigid
+**cylinder** (`radius`, `height`, standing along the model's Z axis) whose
+mass is at its middle, so it tumbles, bounces, scrapes and rolls on
+`surface`'s friction, is shoved by blasts and knocked about by players and
+props, until its `fuse` runs out. It is simulated only on the server; clients
+are sent its pose and body (`GrenadeView`) and draw the model with its own
+middle (`model_center`) laid on the body's, so it is drawn where it collides.
+
+The throw is the *player's* action, not the weapon's: a fire mode with
+`on_release` is **primed** while its button is held (the weapon is in
+`Phase::Priming`: the arm is drawn back, nothing is used up, the weapon
+cannot be put away) and goes off when the button is let go, from where the
+player then looks. Primary throws overhand (`speed`, `lift`); secondary,
+whose body is `rolled`, sets the grenade down at the feet and sends it along
+the floor on its side at the flat view's heading, turning as it goes: a
+gentle roll.
+
+A `consumable` weapon is its own ammo. It is carried only while rounds of its
+ammo are: with the last throw it stays in hand to play out the throw, then
+is put away for good and the weapon before it is brought up. Picking up
+another brings it back.
+
+Its `blip` is the fuse ticking: a tick as it leaves the hand, then every
+`interval` seconds, every `fast_interval` once `warn_time` is left. The
+schedule is a function of the grenade's age (`BlipConfig::last`), so the
+sound (the weapon's `blip` sound) and the red dot's flash (`effects.ron`'s
+`grenade`) agree.
+
 ### Explosions
 
 A blast's strength falls linearly from 1 at its centre to 0 at its
@@ -218,6 +249,7 @@ rustlife --map dm_lockdown --dummies 3 --weapon launcher --shoot-for 0.3 --scree
 | `rl_data` unit tests | Schema validation per file, references between files, adding weapons by file, falloff, blast and armor arithmetic |
 | `rl_sim/src/weapons/tests.rs` | Loadouts, automatic and semi-automatic fire, reloads (whole, round by round, interrupted), reserve ammo, deploying, the Manipulator as a tool, weapon choice |
 | `rl_sim/src/weapons/projectile.rs` | Rockets ending at walls, striking players but never their thrower, grenades bouncing, settling and fusing, expiry |
-| `rl_sim/tests/combat.rs` | Bullets, armor, swings, rockets, rocket jumps, shelter, deaths and frags, forced and requested respawns, pickups, falls, hazards, thrown-prop kills, the match ending and restarting, bullets shoving props, determinism |
+| `rl_sim/src/weapons/tests.rs` | Grenades primed while held, thrown on release, rolled with secondary, not put away while primed, thrown one at a time, the last one retiring the weapon |
+| `rl_sim/tests/combat.rs` | Bullets, armor, swings, rockets, rocket jumps, shelter, grenades as centred cylinders thrown only on release and rolled along the floor, deaths and frags, forced and requested respawns, pickups, falls, hazards, thrown-prop kills, the match ending and restarting, bullets shoving props, determinism |
 | `rl_sim/tests/real_map.rs` | Every stock map stocked with pickups (`RUSTLIFE_TEST_BSP`) |
 | `rl_client/tests/local_play.rs` | The running client: dummies, pickups, firing and weapon keys (`RUSTLIFE_TEST_GAME_DIR`) |
