@@ -45,7 +45,7 @@ pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use source_formats::props::PropKind;
 pub use sprite::{SpriteAsset, SpriteLoadError, SpriteLoader};
-pub use texture::{VtfLoadError, VtfLoader};
+pub use texture::{TextureDetail, VtfLoadError, VtfLoader};
 pub use vertex_lighting::{VertexLightingAsset, VhvLoadError, VhvLoader};
 
 /// Registers rustlife's asset loaders (VTF textures, VMT materials, BSP
@@ -68,7 +68,9 @@ impl Plugin for SourceLoadersPlugin {
         app.init_asset::<SpriteAsset>();
         let bc = Arc::new(AtomicBool::new(false));
         app.insert_resource(BlockCompression(Arc::clone(&bc)));
-        app.register_asset_loader(VtfLoader { bc });
+        let detail = TextureDetail::default();
+        app.insert_resource(detail.clone());
+        app.register_asset_loader(VtfLoader { bc, detail });
         app.register_asset_loader(VmtLoader);
         app.register_asset_loader(BspLoader);
         app.register_asset_loader(MdlLoader);

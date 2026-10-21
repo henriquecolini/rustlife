@@ -6,7 +6,7 @@
 //! GPUs without BC support, is decoded to RGBA8 with a generated mip chain.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use bevy_asset::io::Reader;
 use bevy_asset::{AssetLoader, LoadContext, RenderAssetUsages};
@@ -28,6 +28,42 @@ pub enum VtfLoadError {
     Decode(#[from] VtfError),
 }
 
+/// How detailed the textures load, shared between the settings and the
+/// loader: textures loaded afterwards drop their largest mips and filter
+/// anisotropically as set here.
+#[derive(Debug, Clone, bevy_ecs::resource::Resource)]
+pub struct TextureDetail {
+    drop_mips: Arc<AtomicU32>,
+    anisotropy: Arc<AtomicU16>,
+}
+
+impl Default for TextureDetail {
+    fn default() -> Self {
+        Self {
+            drop_mips: Arc::new(AtomicU32::new(0)),
+            anisotropy: Arc::new(AtomicU16::new(ANISOTROPY)),
+        }
+    }
+}
+
+impl TextureDetail {
+    /// Sets how many of a texture's largest mips are left out (never its
+    /// last) and the anisotropic filtering, `1..=16`.
+    pub fn set(&self, drop_mips: u32, anisotropy: u16) {
+        self.drop_mips.store(drop_mips, Ordering::Relaxed);
+        self.anisotropy
+            .store(anisotropy.clamp(1, 16), Ordering::Relaxed);
+    }
+
+    fn drop_mips(&self) -> u32 {
+        self.drop_mips.load(Ordering::Relaxed)
+    }
+
+    fn anisotropy(&self) -> u16 {
+        self.anisotropy.load(Ordering::Relaxed)
+    }
+}
+
 /// Loads a `.vtf` file into an [`Image`]: block-compressed when the GPU
 /// samples BC formats (`bc`), else decoded RGBA8.
 #[derive(Default, TypePath)]
@@ -35,6 +71,8 @@ pub struct VtfLoader {
     /// Whether the GPU samples BC1–3 textures: set once the GPU is known,
     /// which is after the loader is registered.
     pub bc: Arc<AtomicBool>,
+    /// How detailed to load.
+    pub detail: TextureDetail,
 }
 
 impl AssetLoader for VtfLoader {
@@ -53,9 +91,9 @@ impl AssetLoader for VtfLoader {
         if self.bc.load(Ordering::Relaxed)
             && let Some(texture) = vtf::compressed(&bytes)
         {
-            return Ok(image_from_blocks(texture));
+            return Ok(image_from_blocks(texture, &self.detail));
         }
-        Ok(image_from_decoded(vtf::decode(&bytes)?))
+        Ok(image_from_decoded(vtf::decode(&bytes)?, &self.detail))
     }
 
     fn extensions(&self) -> &[&str] {
@@ -75,7 +113,7 @@ const ANISOTROPY: u16 = 8;
 /// (a wall tiles its texture many times), so the sampler must *repeat*: Bevy's
 /// default clamps to the edge, which smears each texture's border pixels across
 /// whole surfaces.
-fn image_from_decoded(texture: DecodedTexture) -> Image {
+fn image_from_decoded(texture: DecodedTexture, detail: &TextureDetail) -> Image {
     let format = if texture.is_normal_map {
         TextureFormat::Rgba8Unorm
     } else {
@@ -83,6 +121,8 @@ fn image_from_decoded(texture: DecodedTexture) -> Image {
     };
     let (width, height) = (texture.width, texture.height);
     let (chain, levels) = mip_chain(width, height, &texture.rgba8);
+    let (width, height, chain, levels) =
+        drop_levels(width, height, chain, levels, detail.drop_mips());
 
     // `Image::new` validates the data against a single mip level, so build with
     // the base level and then swap in the whole chain.
@@ -93,20 +133,20 @@ fn image_from_decoded(texture: DecodedTexture) -> Image {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        texture.rgba8,
+        vec![0; width as usize * height as usize * 4],
         format,
         // Drop the CPU copy after upload; world textures are not read back.
         RenderAssetUsages::RENDER_WORLD,
     );
     image.data = Some(chain);
     image.texture_descriptor.mip_level_count = levels;
-    image.sampler = tiling_sampler();
+    image.sampler = tiling_sampler(detail.anisotropy());
     image
 }
 
 /// Wraps a texture's stored blocks in an [`Image`] of the matching BC
 /// format, with the file's mip chain and a tiling sampler.
-fn image_from_blocks(texture: CompressedTexture) -> Image {
+fn image_from_blocks(mut texture: CompressedTexture, detail: &TextureDetail) -> Image {
     let format = match (texture.format, texture.is_normal_map) {
         (BlockFormat::Dxt1, false) => TextureFormat::Bc1RgbaUnormSrgb,
         (BlockFormat::Dxt1, true) => TextureFormat::Bc1RgbaUnorm,
@@ -115,6 +155,15 @@ fn image_from_blocks(texture: CompressedTexture) -> Image {
         (BlockFormat::Dxt5, false) => TextureFormat::Bc3RgbaUnormSrgb,
         (BlockFormat::Dxt5, true) => TextureFormat::Bc3RgbaUnorm,
     };
+    // BC textures keep whole blocks: never go below 4×4 pixels.
+    for _ in 0..detail.drop_mips() {
+        if texture.mips.len() < 2 || texture.width < 8 || texture.height < 8 {
+            break;
+        }
+        texture.mips.remove(0);
+        texture.width /= 2;
+        texture.height /= 2;
+    }
     let levels = texture.mips.len() as u32;
     let mut image = Image::new_uninit(
         Extent3d {
@@ -128,20 +177,41 @@ fn image_from_blocks(texture: CompressedTexture) -> Image {
     );
     image.data = Some(texture.mips.concat());
     image.texture_descriptor.mip_level_count = levels;
-    image.sampler = tiling_sampler();
+    image.sampler = tiling_sampler(detail.anisotropy());
     image
 }
 
 /// A repeating, anisotropic sampler: world textures tile and are seen at
 /// grazing angles.
-fn tiling_sampler() -> ImageSampler {
+fn tiling_sampler(anisotropy: u16) -> ImageSampler {
     ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::Repeat,
         address_mode_v: ImageAddressMode::Repeat,
         address_mode_w: ImageAddressMode::Repeat,
-        anisotropy_clamp: ANISOTROPY,
+        anisotropy_clamp: anisotropy,
         ..ImageSamplerDescriptor::linear()
     })
+}
+
+/// Leaves out the first `drop` levels of a mip `chain` (never the last).
+fn drop_levels(
+    mut width: u32,
+    mut height: u32,
+    chain: Vec<u8>,
+    mut levels: u32,
+    drop: u32,
+) -> (u32, u32, Vec<u8>, u32) {
+    let mut start = 0;
+    for _ in 0..drop {
+        if levels < 2 {
+            break;
+        }
+        start += width as usize * height as usize * 4;
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        levels -= 1;
+    }
+    (width, height, chain[start..].to_vec(), levels)
 }
 
 /// Builds a complete mip chain (base level first) for tightly packed RGBA8
@@ -197,7 +267,7 @@ mod tests {
             rgba8: vec![0u8; 2 * 2 * 4],
             is_normal_map: false,
         };
-        let image = image_from_decoded(decoded);
+        let image = image_from_decoded(decoded, &TextureDetail::default());
         assert_eq!(image.width(), 2);
         assert_eq!(image.height(), 2);
         assert_eq!(
@@ -238,7 +308,7 @@ mod tests {
             rgba8: vec![0u8; 4 * 4 * 4],
             is_normal_map: false,
         };
-        let image = image_from_decoded(decoded);
+        let image = image_from_decoded(decoded, &TextureDetail::default());
         assert_eq!(image.texture_descriptor.mip_level_count, 3);
         let ImageSampler::Descriptor(sampler) = &image.sampler else {
             panic!("expected an explicit sampler");
@@ -247,15 +317,68 @@ mod tests {
         assert_eq!(sampler.address_mode_v, ImageAddressMode::Repeat);
     }
 
-    #[test]
-    fn blocks_become_a_bc_image_with_their_mips() {
-        let image = image_from_blocks(CompressedTexture {
+    fn blocks() -> CompressedTexture {
+        CompressedTexture {
             format: BlockFormat::Dxt5,
             width: 8,
             height: 4,
             mips: vec![vec![0; 2 * 16], vec![0; 16], vec![0; 16], vec![0; 16]],
             is_normal_map: false,
-        });
+        }
+    }
+
+    #[test]
+    fn lower_detail_drops_the_largest_mips_but_keeps_whole_blocks() {
+        let detail = TextureDetail::default();
+        detail.set(2, 4);
+        // 8x4 cannot halve into less than a block.
+        let image = image_from_blocks(blocks(), &detail);
+        assert_eq!((image.width(), image.height()), (8, 4));
+        let mut big = blocks();
+        big.width = 32;
+        big.height = 32;
+        big.mips = vec![
+            vec![0; 64 * 16],
+            vec![0; 16 * 16],
+            vec![0; 4 * 16],
+            vec![0; 16],
+        ];
+        let image = image_from_blocks(big, &detail);
+        assert_eq!((image.width(), image.height()), (8, 8));
+        assert_eq!(image.texture_descriptor.mip_level_count, 2);
+        let ImageSampler::Descriptor(sampler) = &image.sampler else {
+            panic!("expected an explicit sampler");
+        };
+        assert_eq!(sampler.anisotropy_clamp, 4);
+    }
+
+    #[test]
+    fn decoded_textures_drop_mips_and_keep_the_last() {
+        let detail = TextureDetail::default();
+        detail.set(1, 8);
+        let decoded = DecodedTexture {
+            width: 8,
+            height: 8,
+            rgba8: vec![7u8; 8 * 8 * 4],
+            is_normal_map: false,
+        };
+        let image = image_from_decoded(decoded, &detail);
+        assert_eq!((image.width(), image.height()), (4, 4));
+        assert_eq!(image.texture_descriptor.mip_level_count, 3);
+        detail.set(9, 8);
+        let tiny = DecodedTexture {
+            width: 2,
+            height: 2,
+            rgba8: vec![7u8; 16],
+            is_normal_map: false,
+        };
+        let image = image_from_decoded(tiny, &detail);
+        assert_eq!(image.texture_descriptor.mip_level_count, 1);
+    }
+
+    #[test]
+    fn blocks_become_a_bc_image_with_their_mips() {
+        let image = image_from_blocks(blocks(), &TextureDetail::default());
         assert_eq!(
             image.texture_descriptor.format,
             TextureFormat::Bc3RgbaUnormSrgb
@@ -272,7 +395,7 @@ mod tests {
             rgba8: vec![0u8; 4],
             is_normal_map: true,
         };
-        let image = image_from_decoded(decoded);
+        let image = image_from_decoded(decoded, &TextureDetail::default());
         assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba8Unorm);
     }
 }

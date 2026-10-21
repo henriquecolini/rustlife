@@ -325,7 +325,11 @@ fn video_rows(rows: &mut ChildSpawnerCommands, ctx: &Ctx) {
     ));
     rows.spawn((
         Setting::Textures,
-        choice(ctx.fonts, "Texture quality", quality_choice(video.textures)),
+        choice(
+            ctx.fonts,
+            "Texture quality (next map)",
+            quality_choice(video.textures),
+        ),
     ));
     rows.spawn((
         Setting::Shadows,

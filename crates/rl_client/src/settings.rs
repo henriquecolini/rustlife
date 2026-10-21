@@ -310,7 +310,14 @@ impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Bindings>().add_systems(
             Update,
-            (rebuild_bindings, apply_window, apply_camera, save_later).chain(),
+            (
+                rebuild_bindings,
+                apply_window,
+                apply_camera,
+                apply_texture_detail,
+                save_later,
+            )
+                .chain(),
         );
     }
 }
@@ -335,6 +342,27 @@ fn apply_window(settings: Res<Settings>, mut windows: Query<&mut Window, With<Pr
         window
             .resolution
             .set(video.resolution.0 as f32, video.resolution.1 as f32);
+    }
+}
+
+/// Mips left out and anisotropic filtering for a texture quality: textures
+/// that load afterwards (the next map's) use them.
+#[must_use]
+pub fn texture_detail(quality: rl_config::Quality) -> (u32, u16) {
+    match quality {
+        rl_config::Quality::Low => (2, 1),
+        rl_config::Quality::Medium => (1, 4),
+        rl_config::Quality::High => (0, 8),
+        rl_config::Quality::Ultra => (0, 16),
+    }
+}
+
+fn apply_texture_detail(settings: Res<Settings>, detail: Option<Res<rl_assets::TextureDetail>>) {
+    if let Some(detail) = detail
+        && settings.is_changed()
+    {
+        let (drop, anisotropy) = texture_detail(settings.video.textures);
+        detail.set(drop, anisotropy);
     }
 }
 
@@ -474,5 +502,23 @@ mod tests {
             WindowMode::BorderlessFullscreen(_)
         ));
         assert_eq!(msaa(&video), Msaa::Off);
+    }
+}
+
+#[cfg(test)]
+mod texture_detail_tests {
+    use super::*;
+
+    #[test]
+    fn lower_texture_quality_drops_more_mips_and_filters_less() {
+        let levels: Vec<_> = rl_config::Quality::ALL
+            .iter()
+            .map(|&q| texture_detail(q))
+            .collect();
+        assert!(
+            levels
+                .windows(2)
+                .all(|w| w[0].0 >= w[1].0 && w[0].1 <= w[1].1)
+        );
     }
 }
