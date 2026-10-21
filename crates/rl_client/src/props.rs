@@ -34,6 +34,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use rl_assets::coords;
@@ -46,7 +47,9 @@ use crate::AppState;
 use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::player::{LocalPlayer, Movement, ViewAngles};
-use crate::world::{MapHandle, MapScoped, MaterialMaps, Placeholder, Surface, VertexLit};
+use crate::world::{
+    MapHandle, MapScoped, MaterialMaps, Placeholder, SKY_LAYER, Surface, VertexLit,
+};
 
 /// A moving prop is relit once it has moved this far since it was last
 /// lit, metres (16 units)...
@@ -214,7 +217,7 @@ fn spawn_props(
             .entry(prop.model.clone())
             .or_insert_with(|| asset_server.load(prop.model.clone()))
             .clone();
-        commands.spawn((
+        let mut entity = commands.spawn((
             Prop {
                 model,
                 skin: prop.skin,
@@ -231,6 +234,9 @@ fn spawn_props(
             Visibility::default(),
             MapScoped,
         ));
+        if prop.skybox {
+            entity.insert(RenderLayers::layer(SKY_LAYER));
+        }
     }
     info!(
         "placed {} props using {} models",
@@ -577,6 +583,7 @@ mod tests {
                 [0.0; 3],
                 PropKind::Static,
             ),
+            skybox: false,
         };
         let transform = transform_of(&prop);
         assert_eq!(transform.translation, prop.translation);

@@ -25,12 +25,14 @@ use crate::browser::BrowserPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::effects::EffectsPlugin;
+use crate::fog::FogPlugin;
 use crate::hud::HudPlugin;
 use crate::movers::MoversPlugin;
 use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
 use crate::script::InputScript;
+use crate::sky::SkyPlugin;
 use crate::viewmodel::ViewModelPlugin;
 use crate::world::WorldPlugin;
 
@@ -41,6 +43,7 @@ pub mod browser;
 pub mod camera;
 pub mod capture;
 pub mod effects;
+pub mod fog;
 pub mod hud;
 pub mod input;
 pub mod movers;
@@ -48,6 +51,7 @@ pub mod net;
 pub mod player;
 pub mod props;
 pub mod script;
+pub mod sky;
 pub mod viewmodel;
 pub mod world;
 
@@ -91,6 +95,8 @@ pub struct ClientOptions {
     /// Hosting or joining, the player's name, simulated network trouble,
     /// training dummies.
     pub net: NetSettings,
+    /// Log the frame rate and frame time every second (a developer aid).
+    pub log_fps: bool,
 }
 
 /// Builds and runs the client over the content mounted in `vfs`.
@@ -139,9 +145,17 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         SoundPlugin,
         ModelAnimationPlugin,
         ViewModelPlugin,
+        SkyPlugin,
+        FogPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);
+    }
+    if options.log_fps {
+        app.add_plugins((
+            bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
+            bevy::diagnostic::LogDiagnosticsPlugin::default(),
+        ));
     }
     if let Some(capture) = options.capture {
         app.add_plugins(CapturePlugin(capture));

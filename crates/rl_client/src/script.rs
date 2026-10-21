@@ -16,7 +16,8 @@
 //!   way off, facing them — and hold primary fire at them for a while;
 //! - **visit**: go and look at the pickup nearest the player;
 //! - **use**: go to the nearest of the map's movers of a class (a button,
-//!   a door), look at it and press use once.
+//!   a door), look at it and press use once;
+//! - **teleport**: stand at a point, held there, looking a given way.
 //!
 //! Only walking and pressing fire are plain input; the other steps move
 //! the player or hand them a weapon, which only a game this client hosts
@@ -66,6 +67,9 @@ pub struct InputScript {
     pub visit_at: Option<f32>,
     /// From `.0`, go to the nearest mover of class `.1` and use it.
     pub use_mover: Option<(f32, String)>,
+    /// Stand at this point (Source space), held there every tick, looking
+    /// at `(pitch, yaw)`.
+    pub teleport: Option<([f32; 3], (f32, f32))>,
     progress: Progress,
 }
 
@@ -100,6 +104,13 @@ impl InputScript {
     #[must_use]
     pub fn with_use(mut self, use_mover: Option<(f32, String)>) -> Self {
         self.use_mover = use_mover;
+        self
+    }
+
+    /// This script, also standing at a point looking a given way.
+    #[must_use]
+    pub fn with_teleport(mut self, teleport: Option<([f32; 3], (f32, f32))>) -> Self {
+        self.teleport = teleport;
         self
     }
 
@@ -185,6 +196,11 @@ pub(crate) fn apply(
         if let Some(name) = &script.weapon {
             cmd.select = arm(player, sim, name);
         }
+    }
+    if let Some((at, look)) = script.teleport {
+        // Held there every tick, so nothing (gravity, water) moves the view.
+        sim.teleport_player(player, Vec3::from(at));
+        (cmd.pitch, cmd.yaw) = look;
     }
     if script.grab_at.is_some_and(|at| now >= at) {
         grab(script, player, sim, cmd);

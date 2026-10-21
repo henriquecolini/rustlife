@@ -29,6 +29,10 @@ use source_fs::content::mount_game;
     version,
     about = "rustlife — an original arena FPS that loads your Source content"
 )]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a command-line switch of its own"
+)]
 struct Cli {
     #[command(flatten)]
     content: ContentArgs,
@@ -115,10 +119,19 @@ struct Cli {
     #[arg(long, value_name = "CLASS")]
     use_mover: Option<String>,
 
+    /// Stand at this point (Source units) from the start, looking at this
+    /// pitch and yaw (degrees), for scripted captures.
+    #[arg(long, value_name = "X,Y,Z[,PITCH,YAW]", value_parser = parse_teleport)]
+    teleport: Option<([f32; 3], (f32, f32))>,
+
     /// Seconds to wait before a scripted capture's shot, after whatever
     /// else it does (e.g. for a door to open).
     #[arg(long, value_name = "SECS", default_value_t = 0.0)]
     wait: f32,
+
+    /// Log the frame rate and frame time every second.
+    #[arg(long)]
+    log_fps: bool,
 
     /// Render non-interactively, save one screenshot to this PNG path, and exit.
     #[arg(long, value_name = "PNG")]
@@ -134,6 +147,23 @@ const VISIT_SECS: f32 = 0.5;
 /// Seconds after a scripted throw before the shot, with the prop in flight
 /// (props are drawn a tenth of a second in the past).
 const THROW_SHOT_SECS: f32 = 0.35;
+
+/// `X,Y,Z` or `X,Y,Z,PITCH,YAW`.
+fn parse_teleport(text: &str) -> Result<([f32; 3], (f32, f32)), String> {
+    let numbers = text
+        .split(',')
+        .map(|part| {
+            part.trim()
+                .parse::<f32>()
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<f32>, String>>()?;
+    match numbers[..] {
+        [x, y, z] => Ok(([x, y, z], (0.0, 0.0))),
+        [x, y, z, pitch, yaw] => Ok(([x, y, z], (pitch, yaw))),
+        _ => Err("expected X,Y,Z or X,Y,Z,PITCH,YAW".to_owned()),
+    }
+}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -152,6 +182,7 @@ fn main() -> Result<()> {
         || shoot.is_some()
         || visit.is_some()
         || use_mover.is_some()
+        || cli.teleport.is_some()
         || cli.weapon.is_some();
     let script = scripted.then(|| {
         InputScript::new(walk, grab_at, fire_at)
@@ -159,6 +190,7 @@ fn main() -> Result<()> {
             .with_shooting(shoot)
             .with_visit(visit)
             .with_use(use_mover.clone())
+            .with_teleport(cli.teleport)
     });
     let shot_secs = match (fire_at, grab_at, shoot) {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,
@@ -195,6 +227,7 @@ fn main() -> Result<()> {
             script,
             data,
             net,
+            log_fps: cli.log_fps,
         },
     );
     Ok(())

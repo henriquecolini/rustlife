@@ -179,11 +179,11 @@ fn follow_camera(
     }
 }
 
-/// Meshes just spawned and not yet given a layer.
-type NewMesh = (Added<Mesh3d>, Without<RenderLayers>);
+/// Meshes just spawned.
+type NewMesh = (Added<Mesh3d>, Without<NoFrustumCulling>);
 
-/// Puts the view model's meshes on the view model camera's layer as they
-/// are spawned, and keeps them from being culled: a view model's meshes
+/// Keeps the view model's meshes (which take its layer from their root,
+/// see `world`) from being culled: a view model's meshes
 /// rest well above the eyes (Source models them on a standing skeleton)
 /// and only its animation brings them into view, while culling goes by
 /// the rest pose's bounds.
@@ -194,9 +194,7 @@ fn layer_meshes(
 ) {
     for (entity, parent) in &meshes {
         if views.contains(parent.parent()) {
-            commands
-                .entity(entity)
-                .insert((RenderLayers::layer(VIEW_LAYER), NoFrustumCulling));
+            commands.entity(entity).insert(NoFrustumCulling);
         }
     }
 }

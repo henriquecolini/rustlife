@@ -1,10 +1,16 @@
 //! Loading a map and placing its geometry in the scene.
 //!
 //! The map's pakfile is mounted, its geometry spawned as one entity per
-//! material, and each surface's `StandardMaterial` is built from the resolved
+//! material and cube of the map, and each surface's `StandardMaterial` is
+//! built from the resolved
 //! VMT ([`rl_assets::SourceMaterial`]) as it streams in. World surfaces are lit
 //! by the map's baked lightmap; models (see [`crate::props`]) by its ambient
 //! cubes, through an irradiance volume that leaves lightmapped surfaces alone.
+//!
+//! Each frame, only the surfaces in clusters the camera's cluster can see
+//! (the map's PVS) are drawn (`cull_by_visibility`). Surfaces and props of
+//! the 3D skybox are drawn by the sky camera alone (`SKY_LAYER`, see
+//! [`crate::sky`]); a model's meshes take its root's render layers.
 //!
 //! Every root entity a map creates carries `MapScoped`, so leaving the map
 //! tears all of it down in one place.
@@ -12,6 +18,7 @@
 use std::collections::HashMap;
 
 use bevy::camera::Exposure;
+use bevy::camera::visibility::RenderLayers;
 use bevy::light::{IrradianceVolume, Skybox};
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
@@ -20,6 +27,13 @@ use source_fs::{MountOrigin, Vfs, ZipMount};
 
 use crate::camera::FlyCam;
 use crate::{AppState, CurrentMap, GameVfs};
+
+/// The render layer of the 3D skybox, which only the sky camera sees.
+pub(crate) const SKY_LAYER: usize = 2;
+
+/// The visibility clusters a world surface lies in.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct Clusters(Vec<u16>);
 
 /// Handle to the map currently being loaded.
 #[derive(Resource)]
@@ -116,7 +130,12 @@ impl Plugin for WorldPlugin {
             .add_systems(OnExit(AppState::InGame), unload_map)
             .add_systems(
                 Update,
-                ((spawn_when_loaded, resolve_materials).chain(), open_browser)
+                (
+                    (spawn_when_loaded, resolve_materials).chain(),
+                    open_browser,
+                    cull_by_visibility,
+                    inherit_render_layers,
+                )
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -236,6 +255,71 @@ fn unload_map(
     );
 }
 
+/// The camera's cluster when the surfaces were last shown or hidden.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum LastCluster {
+    /// Not looked at yet.
+    #[default]
+    Unknown,
+    /// In this cluster, or outside the map.
+    Known(Option<u16>),
+}
+
+/// Meshes just spawned without render layers of their own.
+type Unlayered = (Added<Mesh3d>, Without<RenderLayers>);
+
+/// Shows only the surfaces in clusters the camera's cluster may see, as
+/// the camera moves between clusters (and new surfaces as they appear).
+/// From outside the map — a noclip camera in the void — everything shows.
+fn cull_by_visibility(
+    handle: Option<Res<MapHandle>>,
+    maps: Res<Assets<MapAsset>>,
+    camera: Query<&GlobalTransform, With<FlyCam>>,
+    mut last: Local<LastCluster>,
+    mut surfaces: Query<(Ref<Clusters>, &mut Visibility)>,
+) {
+    let Some(visibility) = handle
+        .and_then(|handle| maps.get(&handle.0))
+        .and_then(|map| map.visibility.clone())
+    else {
+        return;
+    };
+    let Ok(camera) = camera.single() else {
+        return;
+    };
+    let eye = rl_assets::coords::to_source_position(camera.translation());
+    let cluster = visibility.cluster_at(eye);
+    let moved = *last != LastCluster::Known(cluster);
+    *last = LastCluster::Known(cluster);
+    for (clusters, mut shown) in &mut surfaces {
+        if !moved && !clusters.is_added() {
+            continue;
+        }
+        let seen =
+            cluster.is_none_or(|from| clusters.0.iter().any(|&to| visibility.sees(from, to)));
+        shown.set_if_neq(if seen {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
+/// Gives each new mesh its parent's render layers, which Bevy does not
+/// pass down: the meshes of a skybox prop or of the view model draw on its
+/// root's layer.
+fn inherit_render_layers(
+    mut commands: Commands,
+    meshes: Query<(Entity, &ChildOf), Unlayered>,
+    parents: Query<&RenderLayers>,
+) {
+    for (entity, parent) in &meshes {
+        if let Ok(layers) = parents.get(parent.parent()) {
+            commands.entity(entity).insert(layers.clone());
+        }
+    }
+}
+
 /// `M` leaves the map for the map browser.
 fn open_browser(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<AppState>>) {
     if keys.just_pressed(KeyCode::KeyM) {
@@ -266,7 +350,13 @@ fn spawn_when_loaded(
     for mesh in &map.meshes {
         material_maps.request(&mesh.material, &asset_server);
         let surface = spawn_surface(&mut commands, mesh, map, &placeholder);
-        commands.entity(surface).insert(MapScoped);
+        let mut surface = commands.entity(surface);
+        surface.insert(MapScoped);
+        if mesh.skybox {
+            surface.insert(RenderLayers::layer(SKY_LAYER));
+        } else if !mesh.clusters.is_empty() {
+            surface.insert(Clusters(mesh.clusters.clone()));
+        }
     }
     // Brush entities: a placed root per entity, its surfaces as children.
     for entity in &map.brush_entities {
@@ -446,6 +536,27 @@ fn resolve_materials(
     }
 }
 
+/// How opaque a water surface is drawn: what lies below shows through
+/// faintly, tinted by the water's fog.
+const WATER_OPACITY: f32 = 0.75;
+
+/// A water surface: its fog colour, mostly opaque, unlit (water has no
+/// lightmap; its colour is the light it carries), and its base texture —
+/// the "sludge" some waters float — over that if it has one. Source's
+/// refraction and reflection are left out.
+fn water_from(source: &SourceMaterial, fog: rl_assets::material::WaterFog) -> StandardMaterial {
+    let [red, green, blue] = fog.color;
+    StandardMaterial {
+        base_color: Color::linear_rgba(red, green, blue, WATER_OPACITY),
+        base_color_texture: source.base_color.clone(),
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    }
+}
+
 /// The second layer of a `WorldVertexTransition` surface: `$basetexture2`,
 /// alpha-blended so the mesh's vertex alpha (the mapper's painted blend)
 /// decides how much of it shows over the base layer underneath.
@@ -467,6 +578,9 @@ fn blend_layer(texture: Handle<Image>) -> StandardMaterial {
 
 /// Builds a `StandardMaterial` from a resolved [`SourceMaterial`].
 fn standard_from(source: &SourceMaterial) -> StandardMaterial {
+    if let Some(fog) = source.water_fog {
+        return water_from(source, fog);
+    }
     let alpha_mode = if source.translucent {
         AlphaMode::Blend
     } else if let Some(cutoff) = source.alpha_test {
