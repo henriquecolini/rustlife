@@ -184,7 +184,7 @@ fn draw_players(
                 });
                 shown.push(view.0);
             }
-            None => commands.entity(entity).despawn(),
+            None => commands.entity(entity).try_despawn(),
         }
     }
     let player_models = &gameplay.0.player.models;
@@ -474,7 +474,7 @@ fn draw_projectiles(
                 *transform = projectile_transform(projectile.position, projectile.velocity);
                 shown.push(view.0);
             }
-            None => commands.entity(entity).despawn(),
+            None => commands.entity(entity).try_despawn(),
         }
     }
     let arsenal = sim.arsenal();
@@ -526,7 +526,7 @@ fn draw_grenades(
                 *transform = transform_of(grenade);
                 shown.push(view.0);
             }
-            None => commands.entity(entity).despawn(),
+            None => commands.entity(entity).try_despawn(),
         }
     }
     let arsenal = sim.arsenal();

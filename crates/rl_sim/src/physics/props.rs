@@ -87,12 +87,29 @@ pub struct Breakable {
     pub explosive: f32,
     /// Breaking it sets off an explosion of this damage and radius (units).
     pub explosion: Option<(f32, f32)>,
-    /// The models it breaks into, for the client to scatter.
+    /// The models it breaks into, each drawn in the prop's own frame so it
+    /// lands where its part of the prop was, with how long it lingers (`0`
+    /// for the client's choice) and how hard it is thrown out (`0` for an
+    /// ordinary break's); empty if the model names none.
+    pub pieces: Vec<GibPiece>,
+    /// Other models to scatter, from its class's gib list, when it has no
+    /// pieces of its own.
     pub gibs: Vec<String>,
     /// How many gibs it breaks into.
     pub gib_count: u32,
     /// Seconds after breaking that it comes back where it was, if it does.
     pub respawn: Option<f32>,
+}
+
+/// One piece a prop breaks into.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GibPiece {
+    /// Its model (`models/props_junk/wood_crate001a_chunk01.mdl`).
+    pub model: String,
+    /// Seconds it lingers before it fades, or `0`.
+    pub fade: f32,
+    /// How hard it is thrown out, or `0`.
+    pub burst: f32,
 }
 
 /// The physics description of `placement`, given its model's collision

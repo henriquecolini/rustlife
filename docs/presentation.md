@@ -135,15 +135,35 @@ Combat effects draw the game's own sprite materials, named in
 ### Explosions
 
 An explosion uses no mounted-game content. `rl_client::particles` makes the
-textures itself (a ragged puff, a bright dot, a thin ring) and draws a blast
-as quads facing the camera whose size and colour change over their life: a
-white flash, an expanding shockwave ring, a fireball of overlapping puffs
-and sparks that fly, fall and bounce off the map are added to what is
-behind them; smoke is blended over it and rises as it thins. The view also
-shakes for anyone near, fading to nothing at three times the blast's
-radius. `effects.ron`'s `explosion` sets the fireball's size (a share of the
-radius) and lift, how many puffs of each kind, how long fire and smoke
-last, and how hard the shake is. At most 700 particles live at once.
+textures itself (billowing puffs with swirling detail, a bright dot, a
+streak, a thin ring) and draws a blast as quads facing the camera whose size
+and colour change over their life along a three-stop gradient: a white-hot
+flash and an expanding shockwave ring; a fireball of puffs flung out hard
+that brake quickly, climb and cool from yellow-white through orange to
+soot; black smoke boiling up behind; dust rolling out along the floor when
+there is one close below; sparks as streaks along their motion that bounce
+off the map; and embers that drift. Fire, sparks, embers, flash and ring are
+added to what is behind them, smoke and dust blended over it. A blast
+centred on the floor is lifted so the floor does not cut its fireball in
+half; one on a wall or in mid-air is centred where it is.
+
+Anyone near a blast also gets the view shaken (fading to nothing at three
+times its radius) and, very near, a brief wash of white. A barrel that is
+on fire gives off flames, smoke and embers that grow fiercer as its fuse
+burns down. `effects.ron`'s `explosion` sets the fireball's size (a share
+of the radius) and lift, how many puffs of each kind, how long fire and
+smoke last, and how hard the shake is. At most 900 particles live at once.
+
+### Pieces
+
+A breakable prop does not just vanish. Its `.phy` lists, in `break` lines,
+the models it breaks into (a crate's wooden chunks, a barrel's sheet-metal
+pieces, a bottle's glass shards). Those pieces are modelled in the prop's own
+frame, so they are spawned at its origin with its orientation, where they
+fit together as the whole did, and then fly apart with the prop's own
+velocity plus a burst (harder for a blast), tumble, bounce off the map and
+fade after the time the model gives. Props whose model names no pieces
+scatter their class's generic gibs (`scripts/propdata.txt`) instead.
 
 `rl_assets::SpriteLoader` loads a sprite material with every frame of its
 texture, laid side by side in one image, and whether it adds its colour to

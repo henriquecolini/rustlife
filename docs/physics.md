@@ -148,7 +148,7 @@ barrel has a fuse (`breakables.barrels` in `physics.ron`):
 |--------------------|--------|
 | shot once | primed; nothing shows |
 | shot while primed | set on fire: it explodes after `burn_seconds` |
-| shot while burning | explodes at once |
+| shot while burning, or hit with a crowbar | explodes at once |
 | a blast of `instant_damage` or more at the barrel | explodes at once |
 | a weaker blast | set on fire, with a fuse between `longest_fuse` (barely reached) and `shortest_fuse` (just short of instant); a burning barrel keeps the sooner fuse |
 | thrown or punted with the Manipulator | explodes on the first thing it touches, for `launched_seconds` |

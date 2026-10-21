@@ -552,6 +552,7 @@ fn breakable_box(
             explosive: 1.0,
             explosion,
             gibs: vec!["models/gibs/metal_gib1.mdl".to_owned()],
+            pieces: Vec::new(),
             gib_count: 4,
             respawn: None,
         }),
@@ -628,6 +629,26 @@ fn barrel_arena(data: &GameData) -> (Arena, BodyId) {
     )));
     arena.arm("magnum");
     (arena, barrel)
+}
+
+#[test]
+fn a_swing_of_the_crowbar_sets_a_barrel_off_at_once() {
+    let data = data();
+    let mut arena = Arena::new(&data, 600.0);
+    let barrel = arena.sim.add_prop(&heavy(breakable_box(
+        &data,
+        Vec3::new(50.0, 0.0, 0.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    )));
+    arena.arm("bar");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(60));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, barrel);
+    assert!(broke[0].exploded);
 }
 
 #[test]

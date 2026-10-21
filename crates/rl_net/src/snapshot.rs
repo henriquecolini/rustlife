@@ -580,6 +580,7 @@ mod tests {
                 explosive: 1.0,
                 explosion: None,
                 gibs: Vec::new(),
+                pieces: Vec::new(),
                 gib_count: 0,
                 respawn: None,
             }),

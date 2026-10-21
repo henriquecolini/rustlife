@@ -72,7 +72,8 @@ Physics(
         impact: (report_speed: 120.0, min_energy: 250.0, damage_per_joule: 0.04, scrape_speed: 70.0),
         // Explosive barrels do not break from bullets or knocks. A bullet
         // primes one, a second sets it on fire (it explodes burn_seconds
-        // later), a bullet into a burning one sets it off at once. A blast
+        // later), a bullet into a burning one, or a swing of a crowbar, sets it off at
+        // once. A blast
         // of at least instant_damage at the barrel sets it off; a weaker
         // one sets it on fire with a fuse that is shorter the harder the
         // blast. One thrown or punted with the gravity gun explodes on the

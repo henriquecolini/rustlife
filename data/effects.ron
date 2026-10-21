@@ -32,11 +32,11 @@ Effects(
     explosion: (
         size_per_radius: 0.8,
         rise: 0.35,
-        fireballs: 9,
-        smoke: 12,
-        sparks: 28,
-        duration: 0.8,
-        smoke_duration: 3.5,
-        shake: 0.7,
+        fireballs: 14,
+        smoke: 16,
+        sparks: 44,
+        duration: 0.7,
+        smoke_duration: 4.5,
+        shake: 0.85,
     ),
 )

@@ -341,6 +341,12 @@ fn every_stock_map_loads_as_a_level() {
             breakables.len()
         );
         assert!(!breakables.is_empty(), "{map} has props that break");
+        let pieces = breakables
+            .iter()
+            .filter(|breakable| !breakable.pieces.is_empty())
+            .count();
+        eprintln!("{map}: {pieces} of them break into their own pieces");
+        assert!(pieces > 0, "{map}: breakables break into model pieces");
         if map == "dm_lockdown" {
             assert!(explosive > 0, "dm_lockdown has explosive barrels");
         }

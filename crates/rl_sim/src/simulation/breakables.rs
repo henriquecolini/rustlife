@@ -12,8 +12,9 @@
 //! Explosive props are the exception to health: bullets and knocks do not
 //! break them. They go through a [`Fuse`] instead: a first bullet primes
 //! one, a second sets it on fire, a bullet into a burning one sets it off at
-//! once, a blast near one sets it off or on fire, and one thrown with the
-//! gravity gun goes off on the first thing it touches. A prop that is
+//! once, a swing of a club sets it off at once, a blast near one sets it
+//! off or on fire, and one thrown with the gravity gun goes off on the
+//! first thing it touches. A prop that is
 //! merely pushed about, or falls, never explodes.
 //!
 //! Whoever broke a prop is credited with its blast, and with the breaking of
@@ -22,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use rl_data::ExplosionConfig;
 use serde::{Deserialize, Serialize};
 
@@ -109,6 +110,13 @@ pub struct PropBreak {
     pub body: BodyId,
     /// Where it was (its centre of mass).
     pub position: Vec3,
+    /// Where its model's origin was, and how it was turned: its pieces
+    /// appear here, so they fit together as the model did.
+    pub origin: Vec3,
+    /// See `origin`.
+    pub rotation: Quat,
+    /// How it was moving, units/s: its pieces inherit it.
+    pub velocity: Vec3,
     /// It exploded as it broke.
     pub exploded: bool,
 }
@@ -386,7 +394,9 @@ impl Simulation {
             (Blow::Bullet, Fuse::Primed) => Fuse::Burning {
                 left: config.burn_seconds,
             },
-            (Blow::Bullet, Fuse::Burning { .. }) => return self.explode_prop(hit, events),
+            (Blow::Bullet, Fuse::Burning { .. }) | (Blow::Club, _) => {
+                return self.explode_prop(hit, events);
+            }
             (Blow::Explosion, _) if hit.amount >= config.instant_damage => {
                 return self.explode_prop(hit, events);
             }
@@ -465,6 +475,11 @@ impl Simulation {
         state.respawn_in = state.spec.respawn;
         let spec = state.spec.clone();
         let position = self.physics.center_of_mass(body).unwrap_or(Vec3::ZERO);
+        let pose = self.physics.pose(body);
+        let velocity = self
+            .physics
+            .velocity(body)
+            .map_or(Vec3::ZERO, |(linear, _)| linear);
         self.physics.break_prop(body);
         for player in self.players.iter_mut().flatten() {
             if player.manipulator.held() == Some(body) {
@@ -474,6 +489,9 @@ impl Simulation {
         events.prop_breaks.push(PropBreak {
             body,
             position,
+            origin: pose.map_or(position, |pose| pose.position),
+            rotation: pose.map_or(Quat::IDENTITY, |pose| pose.rotation),
+            velocity,
             exploded: spec.explosion.is_some(),
         });
         if let Some((damage, radius)) = spec.explosion {

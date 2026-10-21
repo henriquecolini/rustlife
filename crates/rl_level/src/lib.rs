@@ -28,7 +28,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::{GameData, PhysicsConfig};
 use rl_sim::collision::CollisionWorld;
-use rl_sim::physics::{BodyId, Breakable, PropDesc, map_joints, prop_desc};
+use rl_sim::physics::{BodyId, Breakable, GibPiece, PropDesc, map_joints, prop_desc};
 use rl_sim::simulation::{Simulation, Spawn};
 use source_formats::bsp::{self, BspError};
 use source_formats::entities::MapEntity;
@@ -307,8 +307,24 @@ impl PropModel {
             .as_deref()
             .map(|list| propdata.gibs(list).to_vec())
             .unwrap_or_default();
+        let pieces = self
+            .physics
+            .as_ref()
+            .map(|physics| {
+                physics
+                    .breaks
+                    .iter()
+                    .map(|piece| GibPiece {
+                        model: piece.model.clone(),
+                        fade: piece.fade_time,
+                        burst: piece.burst,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Some(Breakable {
             health,
+            pieces,
             bullets: data.bullets,
             club: data.club,
             explosive: data.explosive,

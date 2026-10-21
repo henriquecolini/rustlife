@@ -491,7 +491,7 @@ fn fly_tracers(
     for (entity, mut tracer, mut transform) in &mut tracers {
         tracer.travelled += tracer.speed * time.delta_secs();
         let Some((middle, rotation, length)) = tracer_pose(&tracer, eye) else {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         };
         transform.translation = middle;
@@ -551,7 +551,7 @@ fn expire(mut commands: Commands, time: Res<Time>, effects: Query<(Entity, &Effe
     let now = time.elapsed_secs();
     for (entity, effect) in &effects {
         if now >= effect.until {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

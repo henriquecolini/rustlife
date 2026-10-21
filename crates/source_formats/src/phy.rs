@@ -121,6 +121,22 @@ pub struct PhysicsModel {
     pub solids: Vec<PhysicsSolid>,
     /// Total mass from the `editparams` block, kilograms, when given.
     pub total_mass: Option<f32>,
+    /// The pieces the model breaks into (`break` lines of the text), each
+    /// a model drawn in this model's own frame, so spawning it at the
+    /// broken model's origin puts it where it belongs.
+    pub breaks: Vec<BreakPiece>,
+}
+
+/// One of the models a breakable model breaks into.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BreakPiece {
+    /// The piece's model path, lower case with a `models/` prefix and
+    /// `.mdl` suffix (`models/props_junk/wood_crate001a_chunk01.mdl`).
+    pub model: String,
+    /// Seconds it lingers before fading away (`fadetime`); `0` if unsaid.
+    pub fade_time: f32,
+    /// How hard it is thrown out (`burst`); `0` if unsaid.
+    pub burst: f32,
 }
 
 impl PhysicsModel {
@@ -184,7 +200,7 @@ pub fn decode(bytes: &[u8]) -> Result<PhysicsModel, PhyError> {
     }
 
     let text = bytes.get(at..).unwrap_or_default();
-    let (params, total_mass) = text_params(text, solid_count);
+    let (params, total_mass, breaks) = text_params(text, solid_count);
     let solids = shapes
         .into_iter()
         .zip(params)
@@ -198,6 +214,7 @@ pub fn decode(bytes: &[u8]) -> Result<PhysicsModel, PhyError> {
         checksum,
         solids,
         total_mass,
+        breaks,
     })
 }
 
@@ -313,13 +330,16 @@ fn offset(base: usize, relative: i32, what: &'static str) -> Result<usize, PhyEr
 /// Each solid's text parameters (defaults for any not described) and the
 /// declared total mass. The text section is best-effort: models with a
 /// broken one still collide, with default properties.
-fn text_params(text: &[u8], solid_count: usize) -> (Vec<SolidParams>, Option<f32>) {
+fn text_params(
+    text: &[u8],
+    solid_count: usize,
+) -> (Vec<SolidParams>, Option<f32>, Vec<BreakPiece>) {
     let mut params = vec![SolidParams::default(); solid_count];
     let text = String::from_utf8_lossy(text);
     let text = text.trim_end_matches('\0');
     let Ok(document) = keyvalues::parse(text) else {
         tracing::debug!("unreadable .phy text section; using default properties");
-        return (params, None);
+        return (params, None, Vec::new());
     };
     for pair in document.root.iter() {
         let Some(block) = pair.value.as_block() else {
@@ -340,7 +360,36 @@ fn text_params(text: &[u8], solid_count: usize) -> (Vec<SolidParams>, Option<f32
         .get_block("editparams")
         .and_then(|block| number(block, "totalmass"))
         .filter(|mass| *mass > 0.0);
-    (params, total_mass)
+    let breaks = document
+        .root
+        .iter()
+        .filter(|pair| pair.key.eq_ignore_ascii_case("editparams"))
+        .filter_map(|pair| pair.value.as_block())
+        .chain(std::iter::once(&document.root))
+        .flat_map(Block::iter)
+        .filter(|pair| pair.key.eq_ignore_ascii_case("break"))
+        .filter_map(|pair| break_piece(pair.value.as_block()?))
+        .collect();
+    (params, total_mass, breaks)
+}
+
+/// A `break` line: `"model" "props_junk/crate_chunk01" "fadetime" "20"`.
+fn break_piece(block: &Block) -> Option<BreakPiece> {
+    let name = block
+        .get_str("model")?
+        .trim()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    let name = name.strip_prefix("models/").unwrap_or(&name);
+    let name = name.strip_suffix(".mdl").unwrap_or(name);
+    Some(BreakPiece {
+        model: format!("models/{name}.mdl"),
+        fade_time: number(block, "fadetime").unwrap_or(0.0).max(0.0),
+        burst: number(block, "burst").unwrap_or(0.0).max(0.0),
+    })
 }
 
 fn solid_params(block: &Block) -> SolidParams {
@@ -670,5 +719,34 @@ mod tests {
             model.solids[0].params.surface_prop,
         );
         assert!(pieces > 0 && model.mass() > 0.0);
+    }
+
+    #[test]
+    fn break_lines_name_the_pieces_a_model_breaks_into() {
+        let text = br#"solid { "index" "0" "mass" "30" }
+            editparams {
+                "totalmass" "30"
+                break {"model" "props_junk/Crate_Chunk01" "fadetime" "20"  }
+                break {"model" "models\props_c17\chunk.mdl" "burst" "100" "fadetime" "10" }
+                break {"fadetime" "5"}
+            }"#;
+        let (_, mass, breaks) = text_params(text, 1);
+        assert_eq!(mass, Some(30.0));
+        assert_eq!(
+            breaks,
+            [
+                BreakPiece {
+                    model: "models/props_junk/crate_chunk01.mdl".to_owned(),
+                    fade_time: 20.0,
+                    burst: 0.0,
+                },
+                BreakPiece {
+                    model: "models/props_c17/chunk.mdl".to_owned(),
+                    fade_time: 10.0,
+                    burst: 100.0,
+                },
+            ],
+            "a break without a model is skipped"
+        );
     }
 }

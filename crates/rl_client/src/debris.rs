@@ -19,6 +19,12 @@ use crate::props::{ModelHandles, Moving, spawn_model};
 
 /// Most gibs one break throws.
 const MAX_GIBS: u32 = 10;
+/// Most pieces one break throws: a model's own chunks, all of them.
+const MAX_PIECES: usize = 16;
+/// How much a piece's `burst` adds to its speed, units/s per point.
+const BURST: f32 = 1.5;
+/// How long, seconds, a piece may linger, whatever its model says.
+const PIECE_LIFE: (f32, f32) = (4.0, 30.0);
 /// Gibs thrown by a break whose prop does not say how many.
 const DEFAULT_GIBS: u32 = 4;
 /// Gravity on gibs, units/s².
@@ -64,6 +70,8 @@ struct Gib {
     spin: Vec3,
     /// Seconds since it was thrown.
     age: f32,
+    /// Seconds it lasts, the last [`SHRINK`] of them shrinking away.
+    life: f32,
     /// It has come to rest.
     at_rest: bool,
 }
@@ -84,6 +92,46 @@ fn throw_gibs(
             let Some(spec) = sim.breakable(broke.body) else {
                 continue;
             };
+            let mut rng = Rng::seeded(&[sim.tick_count(), u64::from(broke.body.index() as u32)]);
+            let factor = if broke.exploded { BLAST_FACTOR } else { 1.0 };
+            if !spec.pieces.is_empty() {
+                for piece in spec.pieces.iter().take(MAX_PIECES) {
+                    let (x, y) = rng.in_disc();
+                    let up = 0.3 + 0.7 * rng.unit();
+                    let direction = Vec3::new(x, y, up).normalize_or(Vec3::Z);
+                    let speed =
+                        (THROW.0 + (THROW.1 - THROW.0) * rng.unit() + piece.burst * BURST) * factor;
+                    let spin = Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5)
+                        * (2.0 * SPIN);
+                    let entity = spawn_model(
+                        &mut commands,
+                        &mut models,
+                        &asset_server,
+                        &piece.model,
+                        Transform {
+                            translation: coords::position(broke.origin.to_array()),
+                            rotation: coords::rotation_from_source(broke.rotation),
+                            scale: Vec3::ONE,
+                        },
+                    );
+                    commands.entity(entity).insert((
+                        Gib {
+                            position: broke.origin,
+                            velocity: broke.velocity + direction * speed,
+                            spin,
+                            age: 0.0,
+                            life: if piece.fade > 0.0 {
+                                piece.fade.clamp(PIECE_LIFE.0, PIECE_LIFE.1)
+                            } else {
+                                LIFETIME
+                            },
+                            at_rest: false,
+                        },
+                        Moving,
+                    ));
+                }
+                continue;
+            }
             if spec.gibs.is_empty() {
                 continue;
             }
@@ -91,8 +139,6 @@ fn throw_gibs(
                 0 => DEFAULT_GIBS,
                 count => count.min(MAX_GIBS),
             };
-            let mut rng = Rng::seeded(&[sim.tick_count(), u64::from(broke.body.index() as u32)]);
-            let factor = if broke.exploded { BLAST_FACTOR } else { 1.0 };
             for _ in 0..count {
                 let model = &spec.gibs[rng.below(spec.gibs.len())];
                 let (x, y) = rng.in_disc();
@@ -115,6 +161,7 @@ fn throw_gibs(
                         velocity: direction * speed,
                         spin,
                         age: 0.0,
+                        life: LIFETIME,
                         at_rest: false,
                     },
                     Moving,
@@ -136,8 +183,8 @@ fn move_gibs(
     let dt = time.delta_secs().min(0.05);
     for (entity, mut gib, mut transform) in &mut gibs {
         gib.age += dt;
-        if gib.age >= LIFETIME {
-            commands.entity(entity).despawn();
+        if gib.age >= gib.life {
+            commands.entity(entity).try_despawn();
             continue;
         }
         if !gib.at_rest {
@@ -146,7 +193,7 @@ fn move_gibs(
             transform.rotation = Quat::from_scaled_axis(turn) * transform.rotation;
         }
         transform.translation = coords::position(gib.position.to_array());
-        let shrink = ((LIFETIME - gib.age) / SHRINK).clamp(0.0, 1.0);
+        let shrink = ((gib.life - gib.age) / SHRINK).clamp(0.0, 1.0);
         transform.scale = Vec3::splat(shrink);
     }
 }
@@ -201,6 +248,7 @@ mod tests {
             velocity: Vec3::new(150.0, 0.0, 200.0),
             spin: Vec3::ONE,
             age: 0.0,
+            life: LIFETIME,
             at_rest: false,
         };
         let mut lowest = f32::MAX;

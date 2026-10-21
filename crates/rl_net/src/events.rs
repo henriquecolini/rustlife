@@ -272,6 +272,9 @@ mod tests {
             prop_breaks: vec![PropBreak {
                 body: BodyId::from_index(7),
                 position: Vec3::new(1.0, 2.0, 3.0),
+                origin: Vec3::new(1.0, 2.0, 0.0),
+                rotation: glam::Quat::from_rotation_z(0.5),
+                velocity: Vec3::new(0.0, 0.0, -50.0),
                 exploded: true,
             }],
             prop_ignitions: vec![PropIgnition {
