@@ -85,6 +85,14 @@ pub fn rotation_from_source(source: Quat) -> Quat {
     Quat::from_xyzw(axis.x, axis.y, axis.z, source.w)
 }
 
+/// Converts a Bevy-space rotation back to Source space (the inverse of
+/// [`rotation_from_source`]).
+#[must_use]
+pub fn rotation_to_source(bevy: Quat) -> Quat {
+    let axis = to_source_direction(Vec3::new(bevy.x, bevy.y, bevy.z));
+    Quat::from_xyzw(axis[0], axis[1], axis[2], bevy.w)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

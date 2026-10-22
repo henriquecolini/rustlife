@@ -54,8 +54,11 @@ player's skeleton at the first bone they share, so it moves with the hand.
 
 When a player dies, their model becomes a ragdoll: the animation stops and
 each bone becomes a rigid body with a capsule collider, mass and angular
-limits at its joints, simulated by Box3D against the map. Non-adjacent
-bones collide with each other, so the corpse does not fold through itself.
+limits at its joints, simulated by Box3D against the map with the engine's ragdoll
+joint tuning: spherical hips, shoulders and spine with cone and twist
+limits, revolute knees and elbows, and a little joint friction. Bones of
+one corpse do not collide with each other, so the body never fights
+itself; the colliders still stop at the map.
 The pose starts from the one the player died in; the fatal shot pushes the
 bone it struck, and a nearby blast throws the whole body outwards. A corpse
 is visual only, lies for 25 seconds, and at most eight are kept.

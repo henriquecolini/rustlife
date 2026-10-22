@@ -68,6 +68,7 @@ pub mod sky;
 pub mod surfaces;
 pub mod ui;
 pub mod viewmodel;
+mod visual_world;
 pub mod world;
 
 /// Top-level client state.

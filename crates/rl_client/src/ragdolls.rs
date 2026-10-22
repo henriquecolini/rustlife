@@ -24,7 +24,7 @@ use b3::body::{
 };
 use b3::geometry::{Capsule, Sphere};
 use b3::math_functions::Vec3 as B3Vec3;
-use b3::shape::{create_capsule_shape, create_hull_shape, create_mesh_shape, create_sphere_shape};
+use b3::shape::{create_capsule_shape, create_sphere_shape};
 use b3::types::BodyType;
 use b3::world::World;
 use bevy::animation::AnimationPlayer;
@@ -32,8 +32,7 @@ use bevy::prelude::*;
 use box3d_rust as b3;
 use rl_assets::coords;
 use rl_data::Shot;
-use rl_sim::collision::contents::MASK_PLAYER_SOLID;
-use rl_sim::physics::{UNITS_PER_METRE, use_source_units};
+use rl_sim::physics::UNITS_PER_METRE;
 use rl_sim::simulation::{PlayerId, ShotEvent, Simulation, TickEvents};
 
 use crate::AppState;
@@ -41,28 +40,27 @@ use crate::actors::PlayerView;
 use crate::animation::{Animated, SequencePlayer};
 use crate::net::Game;
 use crate::player::Ticked;
+use crate::visual_world::{RAGDOLL_GROUP, WORLD_GROUP, build_static_world, filter};
 
 /// How long a corpse lies before it is removed, seconds.
 const RAGDOLL_LIFE: f32 = 25.0;
 /// Most corpses alive at once.
 const MAX_RAGDOLLS: usize = 8;
-/// Downward acceleration, Source units/s²: the same gravity as movement.
-const GRAVITY: f32 = -9.81 * UNITS_PER_METRE;
 /// Radius of the smallest bone collider, Source units.
-const MIN_BONE_RADIUS: f32 = 0.03 * UNITS_PER_METRE;
-/// Radius of the largest bone collider, Source units.
-const MAX_BONE_RADIUS: f32 = 0.075 * UNITS_PER_METRE;
+const MIN_BONE_RADIUS: f32 = 0.025 * UNITS_PER_METRE;
 /// Seconds of physics per fixed step.
-const STEP: f32 = 1.0 / 120.0;
+const STEP: f32 = 1.0 / 60.0;
 /// Most steps one frame may run, so a hitch does not turn into a time bomb.
 const MAX_STEPS: usize = 4;
+/// Box3D sub-steps per fixed step, as in the engine's ragdoll samples.
+const SUB_STEPS: i32 = 4;
 /// How much of a killing hitscan's prop impulse reaches the ragdoll.
-const SHOT_IMPULSE_SCALE: f32 = 0.6;
+const SHOT_IMPULSE_SCALE: f32 = 0.25;
 /// Most impulse one bullet may put into a body, kg·Source-units/s.
-const MAX_SHOT_IMPULSE: f32 = 60.0 * UNITS_PER_METRE;
+const MAX_SHOT_IMPULSE: f32 = 25.0 * UNITS_PER_METRE;
 /// Extra share of a bullet's impulse applied at the body's root, so the
 /// whole corpse is shoved and not just the struck limb.
-const SHOT_BODY_SHOVE: f32 = 0.65;
+const SHOT_BODY_SHOVE: f32 = 0.35;
 /// How far from a shot a corpse bone is still pushed, Source units.
 const CORPSE_SHOT_RADIUS: f32 = 0.28 * UNITS_PER_METRE;
 /// How fast a blast throws a body at its centre, Source units/s.
@@ -74,8 +72,9 @@ const HIT_MEMORY: f32 = 1.0;
 /// Density of a body in Box3D's (Source-unit) space, kg/unit³: human flesh
 /// is close enough to water.
 const BONE_DENSITY: f32 = 1000.0 / (UNITS_PER_METRE * UNITS_PER_METRE * UNITS_PER_METRE);
-/// User data of the map's static body in the ragdoll world.
-const MAP_BODY: u64 = u64::MAX;
+/// Joint friction torque in Box3D's units: Box3D lengths are Source inches,
+/// while the engine samples use N·m, so one N·m is scaled by L².
+const JOINT_TORQUE: f32 = 5.0 * UNITS_PER_METRE * UNITS_PER_METRE;
 
 /// Plays player deaths as ragdolls.
 pub struct RagdollsPlugin;
@@ -98,13 +97,21 @@ impl Plugin for RagdollsPlugin {
 #[derive(Resource, Default)]
 struct RagdollPhysics {
     world: Option<Mutex<World>>,
+    /// Leftover time from the last frame, so physics always advances in
+    /// fixed 1/60 s steps.
+    accumulator: f32,
+    /// A negative collision group unique to the last corpse. All of a
+    /// corpse's bones share it, which turns off self-collision (the usual
+    /// source of ragdolls exploding) while leaving them colliding with the
+    /// world and with other corpses.
+    next_group: i32,
 }
 
 impl RagdollPhysics {
     /// The world, built from the map's collision when first needed.
     fn world(&mut self, sim: &Simulation) -> &mut World {
         self.world
-            .get_or_insert_with(|| Mutex::new(build_world(sim)))
+            .get_or_insert_with(|| Mutex::new(build_static_world(sim, RAGDOLL_GROUP)))
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -114,6 +121,15 @@ impl RagdollPhysics {
         self.world
             .as_mut()
             .map(|world| world.get_mut().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// A fresh negative collision group for a corpse.
+    fn corpse_group(&mut self) -> i32 {
+        self.next_group = self.next_group.saturating_sub(1);
+        if self.next_group == 0 {
+            self.next_group = -1;
+        }
+        self.next_group
     }
 }
 
@@ -127,61 +143,6 @@ fn reset(mut physics: ResMut<RagdollPhysics>, mut hits: ResMut<RecentHits>) {
 #[derive(Resource, Default)]
 struct RecentHits {
     shots: Vec<(PlayerId, ShotEvent, f32)>,
-}
-
-/// Builds the static map colliders for the ragdoll world.
-fn build_world(sim: &Simulation) -> World {
-    use_source_units();
-    let mut def = b3::default_world_def();
-    def.gravity = b3::Vec3 {
-        x: 0.0,
-        y: 0.0,
-        z: GRAVITY,
-    };
-    let mut world = World::new(&def);
-    b3::world::world_set_gravity(&mut world, def.gravity);
-
-    let mut body_def = b3::default_body_def();
-    body_def.type_ = BodyType::Static;
-    body_def.user_data = MAP_BODY;
-    let body = create_body(&mut world, &body_def);
-
-    let mut shape_def = b3::default_shape_def();
-    shape_def.density = 0.0;
-    shape_def.update_body_mass = false;
-    shape_def.base_material.friction = 0.8;
-    shape_def.base_material.restitution = 0.05;
-
-    for solid in sim.world().convex_solids(MASK_PLAYER_SOLID) {
-        let points: Vec<B3Vec3> = solid.iter().map(|point| b3v(Vec3::from(*point))).collect();
-        if let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES) {
-            create_hull_shape(&mut world, body, &shape_def, &hull);
-        }
-    }
-
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-    for triangles in sim.world().displacement_triangles(MASK_PLAYER_SOLID) {
-        for triangle in triangles {
-            let first = i32::try_from(vertices.len()).unwrap_or(i32::MAX);
-            for point in triangle {
-                vertices.push(b3v(Vec3::from(*point)));
-            }
-            indices.extend([first, first + 1, first + 2]);
-        }
-    }
-    if !vertices.is_empty() {
-        let mesh_def = b3::mesh::MeshDef {
-            vertices,
-            indices,
-            ..b3::mesh::MeshDef::default()
-        };
-        if let Some(mesh) = b3::mesh::create_mesh(&mesh_def, None) {
-            shape_def.base_material.restitution = 0.02;
-            create_mesh_shape(&mut world, body, &shape_def, &mesh, b3::VEC3_ONE);
-        }
-    }
-    world
 }
 
 /// A corpse: the rigid body of each joint and the entities they pose.
@@ -233,6 +194,7 @@ fn spawn_ragdolls(
             hits.shots.retain(|(_, _, at)| now - *at <= HIT_MEMORY);
             continue;
         }
+        let group = physics.corpse_group();
         let world = physics.world(sim);
         // The oldest corpses make room for new ones.
         let mut corpses: Vec<(f32, Entity, Vec<b3::BodyId>)> = existing
@@ -288,6 +250,7 @@ fn spawn_ragdolls(
                 &shots,
                 events,
                 kill.victim,
+                group,
             );
             if bodies.is_empty() {
                 continue;
@@ -327,6 +290,7 @@ fn add_bodies(
     shots: &[ShotEvent],
     events: &TickEvents,
     victim: PlayerId,
+    group_index: i32,
 ) -> Vec<b3::BodyId> {
     // The renderer and animation live in metres; Box3D's world is in
     // Source units, like the server's physics.
@@ -334,18 +298,25 @@ fn add_bodies(
         .iter()
         .map(|position| *position * UNITS_PER_METRE)
         .collect();
+    let rotations: Vec<Quat> = rotations
+        .iter()
+        .map(|rotation| coords::rotation_to_source(*rotation))
+        .collect();
     let mut bodies = Vec::with_capacity(positions.len());
     let mut shape_def = b3::default_shape_def();
     shape_def.density = BONE_DENSITY;
-    shape_def.base_material.friction = 0.8;
+    shape_def.base_material.friction = 0.65;
     shape_def.base_material.restitution = 0.02;
-    for (index, (&position, &rotation)) in positions.iter().zip(rotations).enumerate() {
+    shape_def.filter = filter(RAGDOLL_GROUP, WORLD_GROUP | RAGDOLL_GROUP);
+    shape_def.filter.group_index = group_index;
+    for (index, (&position, &rotation)) in positions.iter().zip(&rotations).enumerate() {
         let mut body_def = b3::default_body_def();
         body_def.type_ = BodyType::Dynamic;
         body_def.position = b3v(position);
         body_def.rotation = b3q(rotation);
-        body_def.linear_damping = 0.15;
-        body_def.angular_damping = 0.65;
+        body_def.linear_damping = 0.05;
+        body_def.angular_damping = 0.2;
+        body_def.is_bullet = true;
         body_def.user_data = u64::try_from(index).unwrap_or(u64::MAX);
         let handle = create_body(world, &body_def);
         bodies.push(handle);
@@ -359,7 +330,7 @@ fn add_bodies(
             child,
             length.filter(|length| *length > 0.02 * UNITS_PER_METRE),
         ) {
-            let radius = (length * 0.20).clamp(MIN_BONE_RADIUS, MAX_BONE_RADIUS);
+            let radius = bone_radius(&skeleton.joints[index].name, length);
             let half_height = (length * 0.5 - radius).max(0.005 * UNITS_PER_METRE);
             let direction = (positions[child] - position).normalize_or(Vec3::Y);
             let center = direction * (length * 0.5);
@@ -386,44 +357,75 @@ fn add_bodies(
         let Some(parent) = *parent else {
             continue;
         };
-        let joint_rotation = rotations[child];
+        let bone = skeleton.joints[child].name.to_ascii_lowercase();
+        let friction = joint_friction(&bone);
+        let hinge = is_hinge(&bone);
+        let turn = if hinge {
+            hinge_axis(child, &positions, parents, &rotations).map_or(Quat::IDENTITY, |axis| {
+                Quat::from_rotation_arc(Vec3::Z, axis)
+            })
+        } else {
+            Quat::IDENTITY
+        };
+        let frame1_q = if hinge {
+            rotations[parent].inverse() * turn
+        } else {
+            rotations[parent].inverse() * rotations[child]
+        };
+        let frame2_q = if hinge {
+            rotations[child].inverse() * turn
+        } else {
+            Quat::IDENTITY
+        };
         let frame1 = b3::Transform {
             p: b3v(rotations[parent]
                 .inverse()
                 .mul_vec3(positions[child] - positions[parent])),
-            q: b3q(rotations[parent].inverse() * joint_rotation),
+            q: b3q(frame1_q.normalize()),
         };
         let frame2 = b3::Transform {
             p: B3Vec3::default(),
-            q: b3::QUAT_IDENTITY,
+            q: b3q(frame2_q.normalize()),
         };
-        let bone = skeleton.joints[child].name.to_ascii_lowercase();
-        let limit = joint_limit(&bone);
-        let (hertz, damping) = if bone.contains("spine")
-            || bone.contains("pelvis")
-            || bone.contains("chest")
-            || bone.contains("head")
-            || bone.contains("neck")
-        {
-            (2.5, 1.5)
+        if hinge {
+            let limit = 35.0 * std::f32::consts::PI / 180.0;
+            let mut def = b3::default_revolute_joint_def();
+            def.base.body_id_a = bodies[parent];
+            def.base.body_id_b = bodies[child];
+            def.base.local_frame_a = frame1;
+            def.base.local_frame_b = frame2;
+            def.base.collide_connected = false;
+            def.enable_limit = true;
+            def.lower_angle = -limit;
+            def.upper_angle = limit;
+            def.enable_spring = true;
+            def.hertz = 1.0;
+            def.damping_ratio = 0.7;
+            def.enable_motor = true;
+            def.max_motor_torque = friction * JOINT_TORQUE;
+            b3::joint::create_revolute_joint(world, &def);
         } else {
-            (1.2, 1.0)
-        };
-        let mut def = b3::default_spherical_joint_def();
-        def.base.body_id_a = bodies[parent];
-        def.base.body_id_b = bodies[child];
-        def.base.local_frame_a = frame1;
-        def.base.local_frame_b = frame2;
-        def.base.collide_connected = false;
-        def.enable_cone_limit = true;
-        def.cone_angle = limit.clamp(0.0, std::f32::consts::FRAC_PI_2 * 0.99);
-        def.enable_twist_limit = true;
-        def.lower_twist_angle = -limit.clamp(0.0, std::f32::consts::PI * 0.99);
-        def.upper_twist_angle = limit.clamp(0.0, std::f32::consts::PI * 0.99);
-        def.enable_spring = true;
-        def.hertz = hertz;
-        def.damping_ratio = damping;
-        b3::joint::create_spherical_joint(world, &def);
+            let (cone, twist) = joint_limits(&bone);
+            let mut def = b3::default_spherical_joint_def();
+            def.base.body_id_a = bodies[parent];
+            def.base.body_id_b = bodies[child];
+            def.base.local_frame_a = frame1;
+            def.base.local_frame_b = frame2;
+            def.base.collide_connected = false;
+            def.enable_cone_limit = true;
+            def.cone_angle = cone;
+            def.enable_twist_limit = true;
+            def.lower_twist_angle = -twist;
+            def.upper_twist_angle = twist;
+            // The engine's human ragdoll: a soft spring back to the rest pose
+            // plus a zero-velocity motor acting as joint friction.
+            def.enable_spring = true;
+            def.hertz = 1.0;
+            def.damping_ratio = 0.7;
+            def.enable_motor = true;
+            def.max_motor_torque = friction * JOINT_TORQUE;
+            b3::joint::create_spherical_joint(world, &def);
+        }
     }
 
     // Fatal hits push the bone they struck, at the point they struck it.
@@ -523,23 +525,99 @@ fn nearest_body(positions: &[Vec3], point: Vec3) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// Angular limits for a joint, by the bone it drives. They keep a corpse
-/// from folding through itself while still letting it settle naturally.
-fn joint_limit(name: &str) -> f32 {
+/// Elbows and knees are hinges, not ball joints; everything else bends
+/// freely within its cone and twist limits.
+fn is_hinge(name: &str) -> bool {
+    name.contains("forearm") || name.contains("calve") || name.contains("calf")
+}
+
+/// The natural hinge axis of a joint: the normal of the plane through the
+/// parent, child and grandchild bones. Falls back to the child's local X
+/// when the limb is perfectly straight.
+fn hinge_axis(
+    child: usize,
+    positions: &[Vec3],
+    parents: &[Option<usize>],
+    rotations: &[Quat],
+) -> Option<Vec3> {
+    let parent = parents[child]?;
+    let grandchild = parents
+        .iter()
+        .enumerate()
+        .find_map(|(index, parent)| (*parent == Some(child)).then_some(index))?;
+    let upper = positions[child] - positions[parent];
+    let lower = positions[grandchild] - positions[child];
+    upper
+        .cross(lower)
+        .try_normalize()
+        .or_else(|| Some(rotations[child] * Vec3::X))
+}
+
+/// Angular limits for a joint, by the bone it drives: a cone around the
+/// joint frame's axis and a twist range, radians. Based on Box3D's human
+/// ragdoll samples, loosened a little for Valve's skeletons.
+fn joint_limits(name: &str) -> (f32, f32) {
     let name = name.to_ascii_lowercase();
-    if name.contains("head") || name.contains("neck") {
-        0.32
+    let degrees = (std::f32::consts::PI / 180.0) as f32;
+    if name.contains("head") {
+        (30.0 * degrees, 17.5 * degrees)
+    } else if name.contains("neck") {
+        (30.0 * degrees, 17.5 * degrees)
     } else if name.contains("spine") || name.contains("pelvis") || name.contains("chest") {
-        0.16
-    } else if name.contains("forearm") || name.contains("calve") || name.contains("calf") {
-        0.72
-    } else if name.contains("thigh") || name.contains("leg") || name.contains("arm") {
-        0.66
+        (35.0 * degrees, 17.5 * degrees)
+    } else if name.contains("thigh") {
+        (40.0 * degrees, 10.0 * degrees)
+    } else if name.contains("calve") || name.contains("calf") {
+        (35.0 * degrees, 10.0 * degrees)
+    } else if name.contains("upperarm") {
+        (50.0 * degrees, 20.0 * degrees)
+    } else if name.contains("forearm") {
+        (40.0 * degrees, 10.0 * degrees)
     } else if name.contains("hand") || name.contains("foot") || name.contains("clavicle") {
-        0.38
+        (30.0 * degrees, 10.0 * degrees)
     } else {
-        0.45
+        (30.0 * degrees, 10.0 * degrees)
     }
+}
+
+/// How much zero-velocity joint friction a bone gets. Elbows are nearly
+/// free; the rest are stiff enough for a body to hold together.
+fn joint_friction(name: &str) -> f32 {
+    let name = name.to_ascii_lowercase();
+    if name.contains("forearm") || name.contains("hand") {
+        0.08
+    } else if name.contains("upperarm") {
+        0.8
+    } else {
+        1.0
+    }
+}
+
+/// The collision radius of a bone, Source units: thicker for the torso and
+/// head, thinner for limbs, as in Box3D's human ragdoll.
+fn bone_radius(name: &str, length: f32) -> f32 {
+    let name = name.to_ascii_lowercase();
+    let metres = if name.contains("head") {
+        0.11
+    } else if name.contains("neck") {
+        0.06
+    } else if name.contains("pelvis") || name.contains("spine") || name.contains("chest") {
+        0.13
+    } else if name.contains("thigh") {
+        0.085
+    } else if name.contains("calve") || name.contains("calf") {
+        0.07
+    } else if name.contains("foot") {
+        0.05
+    } else if name.contains("upperarm") {
+        0.055
+    } else if name.contains("forearm") || name.contains("hand") {
+        0.045
+    } else {
+        0.05
+    };
+    let maximum = (length * 0.45).max(MIN_BONE_RADIUS);
+    (metres * UNITS_PER_METRE).clamp(MIN_BONE_RADIUS, maximum)
 }
 
 /// The entities of `skeleton`'s joints under `root`, in skeleton order.
@@ -604,6 +682,10 @@ fn simulate_ragdolls(
         return;
     }
     let now = time.elapsed_secs();
+    let frame = time.delta_secs().min(STEP * MAX_STEPS as f32);
+    physics.accumulator += frame;
+    let steps = ((physics.accumulator / STEP).floor() as usize).min(MAX_STEPS);
+    physics.accumulator -= STEP * steps as f32;
     let Some(world) = physics.current() else {
         return;
     };
@@ -684,10 +766,8 @@ fn simulate_ragdolls(
             }
         }
     }
-    let dt = time.delta_secs().min(STEP * MAX_STEPS as f32);
-    let steps = ((dt / STEP).ceil() as usize).clamp(1, MAX_STEPS);
     for _ in 0..steps {
-        world.step(dt / steps as f32, 1);
+        world.step(STEP, SUB_STEPS);
     }
     for (_, corpse, mut transform) in &mut corpses {
         pose(&corpse, world, &mut joints);
@@ -706,7 +786,7 @@ fn pose(ragdoll: &Ragdoll, world: &World, joints: &mut Query<&mut Transform, Wit
             continue;
         }
         let transform_body = body_get_transform(world, handle);
-        let rotation = b3q_to_glam(transform_body.q);
+        let rotation = coords::rotation_from_source(b3q_to_glam(transform_body.q));
         let position = b3v_to_glam(transform_body.p) * coords::METERS_PER_UNIT;
         let parent = ragdoll.parents[index];
         let parent_rotation = parent
@@ -762,8 +842,12 @@ mod tests {
 
     #[test]
     fn head_and_spine_turn_far_less_than_limbs() {
-        assert!(joint_limit("ValveBiped.Bip01_Head1") < joint_limit("ValveBiped.Bip01_R_Forearm"));
-        assert!(joint_limit("ValveBiped.Bip01_Spine") < joint_limit("ValveBiped.Bip01_R_Thigh"));
-        assert!(joint_limit("anything") > 0.0);
+        let (head, _) = joint_limits("ValveBiped.Bip01_Head1");
+        let (forearm, _) = joint_limits("ValveBiped.Bip01_R_Forearm");
+        let (spine, _) = joint_limits("ValveBiped.Bip01_Spine");
+        let (thigh, _) = joint_limits("ValveBiped.Bip01_R_Thigh");
+        assert!(head < forearm);
+        assert!(spine < thigh);
+        assert!(joint_limits("anything").0 > 0.0);
     }
 }
