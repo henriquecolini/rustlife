@@ -27,7 +27,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rl_assets::coords;
 use rl_data::{GameData, MovementConfig};
-use rl_sim::movement::PlayerState;
+use rl_sim::movement::{Buttons, PlayerState};
 use rl_sim::simulation::{MapEvent, PlayerId, Prediction, Simulation, Spawn, TickEvents};
 use rl_sim::weapons::WeaponId;
 
@@ -37,6 +37,7 @@ use crate::input::{Latched, idle_cmd, latch_input, user_cmd};
 use crate::menu::Menu;
 use crate::net::{Connection, Game, Host, NetStatus, Receive};
 use crate::script::{self, InputScript};
+use crate::selector::WeaponSelector;
 use crate::settings::{Bindings, RADIANS_PER_PIXEL, Settings};
 use crate::world::StartSpawn;
 
@@ -113,6 +114,7 @@ impl Plugin for PlayerPlugin {
             .init_resource::<ViewMode>()
             .init_resource::<ViewAngles>()
             .init_resource::<Latched>()
+            .init_resource::<WeaponSelector>()
             .add_systems(OnEnter(AppState::InGame), enter_map)
             .add_systems(OnExit(AppState::InGame), leave_map)
             .add_systems(
@@ -144,8 +146,13 @@ impl Plugin for PlayerPlugin {
     }
 }
 
-fn enter_map(mut commands: Commands, mut mode: ResMut<ViewMode>) {
+fn enter_map(
+    mut commands: Commands,
+    mut mode: ResMut<ViewMode>,
+    mut selector: ResMut<WeaponSelector>,
+) {
     *mode = ViewMode::Walk;
+    *selector = WeaponSelector::default();
     commands.remove_resource::<LocalPlayer>();
 }
 
@@ -341,6 +348,7 @@ fn tick(
     bindings: Res<Bindings>,
     menu: Res<Menu>,
     mut latched: ResMut<Latched>,
+    mut selector: ResMut<WeaponSelector>,
     mut angles: ResMut<ViewAngles>,
     connection: Option<ResMut<Connection>>,
     mut host: Option<ResMut<Host>>,
@@ -359,6 +367,9 @@ fn tick(
     } else {
         user_cmd(&keys, mouse.as_deref(), &bindings, latched.buttons, *angles)
     };
+    if selector.swallows_attack(bindings.pressed("attack", &keys, mouse.as_deref())) {
+        cmd.buttons = cmd.buttons.with(Buttons::ATTACK, false);
+    }
     if let (Some(choice), Some(local)) = (latched.choice, session.sim().player(player.id)) {
         cmd.select = local.inventory.choose(session.sim().arsenal(), choice);
     }

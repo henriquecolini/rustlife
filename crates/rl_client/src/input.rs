@@ -4,7 +4,7 @@
 //! so a press shorter than a tick could fall between two ticks. Presses are
 //! therefore latched until the next tick takes them: buttons
 //! count as held for that tick, and a weapon choice (number keys, the mouse
-//! wheel, the last-weapon key) waits to be resolved against the inventory.
+//! last-weapon key, a pick from the weapon list) waits to be resolved against the inventory.
 //!
 //! Which key does what is the player's choice (the [`Bindings`], by
 //! default:)
@@ -20,14 +20,17 @@
 //! | `R` | Reload |
 //! | `Q` | Last weapon |
 //! | `1`–`9` | Weapons of that slot (fixed) |
-//! | Mouse wheel | Next / previous weapon (fixed) |
+//! | Mouse wheel | Moves through the weapon list (fixed) |
+//! | Primary fire, with the list up | Switches to the weapon picked in it |
 
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::weapons::Choice;
 
+use crate::net::Game;
 use crate::player::ViewAngles;
+use crate::selector::WeaponSelector;
 use crate::settings::Bindings;
 
 /// Actions that hold a command button down.
@@ -67,30 +70,48 @@ pub(crate) struct Latched {
 /// Latches button presses and weapon choices until the next tick takes
 /// them.
 pub(crate) fn latch_input(
+    time: Res<Time<Real>>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     scroll: Option<Res<AccumulatedMouseScroll>>,
     bindings: Res<Bindings>,
+    game: Game,
+    mut selector: ResMut<WeaponSelector>,
     mut latched: ResMut<Latched>,
 ) {
+    selector.advance(time.delta_secs());
     for (action, button) in ACTION_BUTTONS {
         if bindings.just_pressed(action, &keys, mouse.as_deref()) {
+            if button == Buttons::ATTACK
+                && let Some(weapon) = selector.confirm()
+            {
+                latched.choice = Some(Choice::Weapon(weapon));
+                continue;
+            }
             latched.buttons = latched.buttons | button;
         }
     }
     for (key, slot) in SLOT_KEYS {
         if keys.just_pressed(key) {
+            selector.dismiss();
             latched.choice = Some(Choice::Slot(slot));
         }
     }
     if bindings.just_pressed("last_weapon", &keys, mouse.as_deref()) {
+        selector.dismiss();
         latched.choice = Some(Choice::Last);
     }
-    // Wheel up goes back through the list, as in most shooters.
-    match scroll.map_or(0.0, |scroll| scroll.delta.y) {
-        delta if delta > 0.0 => latched.choice = Some(Choice::Previous),
-        delta if delta < 0.0 => latched.choice = Some(Choice::Next),
-        _ => {}
+    // Wheel up goes back through the list, as in most shooters. It only
+    // moves the list's cursor; a click picks.
+    let forward = match scroll.map_or(0.0, |scroll| scroll.delta.y) {
+        delta if delta > 0.0 => false,
+        delta if delta < 0.0 => true,
+        _ => return,
+    };
+    if let (Some(sim), Some(local)) = (game.sim(), game.local())
+        && let Some(player) = sim.player(local)
+    {
+        selector.scroll(&player.inventory, sim.arsenal(), forward);
     }
 }
 

@@ -1,14 +1,15 @@
-//! The weapon in hand's ammo (bottom right) and the strip of carried
-//! weapons (bottom centre).
+//! The weapon in hand's ammo (bottom right) and, above it, the list of
+//! carried weapons that appears while the mouse wheel is picking one.
 
 use bevy::prelude::*;
 
 use super::anchored;
 use super::text::{self, Ammo};
 use crate::net::Game;
+use crate::selector::WeaponSelector;
 use crate::ui::{Fonts, theme};
 
-/// Most weapons the strip has room for.
+/// Most weapons the list has room for.
 const SLOTS: usize = 10;
 
 #[derive(Component)]
@@ -25,11 +26,19 @@ pub(super) enum AmmoText {
 #[derive(Component)]
 pub(super) struct AmmoLine(AmmoText);
 
-/// One cell of the strip.
+/// A row's background, and the one the cursor is on.
+const SLOT_IDLE: Color = Color::srgba(0.03, 0.04, 0.06, 0.55);
+const SLOT_PICKED: Color = Color::srgba(0.12, 0.14, 0.2, 0.82);
+
+/// One row of the list.
+/// The column of rows; hidden while there is no pick under way.
+#[derive(Component)]
+pub(super) struct WeaponList;
+
 #[derive(Component)]
 pub(super) struct SlotCell(usize);
 
-/// The slot number and name inside a cell.
+/// The slot number and name inside a row.
 #[derive(Component)]
 pub(super) struct SlotNumber(usize);
 
@@ -44,82 +53,97 @@ pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
             UiRect::new(Val::Px(0.0), Val::Px(32.0), Val::Px(0.0), Val::Px(30.0)),
         ))
         .with_children(|root| {
-            root.spawn((
-                AmmoPanel,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::FlexEnd,
-                    padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
-                    min_width: Val::Px(190.0),
-                    border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.62)),
-            ))
-            .with_children(|panel| {
-                panel.spawn((
-                    AmmoLine(AmmoText::Weapon),
-                    fonts.bold("", 16.0, theme::TEXT_DIM),
-                ));
-                panel
-                    .spawn(Node {
-                        align_items: AlignItems::FlexEnd,
-                        column_gap: Val::Px(8.0),
-                        ..default()
-                    })
-                    .with_children(|numbers| {
-                        numbers
-                            .spawn((AmmoLine(AmmoText::Main), fonts.bold("", 64.0, theme::TEXT)));
-                        numbers.spawn((
-                            AmmoLine(AmmoText::Reserve),
-                            Node {
-                                margin: UiRect::bottom(Val::Px(8.0)),
-                                ..default()
-                            },
-                            fonts.bold("", 30.0, theme::TEXT_DIM),
-                        ));
-                    });
-                panel.spawn((
-                    AmmoLine(AmmoText::Secondary),
-                    fonts.text("", 18.0, theme::TEXT_DIM),
-                ));
-            });
-        });
-    commands
-        .spawn(anchored(
-            JustifyContent::Center,
-            AlignItems::FlexEnd,
-            UiRect::bottom(Val::Px(30.0)),
-        ))
-        .with_children(|root| {
             root.spawn(Node {
-                column_gap: Val::Px(6.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexEnd,
+                row_gap: Val::Px(12.0),
                 ..default()
             })
-            .with_children(|strip| {
-                for index in 0..SLOTS {
-                    strip
-                        .spawn((
-                            SlotCell(index),
-                            Node {
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                                min_width: Val::Px(82.0),
-                                border: UiRect::bottom(Val::Px(3.0)),
-                                border_radius: BorderRadius::all(Val::Px(6.0)),
-                                display: Display::None,
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.55)),
-                            BorderColor::all(Color::NONE),
-                        ))
-                        .with_children(|cell| {
-                            cell.spawn((SlotNumber(index), fonts.bold("", 18.0, theme::ACCENT)));
-                            cell.spawn((SlotName(index), fonts.text("", 17.0, theme::TEXT)));
-                        });
-                }
+            .with_children(|column| {
+                spawn_list(column, fonts);
+                spawn_ammo(column, fonts);
             });
+        });
+}
+
+/// The weapon list, one row per possible weapon.
+fn spawn_list(column: &mut ChildSpawnerCommands, fonts: &Fonts) {
+    column
+        .spawn((
+            WeaponList,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                display: Display::None,
+                ..default()
+            },
+        ))
+        .with_children(|list| {
+            for index in 0..SLOTS {
+                list.spawn((
+                    SlotCell(index),
+                    Node {
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(12.0),
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(6.0)),
+                        min_width: Val::Px(190.0),
+                        border: UiRect::right(Val::Px(3.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        display: Display::None,
+                        ..default()
+                    },
+                    BackgroundColor(SLOT_IDLE),
+                    BorderColor::all(Color::NONE),
+                ))
+                .with_children(|row| {
+                    row.spawn((SlotNumber(index), fonts.bold("", 18.0, theme::ACCENT)));
+                    row.spawn((SlotName(index), fonts.text("", 17.0, theme::TEXT)));
+                });
+            }
+        });
+}
+
+/// The ammo panel's nodes.
+fn spawn_ammo(column: &mut ChildSpawnerCommands, fonts: &Fonts) {
+    column
+        .spawn((
+            AmmoPanel,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexEnd,
+                padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
+                min_width: Val::Px(190.0),
+                border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.62)),
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                AmmoLine(AmmoText::Weapon),
+                fonts.bold("", 16.0, theme::TEXT_DIM),
+            ));
+            panel
+                .spawn(Node {
+                    align_items: AlignItems::FlexEnd,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                })
+                .with_children(|numbers| {
+                    numbers.spawn((AmmoLine(AmmoText::Main), fonts.bold("", 64.0, theme::TEXT)));
+                    numbers.spawn((
+                        AmmoLine(AmmoText::Reserve),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(8.0)),
+                            ..default()
+                        },
+                        fonts.bold("", 30.0, theme::TEXT_DIM),
+                    ));
+                });
+            panel.spawn((
+                AmmoLine(AmmoText::Secondary),
+                fonts.text("", 18.0, theme::TEXT_DIM),
+            ));
         });
 }
 
@@ -161,12 +185,30 @@ pub(super) fn update_ammo(
     }
 }
 
-/// The strip of carried weapons.
-pub(super) fn update_strip(
+/// The list of carried weapons, with the cursor's pick lit; shown (and
+/// faded) as the selector says.
+pub(super) fn update_list(
     game: Game,
+    selector: Res<WeaponSelector>,
+    mut list: Query<&mut Node, (With<WeaponList>, Without<SlotCell>)>,
     mut cells: Query<(&SlotCell, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
-    mut numbers: Query<(&SlotNumber, &mut Text)>,
+    mut numbers: Query<(&SlotNumber, &mut Text, &mut TextColor), Without<SlotName>>,
+    mut names: Query<(&SlotName, &mut Text, &mut TextColor), Without<SlotNumber>>,
 ) {
+    let opacity = selector.opacity();
+    let display = if opacity > 0.0 {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in &mut list {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    if opacity <= 0.0 {
+        return;
+    }
     let (Some(sim), Some(local)) = (game.sim(), game.local()) else {
         return;
     };
@@ -174,42 +216,39 @@ pub(super) fn update_strip(
         return;
     };
     let slots = text::weapon_slots(&player.inventory, sim.arsenal());
+    let picked = selector.cursor();
+    let is_picked = |index: usize| {
+        slots
+            .get(index)
+            .is_some_and(|slot| Some(slot.weapon) == picked)
+    };
     for (SlotCell(index), mut node, mut background, mut border) in &mut cells {
-        let Some(slot) = slots.get(*index) else {
+        if slots.get(*index).is_none() {
             node.display = Display::None;
             continue;
-        };
+        }
         node.display = Display::Flex;
-        background.0 = if slot.active {
-            Color::srgba(0.12, 0.14, 0.2, 0.82)
+        let base = if is_picked(*index) {
+            SLOT_PICKED
         } else {
-            Color::srgba(0.03, 0.04, 0.06, 0.55)
+            SLOT_IDLE
         };
-        *border = BorderColor::all(if slot.active {
-            theme::ACCENT
+        background.0 = base.with_alpha(base.alpha() * opacity);
+        *border = BorderColor::all(if is_picked(*index) {
+            theme::ACCENT.with_alpha(opacity)
         } else {
             Color::NONE
         });
     }
-    for (SlotNumber(index), mut text) in &mut numbers {
+    for (SlotNumber(index), mut text, mut color) in &mut numbers {
         let value = slots
             .get(*index)
             .map_or_else(String::new, |slot| slot.slot.to_string());
         if text.0 != value {
             text.0 = value;
         }
+        color.0 = theme::ACCENT.with_alpha(opacity);
     }
-}
-
-/// The names on the strip, dimmed when a weapon cannot fire.
-pub(super) fn update_names(game: Game, mut names: Query<(&SlotName, &mut Text, &mut TextColor)>) {
-    let (Some(sim), Some(local)) = (game.sim(), game.local()) else {
-        return;
-    };
-    let Some(player) = sim.player(local) else {
-        return;
-    };
-    let slots = text::weapon_slots(&player.inventory, sim.arsenal());
     for (SlotName(index), mut text, mut color) in &mut names {
         let Some(slot) = slots.get(*index) else {
             continue;
@@ -217,13 +256,14 @@ pub(super) fn update_names(game: Game, mut names: Query<(&SlotName, &mut Text, &
         if text.0 != slot.name {
             text.0.clone_from(&slot.name);
         }
-        color.0 = if !slot.usable {
+        let tint = if !slot.usable {
             theme::TEXT_DIM.with_alpha(0.55)
-        } else if slot.active {
+        } else if is_picked(*index) {
             theme::TEXT
         } else {
             theme::TEXT_DIM
         };
+        color.0 = tint.with_alpha(tint.alpha() * opacity);
     }
 }
 

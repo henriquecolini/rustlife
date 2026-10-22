@@ -413,3 +413,37 @@ fn picking_a_grenade_up_brings_the_weapon_back() {
     assert!(inventory.usable(&arsenal, frag));
     assert!(inventory.select(&arsenal, frag));
 }
+
+#[test]
+fn a_chosen_weapon_must_be_carried_and_differ_from_the_one_in_hand() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    let inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    let (frag, smg) = (id(&arsenal, "frag"), id(&arsenal, "smg"));
+    assert_eq!(inventory.choose(&arsenal, Choice::Weapon(frag)), Some(frag));
+    assert_eq!(inventory.choose(&arsenal, Choice::Weapon(smg)), None);
+    let empty = Inventory::empty(&arsenal);
+    assert_eq!(empty.choose(&arsenal, Choice::Weapon(frag)), None);
+}
+
+#[test]
+fn cycling_from_a_weapon_wraps_through_the_usable_ones() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    let inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    let (manipulator, frag, smg) = (
+        id(&arsenal, "manipulator"),
+        id(&arsenal, "frag"),
+        id(&arsenal, "smg"),
+    );
+    assert_eq!(inventory.cycle(&arsenal, Some(smg), true), Some(frag));
+    assert_eq!(
+        inventory.cycle(&arsenal, Some(frag), true),
+        Some(manipulator)
+    );
+    assert_eq!(
+        inventory.cycle(&arsenal, Some(manipulator), false),
+        Some(frag)
+    );
+    assert_eq!(inventory.cycle(&arsenal, None, true), Some(manipulator));
+}

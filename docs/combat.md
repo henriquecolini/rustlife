@@ -47,9 +47,15 @@ A whole-clip reload loads what it can after its time; a round-by-round
 reload loads one round per step until the clip is full or the ammo runs out.
 
 The command for a tick may choose a weapon (`UserCmd::select`). The client
-resolves number keys (cycling through the weapons of a slot), the mouse
-wheel (next or previous usable weapon) and `Q` (last weapon) against the
+resolves number keys (cycling through the weapons of a slot), `Q` (last
+weapon) and a pick from the weapon list (`Choice::Weapon`) against the
 inventory (`Inventory::choose`). Switching deploys the new weapon.
+
+The mouse wheel does not switch by itself: it opens a weapon list above the
+ammo counter and moves a cursor through the usable weapons
+(`Inventory::cycle`). Primary fire confirms the pick (and does not fire);
+after a second without scrolling the list fades and the pick is forgotten,
+so the fire button fires as usual.
 
 The **Manipulator** is a weapon whose fire modes are `Shot::Manipulator`.
 The inventory never fires it: once it is deployed, the simulation runs the

@@ -7,7 +7,7 @@ use rl_data::FireAmmo;
 use rl_sim::combat::Cause;
 use rl_sim::rules::{MatchState, Score};
 use rl_sim::simulation::{Kill, Life, PlayerId, Simulation};
-use rl_sim::weapons::{Arsenal, Inventory, Phase};
+use rl_sim::weapons::{Arsenal, Inventory, Phase, WeaponId};
 
 /// How the HUD names players: the local one "You", others by the name
 /// they joined with, or by number (training dummies have no name).
@@ -125,6 +125,8 @@ pub(crate) fn ammo(inventory: &Inventory, arsenal: &Arsenal) -> Ammo {
 /// A carried weapon on the weapon strip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WeaponSlot {
+    /// The weapon.
+    pub(crate) weapon: WeaponId,
     /// The weapon's slot number, which selects it.
     pub(crate) slot: u8,
     /// Its name.
@@ -145,6 +147,7 @@ pub(crate) fn weapon_slots(inventory: &Inventory, arsenal: &Arsenal) -> Vec<Weap
     weapons
         .into_iter()
         .map(|(weapon, config)| WeaponSlot {
+            weapon,
             slot: config.slot,
             name: config.name.clone(),
             active: inventory.active() == Some(weapon),

@@ -95,7 +95,8 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | E | Use: press a button, open a door, draw from a wall charger; grab or let go of a ladder |
 | Left / right mouse | Primary / secondary fire |
 | R | Reload |
-| 1 – 9, mouse wheel | Choose a weapon by slot, or the next / previous one |
+| 1 – 9 | Choose a weapon by slot |
+| Mouse wheel | Browse the weapon list; left mouse confirms the pick |
 | Q | Last weapon |
 | Tab | Scoreboard |
 | Right mouse (Manipulator) | Grab a prop (hold to pull a distant one in); press again to drop it |

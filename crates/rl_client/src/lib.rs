@@ -57,6 +57,7 @@ pub mod particles;
 pub mod player;
 pub mod props;
 pub mod script;
+mod selector;
 pub mod settings;
 pub mod sky;
 pub mod ui;

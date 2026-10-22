@@ -1,4 +1,4 @@
-//! The HUD: health and armor, ammo, the weapon strip, points and clock, the
+//! The HUD: health and armor, ammo, the weapon list, points and clock, the
 //! kill feed, messages, the scoreboard with the map vote, the crosshair and
 //! the flash of being hurt.
 //!
@@ -50,8 +50,7 @@ impl Plugin for HudPlugin {
                     log_events,
                     vitals::update,
                     weapons::update_ammo,
-                    weapons::update_strip,
-                    weapons::update_names,
+                    weapons::update_list,
                     status::update,
                     feed::update,
                     scoreboard::show,

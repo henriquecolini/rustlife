@@ -179,6 +179,8 @@ pub enum Choice {
     Previous,
     /// The weapon in hand before this one.
     Last,
+    /// A particular carried weapon (a pick from the weapon list).
+    Weapon(WeaponId),
 }
 
 /// What the weapon in hand is doing.
@@ -390,24 +392,41 @@ impl Inventory {
                     .copied()
             }
             Choice::Next | Choice::Previous => {
-                let usable: Vec<WeaponId> = carried
-                    .iter()
-                    .copied()
-                    .filter(|&weapon| self.usable(arsenal, weapon) || Some(weapon) == self.active)
-                    .collect();
-                let at = self
-                    .active
-                    .and_then(|active| usable.iter().position(|&weapon| weapon == active));
-                let len = usable.len().max(1);
-                let index = match (choice, at) {
-                    (Choice::Next, Some(at)) => (at + 1) % len,
-                    (_, Some(at)) => (at + len - 1) % len,
-                    (_, None) => 0,
-                };
-                usable.get(index).copied()
+                self.cycle(arsenal, self.active, choice == Choice::Next)
             }
+            Choice::Weapon(weapon) => self.has(weapon).then_some(weapon),
         };
         chosen.filter(|&weapon| Some(weapon) != self.active)
+    }
+
+    /// The usable weapon after (`forward`) or before `from` in slot order,
+    /// wrapping round; `from` itself counts as usable so it has a place in
+    /// the order. Starts at the first weapon if `from` is not carried.
+    #[must_use]
+    pub fn cycle(
+        &self,
+        arsenal: &Arsenal,
+        from: Option<WeaponId>,
+        forward: bool,
+    ) -> Option<WeaponId> {
+        let order = |weapon: &WeaponId| {
+            arsenal
+                .weapon(*weapon)
+                .map_or((u8::MAX, u8::MAX), |config| (config.slot, config.position))
+        };
+        let mut usable: Vec<WeaponId> = self
+            .weapons()
+            .filter(|&weapon| self.usable(arsenal, weapon) || Some(weapon) == from)
+            .collect();
+        usable.sort_by_key(order);
+        let at = from.and_then(|from| usable.iter().position(|&weapon| weapon == from));
+        let len = usable.len().max(1);
+        let index = match (forward, at) {
+            (true, Some(at)) => (at + 1) % len,
+            (false, Some(at)) => (at + len - 1) % len,
+            (_, None) => 0,
+        };
+        usable.get(index).copied()
     }
 
     /// Whether `weapon` has something to fire: a mode that needs no ammo,
