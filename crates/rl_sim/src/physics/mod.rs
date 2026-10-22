@@ -368,6 +368,72 @@ impl PhysicsWorld {
         }
     }
 
+    /// Takes a prop out of the simulation, keeping its pose, or puts it
+    /// back: how a pickup leaves the world while it is taken. A disabled
+    /// prop neither falls, collides nor can be held.
+    pub fn set_prop_enabled(&mut self, prop: BodyId, enabled: bool) {
+        let Some(body) = self.bodies.get(prop.index()) else {
+            return;
+        };
+        if !matches!(body.kind, BodyKind::Prop(_)) {
+            return;
+        }
+        let (handle, collider) = (body.handle, body.collider);
+        if let Some(collider) = self.rapier.colliders.get_mut(collider) {
+            collider.set_enabled(enabled);
+        }
+        if let Some(rigid) = self.rapier.bodies.get_mut(handle) {
+            rigid.set_enabled(enabled);
+            if enabled {
+                rigid.set_gravity_scale(1.0, true);
+            }
+        }
+        if !enabled {
+            self.held.retain(|&(_, held)| held != prop);
+            self.released.retain(|&(_, released)| released != prop);
+            self.touching.retain(|&(_, touched)| touched != prop);
+        }
+    }
+
+    /// Whether a prop is in the world (see [`PhysicsWorld::set_prop_enabled`]).
+    #[must_use]
+    pub fn prop_enabled(&self, prop: BodyId) -> bool {
+        let enabled = match self.rigid(prop) {
+            Some(rigid) => rigid.is_enabled(),
+            None => false,
+        };
+        self.prop_any(prop).is_some() && enabled
+    }
+
+    /// Puts a prop back where it was added, at rest and enabled: how a
+    /// pickup returns when it respawns.
+    pub fn reset_prop(&mut self, prop: BodyId) {
+        let Some(body) = self.bodies.get(prop.index()) else {
+            return;
+        };
+        let BodyKind::Prop(prop_body) = &body.kind else {
+            return;
+        };
+        if prop_body.broken {
+            return;
+        }
+        let (handle, collider, home) = (body.handle, body.collider, prop_body.home);
+        self.held.retain(|&(_, held)| held != prop);
+        self.released.retain(|&(_, released)| released != prop);
+        self.touching.retain(|&(_, touched)| touched != prop);
+        if let Some(rigid) = self.rapier.bodies.get_mut(handle) {
+            rigid.set_enabled(true);
+            rigid.set_position(home, true);
+            rigid.set_linvel(Vec3::ZERO, true);
+            rigid.set_angvel(Vec3::ZERO, true);
+            rigid.set_gravity_scale(1.0, true);
+        }
+        if let Some(collider) = self.rapier.colliders.get_mut(collider) {
+            collider.set_enabled(true);
+        }
+        self.refresh_planes();
+    }
+
     /// Advances the world by one tick and returns the impacts of props on
     /// players that began during it.
     pub fn step(&mut self) -> Vec<Impact> {

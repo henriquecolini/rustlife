@@ -29,7 +29,9 @@ use glam::Vec3;
 use rl_data::{GameData, PhysicsConfig};
 use rl_sim::collision::CollisionWorld;
 use rl_sim::physics::{BodyId, Breakable, GibPiece, PropDesc, map_joints, prop_desc};
+use rl_sim::pickups;
 use rl_sim::simulation::{Simulation, Spawn};
+use rl_sim::weapons::Arsenal;
 use source_formats::bsp::{self, BspError};
 use source_formats::entities::MapEntity;
 use source_formats::mdl;
@@ -96,6 +98,10 @@ pub struct Level {
     pub entities: Vec<MapEntity>,
     /// Every prop placement, in the map's order.
     pub props: Vec<LevelProp>,
+    /// One body description per pickup the map places, in pickup order:
+    /// `None` for stations (which stay on their wall) and for pickups whose
+    /// model has no usable collision model.
+    pub pickup_descs: Vec<Option<PropDesc>>,
 }
 
 /// A level's simulation and which body each prop got.
@@ -112,12 +118,14 @@ impl Level {
     /// Builds the level's simulation under `data`: spawn points, the
     /// entities' pickups and hazards, every solid prop's body, added in
     /// placement order so the bodies are numbered alike on every machine,
-    /// and the joints the map's constraints hold them by.
+    /// and the joints the map's constraints hold them by. Pickups that lie
+    /// about get bodies before the map's props, in pickup order.
     #[must_use]
     pub fn simulation(&self, data: &GameData) -> LevelSimulation {
         let mut simulation = Simulation::new(Arc::clone(&self.world), data);
         simulation.set_spawns(self.spawns.clone());
         simulation.add_entities(&self.entities);
+        simulation.add_pickup_bodies(self.pickup_descs.iter().cloned());
         let bodies: Vec<Option<BodyId>> = self
             .props
             .iter()
@@ -153,13 +161,15 @@ pub fn checksum(bsp: &[u8]) -> u32 {
 }
 
 /// Loads map `name` (without path or extension) from `vfs`: its collision,
-/// spawns, entities and prop bodies built under `physics`' materials.
+/// spawns, entities and prop bodies built under `data`'s materials, with a
+/// body for every pickup that lies about (weapons, health, ammo, armor).
 ///
 /// # Errors
 ///
 /// Fails if the map is missing or unreadable, or has no collision model.
 /// A prop whose model cannot be read is logged and left without a body.
-pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, LevelError> {
+pub fn load(vfs: &Vfs, name: &str, data: &GameData) -> Result<Level, LevelError> {
+    let physics = &data.physics;
     let path = format!("maps/{name}.bsp");
     let bytes = vfs
         .read(&path)
@@ -197,6 +207,22 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
             LevelProp { placement, desc }
         })
         .collect::<Vec<_>>();
+    let pickups = pickups::from_entities(&contents.entities, data, &Arsenal::new(data));
+    let mut pickup_descs = Vec::with_capacity(pickups.len());
+    for pickup in &pickups {
+        if pickup.station.is_some() {
+            pickup_descs.push(None);
+            continue;
+        }
+        let model = models
+            .entry(pickup.model.clone())
+            .or_insert_with(|| files.model(&pickup.model));
+        pickup_descs.push(
+            model
+                .as_ref()
+                .and_then(|model| pickup_body(pickup, model, physics)),
+        );
+    }
     let level = Level {
         name: name.to_owned(),
         checksum: checksum(&bytes),
@@ -205,6 +231,7 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
         spawns: contents.spawns.iter().map(spawn).collect(),
         entities: contents.entities,
         props,
+        pickup_descs,
     };
     tracing::info!(
         map = name,
@@ -213,6 +240,12 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
             .props
             .iter()
             .filter(|prop| prop.desc.is_some())
+            .count(),
+        pickups = level.pickup_descs.len(),
+        pickup_bodies = level
+            .pickup_descs
+            .iter()
+            .filter(|desc| desc.is_some())
             .count(),
         breakable = level
             .props
@@ -226,6 +259,31 @@ pub fn load(vfs: &Vfs, name: &str, physics: &PhysicsConfig) -> Result<Level, Lev
         "loaded level"
     );
     Ok(level)
+}
+
+/// The body a pickup lies as, if its model has usable collision: debris the
+/// Manipulator can grab, so it does not stand in players' way.
+fn pickup_body(
+    pickup: &pickups::Pickup,
+    model: &PropModel,
+    physics: &PhysicsConfig,
+) -> Option<PropDesc> {
+    let placement = PropPlacement::new(
+        pickup.model.clone(),
+        pickup.origin.to_array(),
+        pickup.model_angles(),
+        PropKind::Physics,
+    );
+    let mut desc = prop_desc(
+        &placement,
+        model.physics.as_ref(),
+        model.bounds,
+        &model.surface_prop,
+        physics,
+    )?;
+    desc.debris = true;
+    desc.grabbable = true;
+    Some(desc)
 }
 
 /// A spawn point in the simulation's terms.

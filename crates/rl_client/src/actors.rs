@@ -28,7 +28,7 @@ use crate::AppState;
 use crate::animation::{Animated, SequencePlayer};
 use crate::net::{Drawn, Game};
 use crate::player::Gameplay;
-use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
+use crate::props::{LightAt, ModelHandles, Moving, PhysicsBody, spawn_model};
 
 /// Draws the game's pickups, projectiles and other players.
 pub struct ActorsPlugin;
@@ -60,7 +60,7 @@ struct PickupsSpawned(bool);
 
 /// The model of a pickup, by index into the simulation's pickups.
 #[derive(Component)]
-struct PickupView(usize);
+pub(crate) struct PickupView(usize);
 
 /// The model of another player.
 #[derive(Component)]
@@ -121,6 +121,9 @@ fn spawn_pickups(
             transform,
         );
         commands.entity(entity).insert(PickupView(index));
+        if let Some(body) = pickup.body {
+            commands.entity(entity).insert((PhysicsBody(body), Moving));
+        }
     }
 }
 

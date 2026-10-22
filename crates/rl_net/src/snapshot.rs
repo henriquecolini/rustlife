@@ -435,6 +435,13 @@ impl WorldState {
                 pickup.respawn.max(f32::MIN_POSITIVE)
             };
         }
+        let presence: Vec<(BodyId, bool)> = sim
+            .pickups()
+            .iter()
+            .zip(&self.pickups)
+            .filter_map(|(pickup, &there)| Some((pickup.body?, there)))
+            .collect();
+        sim.set_pickup_presence(presence);
         sim.set_projectiles(self.projectiles.clone());
         sim.set_grenades(self.grenades.clone());
         sim.set_match(self.game.clone());
@@ -453,6 +460,7 @@ impl WorldState {
         if !moved.is_empty() {
             sim.set_prop_poses(moved);
         }
+        sim.sync_pickup_poses();
     }
 }
 
@@ -502,6 +510,7 @@ mod tests {
     use rl_sim::collision::{ConvexHull, WorldBuilder};
     use rl_sim::movement::UserCmd;
     use rl_sim::physics::{Motion as BodyMotion, PropDesc};
+    use source_formats::entities::MapEntity;
 
     use super::*;
     use crate::protocol;
@@ -615,6 +624,89 @@ mod tests {
     }
 
     #[test]
+    fn a_pickup_body_falls_and_its_presence_replicates() {
+        let data = rl_data::GameData::builtin().expect("builtin");
+        let world = WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-2048.0, -2048.0, -64.0),
+                Vec3::new(2048.0, 2048.0, 0.0),
+            )
+            .build();
+        let entities = [MapEntity::new("item_healthkit", [20.0, 0.0, 200.0])];
+        let desc = PropDesc {
+            pieces: vec![ConvexHull::from_box(
+                Vec3::new(-8.0, -8.0, 0.0),
+                Vec3::new(8.0, 8.0, 16.0),
+            )],
+            origin: Vec3::new(20.0, 0.0, 200.0),
+            rotation: Quat::IDENTITY,
+            motion: BodyMotion::Dynamic,
+            mass: 5.0,
+            material: *data.physics.materials.get("wood"),
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            debris: true,
+            start_asleep: false,
+            grabbable: true,
+            free_on_grab: false,
+            breakable: None,
+            surface: "metal".to_owned(),
+        };
+        let make = || {
+            let mut sim = Simulation::new(Arc::new(world.clone()), &data);
+            sim.add_entities(&entities);
+            sim.add_pickup_bodies([Some(desc.clone())]);
+            let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+            (sim, player)
+        };
+        let (mut server, player) = make();
+        let (mut replica, _) = make();
+        let initial = initial_props(&server);
+        server.tick(&[]);
+        server.player_mut(player).expect("player").vitals.health = 50.0;
+        let body = server.pickups()[0].body.expect("pickup body");
+        let mut taken = false;
+        for _ in 0..240 {
+            if !server.tick(&[]).pickups.is_empty() {
+                taken = true;
+                break;
+            }
+        }
+        assert!(taken, "the falling medkit was not taken");
+
+        // Taking it hides its body on the replica too, where it was.
+        let state = WorldState::capture(&server, None);
+        let full = state.diff(None, &initial, 0, 0, Vec::new());
+        let rebuilt = WorldState::apply(None, &full, &initial).expect("full");
+        rebuilt.restore(&mut replica);
+        assert!(!replica.pickups()[0].available());
+        assert!(!replica.physics().prop_enabled(body));
+        assert_eq!(
+            replica.physics().pose(body),
+            server.physics().pose(body),
+            "the taken pickup's body is not where the server left it"
+        );
+        assert_eq!(replica.pickups()[0].origin, server.pickups()[0].origin);
+
+        // When it respawns at home and falls again, a full snapshot puts
+        // the body back and moves it where the server has it.
+        server.player_mut(player).expect("player").vitals.health = 100.0;
+        for _ in 0..1400 {
+            server.tick(&[]);
+        }
+        assert!(server.pickups()[0].available(), "the medkit did not return");
+        assert!(server.physics().prop_enabled(body));
+        let state = WorldState::capture(&server, None);
+        let full = state.diff(None, &initial, 0, 0, Vec::new());
+        let rebuilt = WorldState::apply(None, &full, &initial).expect("full");
+        rebuilt.restore(&mut replica);
+        assert!(replica.pickups()[0].available());
+        assert!(replica.physics().prop_enabled(body));
+        assert_eq!(replica.pickups()[0].origin, server.pickups()[0].origin);
+        assert_eq!(replica.physics().pose(body), server.physics().pose(body));
+    }
+
+    #[test]
     fn only_the_viewer_sees_their_private_state() {
         let (sim, a, b) = sim();
         let state = WorldState::capture(&sim, Some(a));
@@ -714,7 +806,7 @@ mod tests {
         let mut sim = Simulation::new(Arc::new(world), &data);
         let entity = |classname, keys: &[(&str, &str)]| {
             keys.iter().fold(
-                source_formats::entities::MapEntity::new(classname, [200.0, 0.0, 0.0]),
+                MapEntity::new(classname, [200.0, 0.0, 0.0]),
                 |entity, (key, value)| entity.with(key, value),
             )
         };

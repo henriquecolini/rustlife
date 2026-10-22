@@ -454,6 +454,7 @@ impl Simulation {
             self.physics.step();
         }
         self.physics.take_contacts();
+        self.sync_pickup_poses();
     }
 
     /// Brings collision up to date with props just added, without
@@ -510,6 +511,62 @@ impl Simulation {
     /// Adds a pickup.
     pub fn add_pickup(&mut self, pickup: Pickup) {
         self.pickups.push(pickup);
+    }
+
+    /// Gives the pickups bodies, in pickup order: `descs` has one entry per
+    /// pickup, `None` for stations (which stay on their wall) and for
+    /// models a body cannot be made for. Call once, after
+    /// [`add_entities`](Simulation::add_entities).
+    pub fn add_pickup_bodies(&mut self, descs: impl IntoIterator<Item = Option<PropDesc>>) {
+        let mut added = 0;
+        for (pickup, desc) in self.pickups.iter_mut().zip(descs) {
+            if pickup.body.is_some() {
+                continue;
+            }
+            let Some(desc) = desc else {
+                continue;
+            };
+            pickup.body = Some(self.physics.add_prop(&desc));
+            added += 1;
+        }
+        tracing::debug!(added, "gave pickups bodies");
+    }
+
+    /// Reads every pickup body's pose into its origin, so touches, stations
+    /// and effects use where it lies now.
+    pub fn sync_pickup_poses(&mut self) {
+        for pickup in &mut self.pickups {
+            let Some(body) = pickup.body else {
+                continue;
+            };
+            let Some(pose) = self.physics.pose(body) else {
+                continue;
+            };
+            pickup.origin = pose.position;
+        }
+    }
+
+    /// Takes pickup bodies out of the world while their pickups are taken,
+    /// and puts them back—at home and at rest—when they return: how a
+    /// replica follows what the server says is there.
+    pub fn set_pickup_presence(&mut self, presence: impl IntoIterator<Item = (BodyId, bool)>) {
+        let mut changed = false;
+        for (body, there) in presence {
+            let was = self.physics.prop_enabled(body);
+            if there && !was {
+                // A returning pickup may have been taken away from its
+                // home, and its home pose may not be in the snapshot
+                // because it matches the level's: put it back here.
+                self.physics.reset_prop(body);
+                changed = true;
+            } else if was != there {
+                self.physics.set_prop_enabled(body, there);
+                changed = true;
+            }
+        }
+        if changed {
+            self.physics.refresh();
+        }
     }
 
     /// Adds a player at a spawn point chosen by the rules (or the origin,
@@ -667,6 +724,7 @@ impl Simulation {
         for impact in self.physics.step() {
             self.prop_impact(impact, &mut events);
         }
+        self.sync_pickup_poses();
         self.hit_props_by_impacts();
         self.advance_grenades(&mut events);
 

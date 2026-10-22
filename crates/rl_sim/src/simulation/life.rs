@@ -10,7 +10,7 @@ use crate::collision::contents::MASK_SHOT;
 use crate::combat::{Cause, Damage, Vitals};
 use crate::hazards::DOSE_INTERVAL;
 use crate::movement::{Buttons, PlayerState, UserCmd};
-use crate::physics::Impact;
+use crate::physics::{BodyId, Impact};
 use crate::rng::Rng;
 use crate::rules::{self, MatchEvent};
 use crate::tools::manipulator::Manipulator;
@@ -210,8 +210,20 @@ impl Simulation {
 
     /// Lets pickups come back, and living players take those they touch.
     pub(super) fn touch_pickups(&mut self, events: &mut TickEvents) {
-        for pickup in &mut self.pickups {
-            pickup.tick(self.dt);
+        let mut returned = Vec::new();
+        for (index, pickup) in self.pickups.iter_mut().enumerate() {
+            if pickup.tick(self.dt) {
+                returned.push(index);
+            }
+        }
+        for index in returned {
+            let Some(body) = self.pickups[index].body else {
+                continue;
+            };
+            self.physics.reset_prop(body);
+            if let Some(home) = self.physics.home_position(body) {
+                self.pickups[index].origin = home;
+            }
         }
         if self.game.intermission() {
             return;
@@ -228,7 +240,11 @@ impl Simulation {
                 player.state.origin + hull.maxs,
             );
             for (pickup_index, pickup) in self.pickups.iter_mut().enumerate() {
+                let held = pickup
+                    .body
+                    .is_some_and(|body| self.physics.holder(body).is_some());
                 if pickup.available()
+                    && !held
                     && pickup.touches(mins, maxs)
                     && pickup.take(
                         &mut player.vitals,
@@ -240,6 +256,9 @@ impl Simulation {
                     events
                         .pickups
                         .push((PlayerId::from_index(index), pickup_index));
+                    if let Some(body) = pickup.body {
+                        self.physics.set_prop_enabled(body, false);
+                    }
                 }
             }
         }
@@ -342,6 +361,15 @@ impl Simulation {
         for pickup in &mut self.pickups {
             pickup.away = 0.0;
         }
+        let bodies: Vec<BodyId> = self
+            .pickups
+            .iter()
+            .filter_map(|pickup| pickup.body)
+            .collect();
+        for body in bodies {
+            self.physics.reset_prop(body);
+        }
+        self.sync_pickup_poses();
         self.reset_logic();
         let ids: Vec<PlayerId> = self.players().map(|(id, _)| id).collect();
         for id in ids {

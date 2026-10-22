@@ -84,6 +84,7 @@ fn level(data: &GameData) -> Level {
                 placement,
             })
             .collect(),
+        pickup_descs: Vec::new(),
     }
 }
 
@@ -262,7 +263,7 @@ fn props_without_health_or_that_are_not_physics_props_do_not_break() {
 #[test]
 fn a_missing_map_is_reported_by_name() {
     let data = data();
-    let error = rl_level::load(&Vfs::new(), "dm_nowhere", &data.physics).expect_err("missing");
+    let error = rl_level::load(&Vfs::new(), "dm_nowhere", &data).expect_err("missing");
     assert!(matches!(error, LevelError::NotFound { ref map } if map == "dm_nowhere"));
     assert_eq!(error.to_string(), "map dm_nowhere not found");
 }
@@ -278,7 +279,7 @@ fn a_broken_map_is_an_error_not_a_panic() {
         LooseDirectory::open(&dir).expect("open"),
         MountOrigin::Custom,
     );
-    let error = rl_level::load(&vfs, "dm_broken", &data.physics).expect_err("broken");
+    let error = rl_level::load(&vfs, "dm_broken", &data).expect_err("broken");
     std::fs::remove_dir_all(&dir).ok();
     assert!(matches!(error, LevelError::Bsp { .. }), "{error}");
 }
@@ -306,7 +307,7 @@ fn every_stock_map_loads_as_a_level() {
         "dm_steamlab",
         "dm_underpass",
     ] {
-        let level = rl_level::load(&game.vfs, map, &data.physics).expect("load level");
+        let level = rl_level::load(&game.vfs, map, &data).expect("load level");
         let built = level.simulation(&data);
         let bodies = built.bodies.iter().flatten().count();
         let dynamic = built

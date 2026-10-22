@@ -26,7 +26,6 @@ use crate::collision::contents::{MOVEABLE, SOLID, WINDOW};
 use crate::collision::{CollisionWorld, Hull};
 use crate::movement::{Buttons, view_direction};
 use crate::physics::{BodyId, PhysicsWorld};
-use crate::scene::Scene;
 
 /// What the tool's aiming ray stops at.
 const AIM_MASK: u32 = SOLID | WINDOW | MOVEABLE;
@@ -303,20 +302,32 @@ impl Manipulator {
 }
 
 /// The prop the aiming ray hits within `range`, with the point hit; `None`
-/// if it hits the map first, or nothing.
+/// if it hits the map first, or nothing. Debris — which is how pickups lie —
+/// counts, so they can be grabbed and punted too.
 fn aim_at(
     aim: &Aim,
     range: f32,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
 ) -> Option<(BodyId, Vec3)> {
-    let scene = Scene {
-        world,
-        physics,
-        ignore: None,
-    };
     let end = aim.eye + aim.forward() * range;
-    let trace =
-        crate::collision::CollisionQuery::trace_hull(&scene, aim.eye, end, &Hull::POINT, AIM_MASK);
+    let map = world.trace_hull(aim.eye, end, &Hull::POINT, AIM_MASK);
+    if map.all_solid {
+        return None;
+    }
+    // Nothing beyond the map's hit matters: trace props only that far.
+    let props = physics.trace_hull_including_debris(aim.eye, map.end, &Hull::POINT, AIM_MASK, None);
+    let trace = if props.hit() || props.start_solid {
+        // Rescale the props' fraction of the shortened move to the whole
+        // move, as `Scene` does.
+        let mut props = props;
+        props.fraction *= map.fraction;
+        if !props.hit() {
+            props.end = map.end;
+        }
+        map.nearest(props)
+    } else {
+        map
+    };
     Some((trace.body?, trace.end))
 }

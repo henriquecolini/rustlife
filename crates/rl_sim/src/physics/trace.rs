@@ -7,9 +7,9 @@
 //! candidate props.
 
 use glam::Vec3;
-use rapier3d::prelude::{Aabb, InteractionGroups, InteractionTestMode, QueryFilter};
+use rapier3d::prelude::{Aabb, Group, InteractionGroups, InteractionTestMode, QueryFilter};
 
-use super::{BodyId, BodyKind, GROUP_PLAYER, GROUP_PROP, PhysicsWorld};
+use super::{BodyId, BodyKind, GROUP_DEBRIS, GROUP_PROP, PhysicsWorld};
 use crate::collision::clip::{Hit, Sweep, clip_convex};
 use crate::collision::contents::SOLID;
 use crate::collision::{Hull, Trace};
@@ -32,13 +32,41 @@ impl PhysicsWorld {
         mask: u32,
         ignore: Option<BodyId>,
     ) -> Trace {
+        self.trace_hull_of(start, end, hull, mask, ignore, GROUP_PROP)
+    }
+
+    /// As [`PhysicsWorld::trace_hull`], but also against debris: what the
+    /// Manipulator's aim sees, since pickups lie as debris but can be
+    /// grabbed.
+    #[must_use]
+    pub fn trace_hull_including_debris(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        hull: &Hull,
+        mask: u32,
+        ignore: Option<BodyId>,
+    ) -> Trace {
+        self.trace_hull_of(start, end, hull, mask, ignore, GROUP_PROP | GROUP_DEBRIS)
+    }
+
+    /// Sweeps `hull` against the props in `groups`.
+    fn trace_hull_of(
+        &self,
+        start: Vec3,
+        end: Vec3,
+        hull: &Hull,
+        mask: u32,
+        ignore: Option<BodyId>,
+        groups: Group,
+    ) -> Trace {
         let offset = hull.center();
         let sweep = Sweep::new(start + offset, end + offset, hull.extents(), mask);
         let mut best = Hit::default();
         let mut best_body = None;
         if mask & SOLID != 0 {
             let (mins, maxs) = sweep.bounds(CULL_MARGIN);
-            let groups = InteractionGroups::new(GROUP_PLAYER, GROUP_PROP, InteractionTestMode::And);
+            let groups = InteractionGroups::new(GROUP_PROP, groups, InteractionTestMode::And);
             let filter = QueryFilter::new().groups(groups);
             for (_, collider) in self
                 .rapier

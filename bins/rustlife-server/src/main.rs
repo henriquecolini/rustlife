@@ -93,12 +93,11 @@ fn main() -> Result<()> {
         .clone()
         .or_else(|| maps.first().cloned())
         .context("no maps to serve: configure `maps` or mount a game that has some")?;
-    let level =
-        rl_level::load(&vfs, &map, &data.physics).with_context(|| format!("loading {map}"))?;
+    let level = rl_level::load(&vfs, &map, &data).with_context(|| format!("loading {map}"))?;
     let loader = {
-        let (vfs, physics) = (Arc::clone(&vfs), data.physics.clone());
+        let (vfs, gameplay) = (Arc::clone(&vfs), data.clone());
         MapLoader::new(move |name| {
-            rl_level::load(&vfs, name, &physics).map_err(|error| error.to_string())
+            rl_level::load(&vfs, name, &gameplay).map_err(|error| error.to_string())
         })
     };
     let port = config.port;

@@ -92,6 +92,7 @@ fn named_level(data: &GameData, name: &str, checksum: u32) -> Level {
             ),
             desc: Some(crate_desc),
         }],
+        pickup_descs: Vec::new(),
     }
 }
 

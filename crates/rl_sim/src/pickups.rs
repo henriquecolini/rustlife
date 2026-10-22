@@ -18,6 +18,7 @@ use rl_data::{GameData, ItemEffect, MappedEntity, PlayerConfig};
 use source_formats::entities::MapEntity;
 
 use crate::combat::Vitals;
+use crate::physics::BodyId;
 use crate::weapons::{AmmoId, Arsenal, Inventory, WeaponId};
 
 /// What a pickup gives.
@@ -66,6 +67,10 @@ pub struct Pickup {
     pub station: Option<f32>,
     /// For a station: what is left of its charge (its `gives`).
     pub charge: f32,
+    /// The body it lies as in the physics world, if it is a thing that can
+    /// fall and be grabbed. Stations have none, and so do pickups in a
+    /// simulation that did not give them bodies.
+    pub body: Option<BodyId>,
 }
 
 impl Pickup {
@@ -230,6 +235,7 @@ fn weapon_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup>
         away: 0.0,
         station: None,
         charge: 0.0,
+        body: None,
     })
 }
 
@@ -259,6 +265,7 @@ fn item_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup> {
         away: 0.0,
         station: item.station.as_ref().map(|station| station.rate),
         charge: 0.0,
+        body: None,
     };
     pickup.charge = pickup.capacity();
     Some(pickup)

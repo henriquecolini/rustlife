@@ -46,6 +46,7 @@ use rl_assets::{MapAsset, ModelAsset, PlacedProp, PropKind, VertexLightingAsset}
 use rl_sim::physics::{BodyId, BodyPose};
 
 use crate::AppState;
+use crate::actors::PickupView;
 use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::player::{LocalPlayer, Movement, ViewAngles};
@@ -404,8 +405,12 @@ fn add_bodies(
     }
 }
 
-/// Hides the props the server broke, and shows them again if they respawn.
-fn show_broken(game: Game, mut bodies: Query<(&PhysicsBody, &mut Visibility)>) {
+/// Hides the map props the server broke, and shows them again if they
+/// respawn. Pickups are hidden by their own views while taken.
+fn show_broken(
+    game: Game,
+    mut bodies: Query<(&PhysicsBody, &mut Visibility), Without<PickupView>>,
+) {
     let Some(sim) = game.sim() else {
         return;
     };

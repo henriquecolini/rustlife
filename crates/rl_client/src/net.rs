@@ -270,7 +270,7 @@ fn host(
         return;
     }
     let data = gameplay.0.clone();
-    let level = match rl_level::load(&vfs.0, &map.0, &data.physics) {
+    let level = match rl_level::load(&vfs.0, &map.0, &data) {
         Ok(level) => level,
         Err(error) => {
             // A map without collision is still worth flying around.
@@ -282,9 +282,9 @@ fn host(
     let listen = port.map(|port| SocketAddr::from(([0, 0, 0, 0], port)));
     let games = content.mounted_ids();
     let loader = {
-        let (vfs, physics) = (vfs.0.clone(), data.physics.clone());
+        let (vfs, gameplay) = (vfs.0.clone(), data.clone());
         MapLoader::new(move |name| {
-            rl_level::load(&vfs, name, &physics).map_err(|error| error.to_string())
+            rl_level::load(&vfs, name, &gameplay).map_err(|error| error.to_string())
         })
     };
     let options = ServerOptions {
@@ -409,7 +409,7 @@ impl WelcomeParams<'_> {
         let map = &welcome.map;
         let level = match &self.hosted {
             Some(hosted) if hosted.0.name == map.name => Ok(hosted.0.clone()),
-            _ => rl_level::load(&self.vfs.0, &map.name, &data.physics),
+            _ => rl_level::load(&self.vfs.0, &map.name, &data),
         };
         let level = match level {
             Ok(level) if level.checksum == map.checksum => level,
