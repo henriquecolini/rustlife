@@ -21,7 +21,7 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `source_formats` | Pure parsers for Source file formats. No Bevy. |
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
-| `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (rapier3d), weapons and the Manipulator, damage, pickups, deathmatch rules. Runs headless; no Bevy. |
+| `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (Box3D), weapons and the Manipulator, damage, pickups, deathmatch rules. Runs headless; no Bevy. |
 | `rl_level` | A map's simulation (collision, spawns, entities, prop bodies) from mounted content, without rendering. |
 | `rl_net` | Protocol, snapshots and deltas, events, transports, the client endpoint with prediction and interpolation. No Bevy. |
 | `rl_server` | The authoritative server: joining, command queues, the tick, snapshots. No Bevy. |
@@ -140,7 +140,7 @@ be switched freely.
    solid's mass and surface property. The model loader reads it beside the
    `.mdl`, and placements carry how each prop collides (none, box, hull),
    its spawnflags and its mass scale.
-2. **Physics world.** `rl_sim::physics::PhysicsWorld` wraps rapier3d in
+2. **Physics world.** `rl_sim::physics::PhysicsWorld` wraps Box3D (`box3d-rust`) in
    Source units. The map's solid brushes are convex hulls and displacements
    triangle meshes, both fixed. Props are bodies built by `prop_desc` from
    placement plus model, and players are kinematic boxes.
@@ -223,7 +223,7 @@ See [docs/netcode.md](docs/netcode.md).
    them into joints, inverse bind poses and `AnimationClip`s and skins the
    meshes. The client plays stance sequences on other players, holding
    their weapons' world models, and activities on the view model, drawn by
-   its own camera. A dead player's model becomes a client-side Rapier
+   its own camera. A dead player's model becomes a client-side Box3D
    ragdoll with joint limits, self collision and the killing blow applied
    to the bone it hit.
 3. **Sound.** `source_formats` reads WAV files, soundscripts and

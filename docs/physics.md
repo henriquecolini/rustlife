@@ -9,12 +9,13 @@ often the Manipulator acts, [`data/weapons/manipulator.ron`](../data/weapons/man
 
 ## The physics world
 
-`PhysicsWorld` wraps a [rapier3d](https://rapier.rs) world that works in
-Source units, like the rest of the simulation: inches, Z up, kilograms.
-Rapier's tolerances are scaled with `length_unit = 39.37` (inches per
-metre) so they suit inch-sized geometry. It holds three kinds of body.
+`PhysicsWorld` wraps a [Box3D](https://github.com/larsbrubaker/box3d-rust)
+world that works in Source units, like the rest of the simulation: inches,
+Z up, kilograms. Box3D's global `length_units_per_meter` is set to `39.37`
+(inches per metre) so its tolerances and defaults suit inch-sized geometry.
+It holds three kinds of body.
 
-| Body | Kind | Collider | Collides with |
+| Body | Kind | Shapes | Collides with |
 |------|------|----------|---------------|
 | The map | fixed | one convex hull per solid brush, one triangle mesh per displacement | props, debris |
 | Props | dynamic or fixed | the convex pieces of the model's `.phy` (or its bounding box) | map, props, debris, players |
@@ -26,7 +27,6 @@ A brush blocks props if it is solid, glass, a grate or a moving brush
 entity. Clip brushes block props only when they clip both players and NPCs
 (`tools/toolsclip`). A brush's convex hull is the set of corners where three
 of its planes meet inside all of them. Displacements become triangle meshes.
-Building dm_lockdown's 2246 colliders takes about 20 ms.
 
 **Props.** `prop_desc` turns a placement into a body description:
 
@@ -48,9 +48,10 @@ Building dm_lockdown's 2246 colliders takes about 20 ms.
   through it), `8` fixes it in place, `64` frees a fixed prop when it is
   grabbed, and `512` prevents pickup.
 
-Dynamic props use continuous collision detection, so a thrown prop does not
-tunnel through thin walls. After each step every prop's speed is clamped to
-`max_speed` and `max_angular_speed`.
+Dynamic props use Box3D's continuous collision detection, and props moving
+faster than `ccd_min_speed` are marked as bullets for the step, so a thrown
+prop does not tunnel through thin walls or other props. After each step
+every prop's speed is clamped to `max_speed` and `max_angular_speed`.
 
 ### Constraints
 
@@ -78,7 +79,7 @@ level is built.
 
 ## Players and props
 
-Players are not simulated by rapier. They move with rustlife's own
+Players are not simulated by Box3D. They move with rustlife's own
 Source-like movement ([movement.md](movement.md)), which must collide with
 props exactly as it does with brushes. So `Scene` merges two traces:
 
@@ -88,7 +89,7 @@ props exactly as it does with brushes. So `Scene` merges two traces:
   planes are the piece's faces, plus bevels on every other separating axis
   of box and hull: the world axes, and each hull edge crossed with them. The
   bevels depend on the world axes, so the planes are rebuilt (in world
-  space) after every step in which a prop moved. Rapier's broad phase picks
+  space) after every step in which a prop moved. Box3D's broad phase picks
   the props near a sweep.
 
 The nearer hit wins, and the trace reports which body it hit. Movement uses
@@ -120,10 +121,12 @@ E = ½ · m · (v · 0.0254)²          (joules)
 damage = clamp((E − min_energy) · damage_per_joule, 0, max_damage)   if v ≥ min_speed
 ```
 
-With the shipped values, a 30 kg barrel thrown at 1000 units/s deals about
-110 damage. A barrel rolling into someone at walking pace deals none. Props
-held by someone deal no damage. The player who just let go of a prop is
-never hit by it (see below). Damage is reported as `Impact` events and
+Box3D reports the contact's approach speed and normal. With the shipped
+values, a 30 kg barrel thrown at 1000 units/s deals about 110 damage. A
+barrel rolling into someone at walking pace deals none. Props held by
+someone deal no damage. The player who just let go of a prop is never hit
+by it: a filter joint keeps their contacts apart until their bounds
+separate (see below). Damage is reported as `Impact` events and
 taken from the player's health; a prop someone threw, punted or dropped in
 the last `prop_credit` seconds (`rules/deathmatch.ron`) is theirs, so a kill
 with it is their frag (see [combat.md](combat.md)).
@@ -243,6 +246,5 @@ the throw. These scripts move the player on the hosted server.
 | `rl_sim/tests/real_map.rs` | A real map's physics world, with crates dropped at every spawn landing on the floor (`RUSTLIFE_TEST_BSP`) |
 | `rl_client/tests/local_play.rs` | A real map's props becoming bodies in the running client (`RUSTLIFE_TEST_GAME_DIR`) |
 
-`cargo bench -p rl_sim -- simulation` times a whole tick: one player
-running into 64 tumbling crates takes about 35 µs on the development
-machine, far inside a 15 ms tick.
+`cargo bench -p rl_sim -- simulation` times a whole tick with one player
+running into 64 tumbling crates.
