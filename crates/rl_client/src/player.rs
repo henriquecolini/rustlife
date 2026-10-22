@@ -367,7 +367,11 @@ fn tick(
     } else {
         user_cmd(&keys, mouse.as_deref(), &bindings, latched.buttons, *angles)
     };
-    if selector.swallows_attack(bindings.pressed("attack", &keys, mouse.as_deref())) {
+    let (attack_held, attack_pressed) = (
+        bindings.pressed("attack", &keys, mouse.as_deref()),
+        bindings.just_pressed("attack", &keys, mouse.as_deref()),
+    );
+    if selector.swallows_attack(attack_held, attack_pressed) {
         cmd.buttons = cmd.buttons.with(Buttons::ATTACK, false);
     }
     if let (Some(choice), Some(local)) = (latched.choice, session.sim().player(player.id)) {

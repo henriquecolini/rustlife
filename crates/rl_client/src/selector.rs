@@ -91,8 +91,12 @@ impl WeaponSelector {
     }
 
     /// Whether the fire button must be ignored this tick: it is the click
-    /// that confirmed a pick, held on. `held` is whether the button is down.
-    pub(crate) fn swallows_attack(&mut self, held: bool) -> bool {
+    /// that confirmed a pick, held on. `held` is whether the button is
+    /// down and `pressed` whether it went down this frame. Ticks run before
+    /// the frame's input is latched, so the click that confirms is seen
+    /// here, with the list still open, before [`Self::confirm`] takes it.
+    pub(crate) fn swallows_attack(&mut self, held: bool, pressed: bool) -> bool {
+        self.swallow_attack |= pressed && self.is_open();
         self.swallow_attack &= held;
         self.swallow_attack
     }
@@ -183,10 +187,13 @@ mod tests {
         let picked = selector.cursor();
         assert_eq!(selector.confirm(), picked);
         assert!(!selector.is_open());
-        assert!(selector.swallows_attack(true), "still the same click");
-        assert!(selector.swallows_attack(true));
-        assert!(!selector.swallows_attack(false), "released");
-        assert!(!selector.swallows_attack(true), "a new press fires");
+        assert!(
+            selector.swallows_attack(true, false),
+            "still the same click"
+        );
+        assert!(selector.swallows_attack(true, false));
+        assert!(!selector.swallows_attack(false, false), "released");
+        assert!(!selector.swallows_attack(true, true), "a new press fires");
     }
 
     #[test]
@@ -198,6 +205,24 @@ mod tests {
         assert!(selector.dismiss().is_some());
         assert!(!selector.is_open());
         assert_eq!(selector.opacity(), 0.0);
-        assert!(!selector.swallows_attack(true));
+        assert!(!selector.swallows_attack(true, false));
+    }
+
+    #[test]
+    fn a_tick_before_the_click_is_latched_already_swallows_it() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        selector.scroll(&inventory, &arsenal, true);
+        assert!(selector.swallows_attack(true, true), "the confirming press");
+        selector.confirm();
+        assert!(selector.swallows_attack(true, false), "and its later ticks");
+        assert!(!selector.swallows_attack(false, false));
+    }
+
+    #[test]
+    fn a_press_without_a_list_fires() {
+        let mut selector = WeaponSelector::default();
+        assert!(!selector.swallows_attack(true, true));
     }
 }
