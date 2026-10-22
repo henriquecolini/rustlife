@@ -345,6 +345,12 @@ fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &
         .target
         .find_once(|| go_to_nearest_prop(player, sim));
     if let Some((body, pitch, yaw)) = target {
+        // Keep aiming at the target: the player settles onto the floor
+        // after being moved, and a grabbed prop moves in front.
+        let (pitch, yaw) = match (sim.eye_position(player), sim.physics().center_of_mass(body)) {
+            (Some(eye), Some(center)) => angles_to(eye, center),
+            _ => (pitch, yaw),
+        };
         cmd.pitch = pitch;
         cmd.yaw = yaw;
         let held = sim
