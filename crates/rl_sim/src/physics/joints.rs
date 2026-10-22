@@ -22,11 +22,11 @@
 //! motors (`phys_motor`) are not simulated; `No collision until break`
 //! keeps the joined bodies from colliding with each other.
 
+use box3d_rust as b3;
 use glam::{Quat, Vec3};
-use rapier3d::prelude::{GenericJointBuilder, JointAxesMask, Pose, RopeJointBuilder};
 use source_formats::entities::MapEntity;
 
-use super::{BodyId, PhysicsWorld};
+use super::{BodyId, MAP_BODY, PhysicsWorld, from_b3, from_b3_quat, to_b3, to_b3_quat};
 
 /// Constraint `spawnflags`.
 mod flags {
@@ -182,73 +182,90 @@ impl PhysicsWorld {
     /// Joins bodies as `joint` says. Returns `false` (and adds nothing) if
     /// it names a body that does not exist.
     pub fn add_joint(&mut self, joint: &JointDesc) -> bool {
-        let handle = |world: &mut Self, body: Option<BodyId>| match body {
-            Some(body) => world.handle(body),
-            None => Some(world.anchor()),
+        if joint.body1.is_none() && joint.body2.is_none() {
+            return false;
+        }
+        let handle1 = match joint.body1 {
+            Some(body) => self.handle(body),
+            None => Some(self.anchor()),
         };
-        let (Some(handle1), Some(handle2)) = (handle(self, joint.body1), handle(self, joint.body2))
-        else {
+        let handle2 = match joint.body2 {
+            Some(body) => self.handle(body),
+            None => Some(self.anchor()),
+        };
+        let (Some(handle1), Some(handle2)) = (handle1, handle2) else {
             return false;
         };
-        let pose = |world: &Self, handle| {
-            world
-                .rapier
-                .bodies
-                .get(handle)
-                .map_or(Pose::IDENTITY, |rigid| *rigid.position())
-        };
-        let (pose1, pose2) = (pose(self, handle1), pose(self, handle2));
+        let transform1 = b3::body::body_get_transform(&self.b3_world(), handle1);
+        let transform2 = b3::body::body_get_transform(&self.b3_world(), handle2);
+        let pose1 = (from_b3(transform1.p), from_b3_quat(transform1.q));
+        let pose2 = (from_b3(transform2.p), from_b3_quat(transform2.q));
         // Each body's frame is the joint as placed, in the body's own
-        // space: the joint's X axis along a hinge's axis.
+        // space: the joint's Z axis along a hinge's axis (Box3D's revolute
+        // axis).
         let turn = match joint.kind {
-            JointKind::Hinge { axis } => Quat::from_rotation_arc(Vec3::X, axis),
+            JointKind::Hinge { axis } => Quat::from_rotation_arc(Vec3::Z, axis),
             _ => Quat::IDENTITY,
         };
-        let frame = |pose: &Pose, anchor: Vec3| {
-            Pose::from_parts(
-                pose.inverse_transform_point(anchor),
-                pose.rotation.inverse() * turn,
-            )
+        let frame = |(position, rotation): (Vec3, Quat), anchor: Vec3| b3::Transform {
+            p: to_b3(rotation.inverse() * (anchor - position)),
+            q: to_b3_quat(rotation.inverse() * turn),
         };
-        let frame1 = frame(&pose1, joint.anchor1);
-        let frame2 = frame(&pose2, joint.anchor2);
-        let data = match joint.kind {
+        let frame1 = frame(pose1, joint.anchor1);
+        let frame2 = frame(pose2, joint.anchor2);
+        let id = match joint.kind {
             JointKind::Rope { length } => {
-                RopeJointBuilder::new(length)
-                    .local_anchor1(frame1.translation)
-                    .local_anchor2(frame2.translation)
-                    .contacts_enabled(joint.collide)
-                    .build()
-                    .data
+                let mut def = b3::default_distance_joint_def();
+                def.base.body_id_a = handle1;
+                def.base.body_id_b = handle2;
+                def.base.local_frame_a = frame1;
+                def.base.local_frame_b = frame2;
+                def.base.collide_connected = joint.collide;
+                def.length = length.max(0.01);
+                def.enable_limit = true;
+                def.min_length = 0.0;
+                def.max_length = length.max(0.01);
+                b3::joint::create_distance_joint(self.b3_world_mut(), &def)
             }
-            kind => {
-                let locked = match kind {
-                    JointKind::Ball => JointAxesMask::LOCKED_SPHERICAL_AXES,
-                    JointKind::Hinge { .. } => JointAxesMask::LOCKED_REVOLUTE_AXES,
-                    _ => JointAxesMask::LOCKED_FIXED_AXES,
-                };
-                GenericJointBuilder::new(locked)
-                    .local_frame1(frame1)
-                    .local_frame2(frame2)
-                    .contacts_enabled(joint.collide)
-                    .build()
+            JointKind::Ball => {
+                let mut def = b3::default_spherical_joint_def();
+                def.base.body_id_a = handle1;
+                def.base.body_id_b = handle2;
+                def.base.local_frame_a = frame1;
+                def.base.local_frame_b = frame2;
+                def.base.collide_connected = joint.collide;
+                b3::joint::create_spherical_joint(self.b3_world_mut(), &def)
+            }
+            JointKind::Hinge { .. } => {
+                let mut def = b3::default_revolute_joint_def();
+                def.base.body_id_a = handle1;
+                def.base.body_id_b = handle2;
+                def.base.local_frame_a = frame1;
+                def.base.local_frame_b = frame2;
+                def.base.collide_connected = joint.collide;
+                b3::joint::create_revolute_joint(self.b3_world_mut(), &def)
+            }
+            JointKind::Weld => {
+                let mut def = b3::default_weld_joint_def();
+                def.base.body_id_a = handle1;
+                def.base.body_id_b = handle2;
+                def.base.local_frame_a = frame1;
+                def.base.local_frame_b = frame2;
+                def.base.collide_connected = joint.collide;
+                b3::joint::create_weld_joint(self.b3_world_mut(), &def)
             }
         };
-        self.rapier
-            .impulse_joints
-            .insert(handle1, handle2, data, false);
-        true
+        id.index1 != 0
     }
 
     /// The fixed body joints hold props to the world by, made on first use.
-    fn anchor(&mut self) -> rapier3d::prelude::RigidBodyHandle {
+    fn anchor(&mut self) -> b3::BodyId {
         if let Some(anchor) = self.anchor {
             return anchor;
         }
-        let anchor = self
-            .rapier
-            .bodies
-            .insert(rapier3d::prelude::RigidBodyBuilder::fixed().build());
+        let mut def = b3::default_body_def();
+        def.user_data = MAP_BODY;
+        let anchor = b3::body::create_body(self.b3_world_mut(), &def);
         self.anchor = Some(anchor);
         anchor
     }

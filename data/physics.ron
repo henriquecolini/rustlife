@@ -11,14 +11,8 @@ Physics(
     // absurd speeds: units/s and degrees/s.
     max_speed: 4000.0,
     max_angular_speed: 7200.0,
-    // Constraint solver iterations per tick, and Gauss-Seidel passes within
-    // each: more keeps hard hits and stacks from sinking props into each
-    // other, at a higher cost.
-    solver_iterations: 8,
-    pgs_iterations: 2,
-    // Sub-steps continuous collision detection may take within a tick, so a
-    // fast prop is stopped by other props, not only by the map (0 turns it
-    // off).
+    // Box3D solver sub-steps per tick: more keeps hard hits and stacks from
+    // sinking props into each other, at a higher cost (0 means one).
     ccd_substeps: 4,
     // A prop faster than this is swept against the other props in its way;
     // slower ones are not (resting piles stay cheap), units/s.

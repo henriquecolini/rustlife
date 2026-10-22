@@ -11,8 +11,8 @@ description = "rustlife's headless simulation: collision, player movement, prop 
 
 [dependencies]
 # Vectors serialise for the network protocol (`rl_net`).
+box3d-rust.workspace = true
 glam = { workspace = true, features = ["serde"] }
-rapier3d.workspace = true
 rl_data.workspace = true
 serde.workspace = true
 source_formats.workspace = true

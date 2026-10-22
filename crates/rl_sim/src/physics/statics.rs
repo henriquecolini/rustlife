@@ -1,4 +1,4 @@
-//! The map's static geometry as fixed colliders.
+//! The map's static geometry as Box3D colliders.
 //!
 //! Props collide with the same brushes players do, minus the clip brushes
 //! meant for players only: every brush that is solid, glass, a grate or a
@@ -10,50 +10,77 @@
 //! fixed body: each gets a kinematic body of its own, made of the same
 //! brushes in the model's frame, which follows the mover as it moves.
 
+use b3::body::create_body;
+use b3::math_functions::Vec3 as B3Vec3;
+use b3::mesh::{MeshDef, create_mesh};
+use b3::shape::{create_hull_shape, create_mesh_shape};
+use b3::types::{BodyType, ShapeDef};
+use box3d_rust as b3;
 use glam::Vec3;
-use rapier3d::prelude::{
-    ColliderBuilder, ColliderHandle, InteractionGroups, PhysicsWorld as RapierWorld, Pose,
-    RigidBodyBuilder, RigidBodyHandle, SharedShape,
-};
 
+use super::{GROUP_WORLD, MAP_BODY, collision_filter, to_b3};
 use crate::collision::CollisionWorld;
 use crate::collision::contents::{GRATE, MONSTER_CLIP, MOVEABLE, PLAYER_CLIP, SOLID, WINDOW};
-
-/// Source units per metre: rapier scales its tolerances by this.
-pub(super) const UNITS_PER_METRE: f32 = 1.0 / 0.0254;
 
 /// Contents that always block props.
 const PROP_SOLID: u32 = SOLID | WINDOW | GRATE | MOVEABLE;
 /// Clip brushes block props only when they clip everything.
 const FULL_CLIP: u32 = PLAYER_CLIP | MONSTER_CLIP;
 
-/// Adds the static geometry of `map` to `rapier` as one fixed body,
-/// returning how many colliders it took.
-pub(super) fn add_map(
-    rapier: &mut RapierWorld,
-    map: &CollisionWorld,
-    groups: InteractionGroups,
-) -> usize {
-    let body = rapier.insert_body(RigidBodyBuilder::fixed().user_data(u128::from(u32::MAX)));
+/// The shape definition of fixed map geometry in `group`.
+fn static_shape(group: u64) -> ShapeDef {
+    let mut def = b3::default_shape_def();
+    def.density = 0.0;
+    def.update_body_mass = false;
+    def.filter = collision_filter(group);
+    def
+}
+
+/// Adds the static geometry of `map` to `world` as one fixed body,
+/// returning how many shapes it took.
+pub(super) fn add_map(world: &mut b3::world::World, map: &CollisionWorld) -> usize {
+    let mut body_def = b3::default_body_def();
+    body_def.type_ = BodyType::Static;
+    body_def.user_data = MAP_BODY;
+    let body = create_body(world, &body_def);
+    let shape = static_shape(GROUP_WORLD);
     let mut count = 0;
     for corners in map.convex_solids(PROP_SOLID | FULL_CLIP) {
-        let Some(builder) = ColliderBuilder::convex_hull(&corners) else {
+        let points: Vec<B3Vec3> = corners
+            .iter()
+            .map(|&corner| to_b3(Vec3::from(corner)))
+            .collect();
+        let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES) else {
             continue;
         };
-        rapier.insert_collider(builder.collision_groups(groups), Some(body));
-        count += 1;
+        if create_hull_shape(world, body, &shape, &hull).index1 != 0 {
+            count += 1;
+        }
     }
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
     for triangles in map.displacement_triangles(PROP_SOLID) {
-        let vertices: Vec<Vec3> = triangles.iter().flatten().map(|&v| Vec3::from(v)).collect();
-        let indices = (0..triangles.len() as u32)
-            .map(|triangle| [triangle * 3, triangle * 3 + 1, triangle * 3 + 2])
-            .collect();
-        match ColliderBuilder::trimesh(vertices, indices) {
-            Ok(builder) => {
-                rapier.insert_collider(builder.collision_groups(groups), Some(body));
+        for triangle in triangles {
+            let first = i32::try_from(vertices.len()).unwrap_or(i32::MAX);
+            for point in triangle {
+                vertices.push(to_b3(Vec3::from(*point)));
+            }
+            indices.extend([first, first + 1, first + 2]);
+        }
+    }
+    if !vertices.is_empty() {
+        let def = MeshDef {
+            vertices,
+            indices,
+            ..MeshDef::default()
+        };
+        if let Some(mesh) = create_mesh(&def, None) {
+            if create_mesh_shape(world, body, &shape, &mesh, b3::VEC3_ONE).index1 != 0 {
                 count += 1;
             }
-            Err(error) => tracing::debug!("skipping displacement collider: {error}"),
+        } else {
+            tracing::debug!("skipping displacement colliders: Box3D rejected the mesh");
         }
     }
     count
@@ -64,44 +91,37 @@ pub(super) fn add_map(
 pub(super) struct MoverBody {
     /// The mover's BSP model.
     pub(super) model: usize,
-    pub(super) handle: RigidBodyHandle,
-    /// `None` for a model with nothing props collide with.
-    pub(super) collider: Option<ColliderHandle>,
+    pub(super) handle: b3::BodyId,
 }
 
 /// Adds a kinematic body for each of `map`'s movers, where it is now.
-pub(super) fn add_movers(
-    rapier: &mut RapierWorld,
-    map: &CollisionWorld,
-    groups: InteractionGroups,
-) -> Vec<MoverBody> {
+pub(super) fn add_movers(world: &mut b3::world::World, map: &CollisionWorld) -> Vec<MoverBody> {
     map.movers()
         .filter_map(|model| {
             let (origin, rotation, solid) = map.mover_pose(model)?;
-            let handle = rapier.insert_body(
-                RigidBodyBuilder::kinematic_position_based()
-                    .pose(Pose::from_parts(origin, rotation))
-                    .user_data(u128::from(u32::MAX)),
-            );
-            let shapes: Vec<(Pose, SharedShape)> = map
-                .model_solids(model, PROP_SOLID | FULL_CLIP)
-                .iter()
-                .filter_map(|corners| SharedShape::convex_hull(corners))
-                .map(|shape| (Pose::IDENTITY, shape))
-                .collect();
-            let collider = (!shapes.is_empty()).then(|| {
-                rapier.insert_collider(
-                    ColliderBuilder::new(SharedShape::compound(shapes))
-                        .collision_groups(groups)
-                        .enabled(solid),
-                    Some(handle),
-                )
-            });
-            Some(MoverBody {
-                model,
-                handle,
-                collider,
-            })
+            let mut body_def = b3::default_body_def();
+            body_def.type_ = BodyType::Kinematic;
+            body_def.position = to_b3(origin);
+            body_def.rotation = super::to_b3_quat(rotation);
+            body_def.user_data = MAP_BODY;
+            let handle = create_body(world, &body_def);
+            let shape_def = static_shape(GROUP_WORLD);
+            let mut any = false;
+            for corners in map.model_solids(model, PROP_SOLID | FULL_CLIP) {
+                let points: Vec<B3Vec3> = corners
+                    .iter()
+                    .map(|&corner| to_b3(Vec3::from(corner)))
+                    .collect();
+                let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES)
+                else {
+                    continue;
+                };
+                any |= create_hull_shape(world, handle, &shape_def, &hull).index1 != 0;
+            }
+            if !solid {
+                b3::body::body_disable(world, handle);
+            }
+            any.then_some(MoverBody { model, handle })
         })
         .collect()
 }

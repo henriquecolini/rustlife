@@ -3,13 +3,13 @@
 //! Movement sweeps the player's box against props exactly as against
 //! brushes: each convex piece of a prop is a set of clip planes (built when
 //! the prop moves, see `PhysicsWorld::refresh_planes`), and the box is
-//! clipped against the pieces near its path. Rapier's broad phase finds the
+//! clipped against the pieces near its path. Box3D's broad phase finds the
 //! candidate props.
 
+use box3d_rust as b3;
 use glam::Vec3;
-use rapier3d::prelude::{Aabb, Group, InteractionGroups, InteractionTestMode, QueryFilter};
 
-use super::{BodyId, BodyKind, GROUP_DEBRIS, GROUP_PROP, PhysicsWorld};
+use super::{BodyId, BodyKind, GROUP_DEBRIS, GROUP_PROP, PhysicsWorld, query_filter, to_b3};
 use crate::collision::clip::{Hit, Sweep, clip_convex};
 use crate::collision::contents::SOLID;
 use crate::collision::{Hull, Trace};
@@ -58,7 +58,7 @@ impl PhysicsWorld {
         hull: &Hull,
         mask: u32,
         ignore: Option<BodyId>,
-        groups: Group,
+        groups: u64,
     ) -> Trace {
         let offset = hull.center();
         let sweep = Sweep::new(start + offset, end + offset, hull.extents(), mask);
@@ -66,13 +66,26 @@ impl PhysicsWorld {
         let mut best_body = None;
         if mask & SOLID != 0 {
             let (mins, maxs) = sweep.bounds(CULL_MARGIN);
-            let groups = InteractionGroups::new(GROUP_PROP, groups, InteractionTestMode::And);
-            let filter = QueryFilter::new().groups(groups);
-            for (_, collider) in self
-                .rapier
-                .intersect_aabb_conservative(Aabb::new(mins, maxs), filter)
-            {
-                let id = BodyId(collider.user_data as u32);
+            let mut candidates: Vec<BodyId> = Vec::new();
+            let world = self.b3_world();
+            b3::world::world_overlap_aabb(
+                &world,
+                b3::Aabb {
+                    lower_bound: to_b3(mins),
+                    upper_bound: to_b3(maxs),
+                },
+                &query_filter(groups),
+                |shape| {
+                    let handle = b3::shape::shape_get_body(&world, shape);
+                    if let Some(id) = self.body_id(handle) {
+                        candidates.push(id);
+                    }
+                    true
+                },
+            );
+            candidates.sort_unstable();
+            candidates.dedup();
+            for id in candidates {
                 if Some(id) == ignore {
                     continue;
                 }

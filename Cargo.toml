@@ -42,6 +42,10 @@ bevy_math = "0.20"
 bevy_mesh = "0.20"
 bevy_reflect = "0.20"
 bevy_transform = "0.20"
+# Rigid-body physics for props, standalone (no Bevy integration) so the
+# simulation stays engine-independent. Pinned to the reviewed upstream
+# revision rather than a crates.io release.
+box3d-rust = { git = "https://github.com/larsbrubaker/box3d-rust", rev = "f2ca61e39b653d1b13945d13ebd15478d5fa4661" }
 futures-lite = "2"
 # Vector maths for the simulation; the same major version Bevy uses, so sim
 # values cross into rendering without conversion.
@@ -59,9 +63,6 @@ memmap2 = "0.9"
 proptest = "1"
 # Compact binary encoding of network messages (serde).
 postcard = { version = "1", default-features = false, features = ["use-std"] }
-# Rigid-body physics for props, standalone (no Bevy integration) so the
-# simulation stays engine-independent; it shares glam 0.33 with us.
-rapier3d = "0.36"
 # Networking: renet's connection and channel layer, over netcode's UDP
 # transport. Both are engine-agnostic; rustlife drives them itself.
 renet = "2"

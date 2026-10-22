@@ -3,8 +3,8 @@
 //!
 //! A prop held by a player does not collide with that player (or it would
 //! push them around while they carry it), nor, once let go, until the two
-//! have come apart: [`HeldFilter`] drops those contact pairs before the
-//! solver sees them.
+//! have come apart: a Box3D *filter joint* disables contacts between that
+//! specific pair before the solver sees them.
 //!
 //! A prop that *starts* touching a player during a step may have hit them.
 //! The impact's speed is how fast the prop was moving *towards the player*
@@ -15,10 +15,10 @@
 //! it is. Props held by someone deal none, and a prop never hits the player
 //! who just let go of it.
 
+use box3d_rust as b3;
 use glam::Vec3;
-use rapier3d::prelude::{PairFilterContext, PhysicsHooks, RigidBodyHandle, SolverFlags};
 
-use super::{BodyId, BodyKind, PhysicsWorld};
+use super::{BodyId, BodyKind, PhysicsWorld, from_b3};
 
 /// A prop hitting a player.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,34 +33,6 @@ pub struct Impact {
     pub damage: f32,
 }
 
-/// Drops the contacts between held props and their holders.
-pub(super) struct HeldFilter {
-    /// `(player, prop)` rigid bodies that must not collide.
-    pub(super) pairs: Vec<(RigidBodyHandle, RigidBodyHandle)>,
-}
-
-impl PhysicsHooks for HeldFilter {
-    fn filter_contact_pair(&self, context: &PairFilterContext) -> Option<SolverFlags> {
-        let (a, b) = (context.rigid_body1?, context.rigid_body2?);
-        if self
-            .pairs
-            .iter()
-            .any(|&(player, prop)| (a, b) == (player, prop) || (a, b) == (prop, player))
-        {
-            return None;
-        }
-        // A hook replaces rapier's own filtering, which skips pairs of two
-        // non-dynamic bodies (a player's box against a fixed prop).
-        let dynamic = |handle| {
-            context
-                .bodies
-                .get(handle)
-                .is_some_and(rapier3d::prelude::RigidBody::is_dynamic)
-        };
-        (dynamic(a) || dynamic(b)).then_some(SolverFlags::COMPUTE_RIGID_IMPULSES)
-    }
-}
-
 impl PhysicsWorld {
     /// The impacts of props on players that began this step, given each
     /// awake prop's velocity before it; updates the touching set.
@@ -72,45 +44,58 @@ impl PhysicsWorld {
                 continue;
             };
             let player = BodyId(index as u32);
-            for pair in self.rapier.contact_pairs_with(body.collider) {
-                if !pair.has_any_active_contact() {
-                    continue;
-                }
-                let other = if pair.collider1 == body.collider {
-                    pair.collider2
+            let capacity = usize::try_from(b3::body::body_get_contact_capacity(
+                &self.b3_world(),
+                body.handle,
+            ))
+            .unwrap_or(0)
+            .min(128);
+            if capacity == 0 {
+                continue;
+            }
+            let contacts = b3::body::body_get_contact_data(&self.b3_world(), body.handle, capacity);
+            for contact in contacts {
+                let body_a = b3::shape::shape_get_body(&self.b3_world(), contact.shape_id_a);
+                let body_b = b3::shape::shape_get_body(&self.b3_world(), contact.shape_id_b);
+                let other = if body_a == body.handle {
+                    body_b
+                } else if body_b == body.handle {
+                    body_a
                 } else {
-                    pair.collider1
-                };
-                let Some(collider) = self.rapier.colliders.get(other) else {
                     continue;
                 };
-                let prop = BodyId(collider.user_data as u32);
+                let Some(prop) = self.body_id(other) else {
+                    continue;
+                };
                 let Some(mass) = self.mass(prop) else {
                     continue;
                 };
+                if touching.contains(&(player, prop)) {
+                    continue;
+                }
                 touching.push((player, prop));
                 let was_touching = self.touching.contains(&(player, prop));
                 if was_touching || self.holder(prop).is_some() || self.ignores(player, prop) {
                     continue;
                 }
-                let Some(normal) = pair
-                    .manifolds()
-                    .first()
-                    .map(|manifold| manifold.data.normal)
-                else {
+                let Some(manifold) = contact.manifolds.first() else {
                     continue;
                 };
-                let prop_velocity = before
-                    .iter()
-                    .find(|(id, _)| *id == prop)
-                    .map_or(Vec3::ZERO, |&(_, velocity)| velocity);
-                // Rapier's normal points from the first collider to the
-                // second; this one points from the prop to the player.
-                let towards_player = if pair.collider1 == body.collider {
+                let normal = from_b3(manifold.normal);
+                // Box3D's normal points from shape A to shape B; this one
+                // points from the prop to the player.
+                let towards_player = if body_a == body.handle {
                     -normal
                 } else {
                     normal
                 };
+                if towards_player == Vec3::ZERO {
+                    continue;
+                }
+                let prop_velocity = before
+                    .iter()
+                    .find(|(id, _)| *id == prop)
+                    .map_or(Vec3::ZERO, |&(_, velocity)| velocity);
                 let speed = prop_velocity
                     .dot(towards_player)
                     .min((prop_velocity - velocity).dot(towards_player));

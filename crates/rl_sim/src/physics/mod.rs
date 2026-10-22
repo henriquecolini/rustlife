@@ -1,12 +1,12 @@
 //! Rigid-body physics: props that fall, tumble, get pushed and get thrown.
 //!
-//! [`PhysicsWorld`] wraps a `rapier3d` world kept in Source units (inches,
-//! Z up, kilograms). It holds:
+//! [`PhysicsWorld`] wraps a [box3d-rust](https://github.com/larsbrubaker/box3d-rust)
+//! world kept in Source units (inches, Z up, kilograms). It holds:
 //!
 //! - **The map**, as fixed colliders: one convex hull per solid brush (the
 //!   same brushes players collide with) and one triangle mesh per
 //!   displacement (`statics`).
-//! - **Props**, one body each whose collider is the convex pieces of the
+//! - **Props**, one body each whose shapes are the convex pieces of the
 //!   model's collision model ([`prop_desc`]): dynamic for physics props,
 //!   fixed for static props and other prop entities.
 //! - **Players**, as kinematic boxes the simulation moves to wherever
@@ -26,16 +26,28 @@
 //!
 //! Physics runs only on the server (clients interpolate what it sends), so
 //! unlike movement it need not be bit-identical across machines. Given the
-//! same inputs on the same build it still is: bodies are only ever visited in
-//! insertion order.
+//! same inputs on the same build it still is: Box3D is deterministic, and
+//! bodies are only ever visited in insertion order.
 
-use glam::{Quat, Vec3};
-use rapier3d::parry::bounding_volume::BoundingVolume;
-use rapier3d::prelude::{
-    ActiveEvents, ActiveHooks, ColliderBuilder, ColliderHandle, Group, InteractionGroups,
-    InteractionTestMode, PhysicsWorld as RapierWorld, Pose, RigidBodyBuilder, RigidBodyHandle,
-    RigidBodyType, SharedShape,
+use std::sync::Once;
+
+use b3::body::{
+    body_apply_linear_impulse, body_compute_aabb, body_disable, body_enable,
+    body_get_angular_velocity, body_get_linear_velocity, body_get_type, body_get_world_center,
+    body_is_awake, body_is_enabled, body_set_angular_velocity, body_set_awake, body_set_bullet,
+    body_set_gravity_scale, body_set_linear_velocity, body_set_target_transform,
+    body_set_transform, body_set_type, create_body,
 };
+use b3::hull::{HullData, make_offset_box_hull};
+use b3::math_functions::Vec3 as B3Vec3;
+use b3::shape::create_hull_shape;
+use b3::types::{BodyType, Filter, QueryFilter};
+use b3::world::{
+    World, world_set_contact_tuning, world_set_gravity, world_set_hit_event_threshold,
+    world_set_maximum_linear_speed,
+};
+use box3d_rust as b3;
+use glam::{Quat, Vec3};
 use rl_data::PhysicsConfig;
 use serde::{Deserialize, Serialize};
 
@@ -54,18 +66,38 @@ pub use impacts::{ContactImpact, Scrape};
 pub use joints::{JointDesc, JointKind, MapJoints, map_joints};
 pub use props::{Breakable, GibPiece, Motion, PropDesc, prop_desc};
 
+use std::sync::{Mutex, MutexGuard, PoisonError};
+
+/// Source units per metre. Both Box3D and the rest of the simulation work in
+/// Source units, so this is also Box3D's global unit scale.
+pub const UNITS_PER_METRE: f32 = 1.0 / 0.0254;
+
 /// The map's static geometry.
-const GROUP_WORLD: Group = Group::GROUP_1;
+const GROUP_WORLD: u64 = 1 << 0;
 /// Props players collide with.
-const GROUP_PROP: Group = Group::GROUP_2;
+const GROUP_PROP: u64 = 1 << 1;
 /// Props players pass through.
-const GROUP_DEBRIS: Group = Group::GROUP_3;
+const GROUP_DEBRIS: u64 = 1 << 2;
 /// Players' kinematic boxes.
-const GROUP_PLAYER: Group = Group::GROUP_4;
+const GROUP_PLAYER: u64 = 1 << 3;
+
+/// User data of the map's bodies and movers; they have no [`BodyId`].
+const MAP_BODY: u64 = u64::MAX;
 
 /// Squared distance below which a body has not moved since its clip planes
 /// were last built.
 const MOVED_EPSILON: f32 = 1e-8;
+
+/// Set Box3D's unit scale once, before any world is created.
+///
+/// Box3D's tolerances and defaults are all scaled by this global value. It
+/// has to be the same for every world in the process because the library
+/// stores it in a global, so the client's ragdoll world uses Source units
+/// too.
+pub fn use_source_units() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| b3::core::set_length_units_per_meter(UNITS_PER_METRE));
+}
 
 /// A body in the [`PhysicsWorld`]: a prop or a player's box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -105,7 +137,7 @@ struct Piece {
     maxs: Vec3,
 }
 
-/// What the world knows about a prop beyond rapier's body.
+/// What the world knows about a prop beyond Box3D's body.
 #[derive(Debug, Clone)]
 struct PropBody {
     pieces: Vec<Piece>,
@@ -115,13 +147,13 @@ struct PropBody {
     grabbable: bool,
     free_on_grab: bool,
     /// The pose the pieces' planes were built for.
-    planes_pose: Pose,
+    planes_pose: BodyPose,
     /// Broken: gone from the world, though its id stays taken.
     broken: bool,
     /// What it is made of.
     surface: String,
     /// Where it was added, for bringing it back.
-    home: Pose,
+    home: BodyPose,
 }
 
 #[derive(Debug, Clone)]
@@ -132,40 +164,53 @@ enum BodyKind {
 
 #[derive(Debug, Clone)]
 struct Body {
-    handle: RigidBodyHandle,
-    collider: ColliderHandle,
+    handle: b3::BodyId,
+    shapes: Vec<b3::ShapeId>,
     kind: BodyKind,
+}
+
+/// A held (or recently released) prop and the filter joint that keeps it
+/// from colliding with its holder.
+#[derive(Debug, Clone, Copy)]
+struct IgnoredPair {
+    player: BodyId,
+    prop: BodyId,
+    joint: b3::JointId,
 }
 
 /// The map's rigid-body world. See the [module docs](self).
 pub struct PhysicsWorld {
-    rapier: RapierWorld,
+    world: Mutex<World>,
     bodies: Vec<Body>,
     /// `(player, prop)` pairs where the player holds the prop: they do not
     /// collide.
-    held: Vec<(BodyId, BodyId)>,
+    held: Vec<IgnoredPair>,
     /// `(player, prop)` pairs where the player let go of the prop while
     /// they still overlapped: they keep ignoring each other until they come
     /// apart, so a prop thrown from inside its holder's box neither shoves
     /// nor hits them.
-    released: Vec<(BodyId, BodyId)>,
+    released: Vec<IgnoredPair>,
     /// `(player, prop)` pairs in contact after the last step, so an impact
     /// is counted once when contact begins.
     touching: Vec<(BodyId, BodyId)>,
     /// The map's movers' kinematic bodies.
     movers: Vec<statics::MoverBody>,
     /// The fixed body joints hold props to the world by, once one does.
-    anchor: Option<RigidBodyHandle>,
+    anchor: Option<b3::BodyId>,
     /// Props that struck props or the map during the last step.
     contacts: Vec<ContactImpact>,
     config: PhysicsConfig,
+    dt: f32,
 }
 
 impl std::fmt::Debug for PhysicsWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhysicsWorld")
             .field("bodies", &self.bodies.len())
-            .field("colliders", &self.rapier.colliders.len())
+            .field(
+                "shapes",
+                &b3::world::world_get_counters(&self.b3_world()).shape_count,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -175,25 +220,23 @@ impl PhysicsWorld {
     /// at a time.
     #[must_use]
     pub fn new(map: &CollisionWorld, config: &PhysicsConfig, dt: f32) -> Self {
-        let mut rapier = RapierWorld::new();
-        rapier.gravity = Vec3::new(0.0, 0.0, -config.gravity);
-        let parameters = &mut rapier.integration_parameters;
-        parameters.dt = dt;
-        parameters.length_unit = statics::UNITS_PER_METRE;
-        parameters.num_solver_iterations = config.solver_iterations as usize;
-        parameters.num_internal_pgs_iterations = config.pgs_iterations as usize;
-        parameters.max_ccd_substeps = config.ccd_substeps as usize;
-        parameters.normalized_max_corrective_velocity =
-            config.max_corrective_speed / statics::UNITS_PER_METRE;
-        let colliders = statics::add_map(&mut rapier, map, interaction(GROUP_WORLD));
-        let movers = statics::add_movers(&mut rapier, map, interaction(GROUP_WORLD));
+        use_source_units();
+        let mut def = b3::default_world_def();
+        def.gravity = to_b3(Vec3::new(0.0, 0.0, -config.gravity));
+        let mut world = World::new(&def);
+        world_set_gravity(&mut world, def.gravity);
+        world_set_hit_event_threshold(&mut world, config.breakables.impact.report_speed.max(0.0));
+        world_set_maximum_linear_speed(&mut world, config.max_speed.max(0.0));
+        world_set_contact_tuning(&mut world, 30.0, 10.0, config.max_corrective_speed.max(0.0));
+        let shapes = statics::add_map(&mut world, map);
+        let movers = statics::add_movers(&mut world, map);
         tracing::debug!(
-            colliders,
+            shapes,
             movers = movers.len(),
             "built the physics world's static geometry"
         );
         Self {
-            rapier,
+            world: Mutex::new(world),
             bodies: Vec::new(),
             held: Vec::new(),
             released: Vec::new(),
@@ -202,6 +245,7 @@ impl PhysicsWorld {
             anchor: None,
             contacts: Vec::new(),
             config: config.clone(),
+            dt,
         }
     }
 
@@ -209,83 +253,97 @@ impl PhysicsWorld {
     /// `rotation` by the next step, pushing the props in its way, and
     /// makes it solid or passable. Unknown models are ignored.
     pub fn set_mover(&mut self, model: usize, origin: Vec3, rotation: Quat, solid: bool) {
-        let Some(mover) = self.movers.iter().find(|mover| mover.model == model) else {
+        let Some(handle) = self
+            .movers
+            .iter()
+            .find(|mover| mover.model == model)
+            .map(|mover| mover.handle)
+        else {
             return;
         };
-        if let Some(rigid) = self.rapier.bodies.get_mut(mover.handle) {
-            rigid.set_next_kinematic_position(Pose::from_parts(origin, rotation));
-        }
-        if let Some(collider) = mover
-            .collider
-            .and_then(|collider| self.rapier.colliders.get_mut(collider))
-            && collider.is_enabled() != solid
-        {
-            collider.set_enabled(solid);
+        let dt = self.dt;
+        let world = self.b3_world_mut();
+        body_set_target_transform(
+            world,
+            handle,
+            b3::Transform {
+                p: to_b3(origin),
+                q: to_b3_quat(rotation),
+            },
+            dt,
+            true,
+        );
+        if body_is_enabled(world, handle) != solid {
+            if solid {
+                body_enable(world, handle);
+            } else {
+                body_disable(world, handle);
+            }
         }
     }
 
     /// Adds a prop.
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
         let id = self.next_id();
-        let builder = match desc.motion {
-            Motion::Dynamic => RigidBodyBuilder::dynamic(),
-            Motion::Fixed => RigidBodyBuilder::fixed(),
+        let pose = BodyPose {
+            position: desc.origin,
+            rotation: desc.rotation,
         };
-        let handle = self.rapier.insert_body(
-            builder
-                .pose(Pose::from_parts(desc.origin, desc.rotation))
-                .linear_damping(desc.linear_damping)
-                .angular_damping(desc.angular_damping)
-                .sleeping(desc.start_asleep)
-                .user_data(u128::from(id.0)),
-        );
+        let (hulls, volumes) = prepared_hulls(&desc.pieces);
+        let density = if volumes > 0.0 {
+            desc.mass / volumes
+        } else {
+            desc.mass
+        };
+
+        let mut body_def = b3::default_body_def();
+        body_def.type_ = match desc.motion {
+            Motion::Dynamic => BodyType::Dynamic,
+            Motion::Fixed => BodyType::Static,
+        };
+        body_def.position = to_b3(desc.origin);
+        body_def.rotation = to_b3_quat(desc.rotation);
+        body_def.linear_damping = desc.linear_damping.max(0.0);
+        body_def.angular_damping = desc.angular_damping.max(0.0);
+        body_def.is_awake = !desc.start_asleep;
+        body_def.user_data = u64::from(id.0);
+        let handle = create_body(self.b3_world_mut(), &body_def);
 
         let group = if desc.debris {
             GROUP_DEBRIS
         } else {
             GROUP_PROP
         };
-        let shapes: Vec<(Pose, SharedShape)> = desc
-            .pieces
+        let mut shape_def = b3::default_shape_def();
+        shape_def.density = density.max(f32::EPSILON);
+        shape_def.base_material.friction = desc.material.friction;
+        shape_def.base_material.restitution = desc.material.restitution;
+        shape_def.filter = collision_filter(group);
+        shape_def.enable_hit_events = true;
+        let shapes = hulls
             .iter()
-            .filter_map(|piece| SharedShape::convex_hull(piece.vertices()))
-            .map(|shape| (Pose::IDENTITY, shape))
+            .map(|hull| create_hull_shape(self.b3_world_mut(), handle, &shape_def, hull))
+            .filter(|shape| shape.index1 != 0)
             .collect();
-        let shape = if shapes.len() == 1 {
-            shapes.into_iter().next().map(|(_, shape)| shape)
-        } else {
-            (!shapes.is_empty()).then(|| SharedShape::compound(shapes))
-        };
-        // A hull too degenerate for rapier still gets a sliver of a box, so
-        // the body has mass and a collider handle.
-        let shape = shape.unwrap_or_else(|| SharedShape::cuboid(0.5, 0.5, 0.5));
-        let collider = self.rapier.insert_collider(
-            ColliderBuilder::new(shape)
-                .mass(desc.mass)
-                .friction(desc.material.friction)
-                .restitution(desc.material.restitution)
-                .collision_groups(interaction(group))
-                .active_events(ActiveEvents::COLLISION_EVENTS)
-                .user_data(u128::from(id.0)),
-            Some(handle),
-        );
+        if desc.start_asleep {
+            body_set_awake(self.b3_world_mut(), handle, false);
+        }
 
-        let pose = Pose::from_parts(desc.origin, desc.rotation);
         let pieces = desc
             .pieces
             .iter()
             .map(|hull| piece_at(hull.clone(), &pose))
             .collect();
-        let center = self.rapier.bodies[handle].center_of_mass();
+        let center = from_b3(body_get_world_center(&self.b3_world(), handle));
         let radius = desc
             .pieces
             .iter()
             .flat_map(ConvexHull::vertices)
-            .map(|&vertex| pose.transform_point(vertex).distance(center))
+            .map(|&vertex| (desc.rotation * vertex + desc.origin).distance(center))
             .fold(0.0, f32::max);
         self.bodies.push(Body {
             handle,
-            collider,
+            shapes,
             kind: BodyKind::Prop(PropBody {
                 pieces,
                 mass: desc.mass,
@@ -304,18 +362,15 @@ impl PhysicsWorld {
     /// Adds a player's box at `origin` (the feet).
     pub fn add_player(&mut self, origin: Vec3, hull: &Hull) -> BodyId {
         let id = self.next_id();
-        let handle = self.rapier.insert_body(
-            RigidBodyBuilder::kinematic_position_based()
-                .translation(origin)
-                .user_data(u128::from(id.0)),
-        );
-        let collider = self.rapier.insert_collider(
-            player_collider(hull).user_data(u128::from(id.0)),
-            Some(handle),
-        );
+        let mut body_def = b3::default_body_def();
+        body_def.type_ = BodyType::Kinematic;
+        body_def.position = to_b3(origin + hull.center());
+        body_def.user_data = u64::from(id.0);
+        let handle = create_body(self.b3_world_mut(), &body_def);
+        let shape = add_player_shape(self.b3_world_mut(), handle, hull);
         self.bodies.push(Body {
             handle,
-            collider,
+            shapes: vec![shape],
             kind: BodyKind::Player {
                 hull: *hull,
                 velocity: Vec3::ZERO,
@@ -338,20 +393,31 @@ impl PhysicsWorld {
             return;
         };
         *current_velocity = velocity;
-        if current != hull {
+        let changed = current != hull;
+        if changed {
             *current = *hull;
-            if let Some(collider) = self.rapier.colliders.get_mut(body.collider) {
-                collider.set_shape(SharedShape::cuboid(
-                    hull.extents().x,
-                    hull.extents().y,
-                    hull.extents().z,
-                ));
-                collider.set_translation_wrt_parent(hull.center());
+        }
+        let handle = body.handle;
+        if changed {
+            let old: Vec<_> = self.bodies[player.index()].shapes.drain(..).collect();
+            for shape in old {
+                b3::shape::destroy_shape(self.b3_world_mut(), shape, false);
             }
+            let shape = add_player_shape(self.b3_world_mut(), handle, hull);
+            self.bodies[player.index()].shapes.push(shape);
         }
-        if let Some(rigid) = self.rapier.bodies.get_mut(body.handle) {
-            rigid.set_next_kinematic_translation(origin);
-        }
+        let center = origin + hull.center();
+        let dt = self.dt;
+        body_set_target_transform(
+            self.b3_world_mut(),
+            handle,
+            b3::Transform {
+                p: to_b3(center),
+                q: b3::QUAT_IDENTITY,
+            },
+            dt,
+            true,
+        );
     }
 
     /// Takes a player's box out of the world (while they are dead) or puts
@@ -363,8 +429,11 @@ impl PhysicsWorld {
         if !matches!(body.kind, BodyKind::Player { .. }) {
             return;
         }
-        if let Some(collider) = self.rapier.colliders.get_mut(body.collider) {
-            collider.set_enabled(enabled);
+        let handle = body.handle;
+        if enabled {
+            body_enable(self.b3_world_mut(), handle);
+        } else {
+            body_disable(self.b3_world_mut(), handle);
         }
     }
 
@@ -378,31 +447,24 @@ impl PhysicsWorld {
         if !matches!(body.kind, BodyKind::Prop(_)) {
             return;
         }
-        let (handle, collider) = (body.handle, body.collider);
-        if let Some(collider) = self.rapier.colliders.get_mut(collider) {
-            collider.set_enabled(enabled);
-        }
-        if let Some(rigid) = self.rapier.bodies.get_mut(handle) {
-            rigid.set_enabled(enabled);
-            if enabled {
-                rigid.set_gravity_scale(1.0, true);
-            }
-        }
-        if !enabled {
-            self.held.retain(|&(_, held)| held != prop);
-            self.released.retain(|&(_, released)| released != prop);
-            self.touching.retain(|&(_, touched)| touched != prop);
+        let handle = body.handle;
+        if enabled {
+            let world = self.b3_world_mut();
+            body_enable(world, handle);
+            body_set_gravity_scale(world, handle, 1.0);
+        } else {
+            body_disable(self.b3_world_mut(), handle);
+            self.release_ignored(prop);
         }
     }
 
     /// Whether a prop is in the world (see [`PhysicsWorld::set_prop_enabled`]).
     #[must_use]
     pub fn prop_enabled(&self, prop: BodyId) -> bool {
-        let enabled = match self.rigid(prop) {
-            Some(rigid) => rigid.is_enabled(),
-            None => false,
-        };
-        self.prop_any(prop).is_some() && enabled
+        self.bodies
+            .get(prop.index())
+            .is_some_and(|body| body_is_enabled(&self.b3_world(), body.handle))
+            && self.prop_any(prop).is_some()
     }
 
     /// Puts a prop back where it was added, at rest and enabled: how a
@@ -417,19 +479,21 @@ impl PhysicsWorld {
         if prop_body.broken {
             return;
         }
-        let (handle, collider, home) = (body.handle, body.collider, prop_body.home);
-        self.held.retain(|&(_, held)| held != prop);
-        self.released.retain(|&(_, released)| released != prop);
-        self.touching.retain(|&(_, touched)| touched != prop);
-        if let Some(rigid) = self.rapier.bodies.get_mut(handle) {
-            rigid.set_enabled(true);
-            rigid.set_position(home, true);
-            rigid.set_linvel(Vec3::ZERO, true);
-            rigid.set_angvel(Vec3::ZERO, true);
-            rigid.set_gravity_scale(1.0, true);
-        }
-        if let Some(collider) = self.rapier.colliders.get_mut(collider) {
-            collider.set_enabled(true);
+        let (handle, home) = (body.handle, prop_body.home);
+        self.release_ignored(prop);
+        {
+            let world = self.b3_world_mut();
+            body_enable(world, handle);
+            body_set_transform(
+                world,
+                handle,
+                to_b3(home.position),
+                to_b3_quat(home.rotation),
+            );
+            body_set_linear_velocity(world, handle, B3Vec3::default());
+            body_set_angular_velocity(world, handle, B3Vec3::default());
+            body_set_gravity_scale(world, handle, 1.0);
+            body_set_awake(world, handle, true);
         }
         self.refresh_planes();
     }
@@ -439,21 +503,10 @@ impl PhysicsWorld {
     pub fn step(&mut self) -> Vec<Impact> {
         let before = self.prop_velocities();
         self.sweep_fast_props(&before);
-        let hooks = contacts::HeldFilter {
-            pairs: self
-                .held
-                .iter()
-                .chain(&self.released)
-                .filter_map(|&(player, prop)| Some((self.handle(player)?, self.handle(prop)?)))
-                .collect(),
-        };
-        let collector = impacts::Collector::default();
-        self.rapier.step_with_events(&hooks, &collector);
-        self.contacts = self.contact_impacts(
-            &collector,
-            &before,
-            self.config.breakables.impact.report_speed,
-        );
+        let sub_steps = i32::try_from(self.config.ccd_substeps.max(1)).unwrap_or(1);
+        let dt = self.dt;
+        self.b3_world_mut().step(dt, sub_steps);
+        self.contacts = self.contact_impacts(&before, self.config.breakables.impact.report_speed);
         self.clamp_velocities();
         self.refresh_planes();
         self.forget_separated();
@@ -469,25 +522,30 @@ impl PhysicsWorld {
     /// Where a prop is.
     #[must_use]
     pub fn pose(&self, body: BodyId) -> Option<BodyPose> {
-        let rigid = self.rigid(body)?;
+        let handle = self.handle(body)?;
+        let transform = b3::body::body_get_transform(&self.b3_world(), handle);
         Some(BodyPose {
-            position: rigid.translation(),
-            rotation: *rigid.rotation(),
+            position: from_b3(transform.p),
+            rotation: from_b3_quat(transform.q),
         })
     }
 
     /// A body's centre of mass, Source space.
     #[must_use]
     pub fn center_of_mass(&self, body: BodyId) -> Option<Vec3> {
-        self.rigid(body)
-            .map(rapier3d::prelude::RigidBody::center_of_mass)
+        let handle = self.handle(body)?;
+        Some(from_b3(body_get_world_center(&self.b3_world(), handle)))
     }
 
     /// A body's linear and angular (radians/s) velocity.
     #[must_use]
     pub fn velocity(&self, body: BodyId) -> Option<(Vec3, Vec3)> {
-        self.rigid(body)
-            .map(|rigid| (rigid.linvel(), rigid.angvel()))
+        let handle = self.handle(body)?;
+        let world = self.b3_world();
+        Some((
+            from_b3(body_get_linear_velocity(&world, handle)),
+            from_b3(body_get_angular_velocity(&world, handle)),
+        ))
     }
 
     /// A prop's mass, kg.
@@ -505,8 +563,8 @@ impl PhysicsWorld {
     /// Whether a prop is simulated (rather than fixed in place).
     #[must_use]
     pub fn is_dynamic(&self, body: BodyId) -> bool {
-        self.rigid(body)
-            .is_some_and(rapier3d::prelude::RigidBody::is_dynamic)
+        self.handle(body)
+            .is_some_and(|handle| body_get_type(&self.b3_world(), handle) == BodyType::Dynamic)
     }
 
     /// Whether players may pick a prop up: simulated (or freed by being
@@ -520,8 +578,11 @@ impl PhysicsWorld {
     /// Whether a prop is asleep (at rest and not simulated until touched).
     #[must_use]
     pub fn is_sleeping(&self, body: BodyId) -> bool {
-        self.rigid(body)
-            .is_some_and(rapier3d::prelude::RigidBody::is_sleeping)
+        let Some(handle) = self.handle(body) else {
+            return false;
+        };
+        let world = self.b3_world();
+        body_get_type(&world, handle) == BodyType::Dynamic && !body_is_awake(&world, handle)
     }
 
     /// Every prop, in the order they were added.
@@ -545,19 +606,16 @@ impl PhysicsWorld {
         if std::mem::replace(&mut prop.broken, true) {
             return false;
         }
-        self.held.retain(|&(_, held)| held != body);
-        self.released.retain(|&(_, released)| released != body);
-        self.touching.retain(|&(_, touched)| touched != body);
-        if let Some(rigid) = self.rigid_mut(body) {
-            rigid.set_enabled(false);
-        }
+        let handle = self.bodies[body.index()].handle;
+        self.release_ignored(body);
+        body_disable(self.b3_world_mut(), handle);
         true
     }
 
     /// Where a prop was added: its home.
     #[must_use]
     pub fn home_position(&self, body: BodyId) -> Option<Vec3> {
-        self.prop_any(body).map(|prop| prop.home.translation)
+        self.prop_any(body).map(|prop| prop.home.position)
     }
 
     /// Brings a broken prop back where it was added, at rest. Returns
@@ -572,12 +630,21 @@ impl PhysicsWorld {
         }
         let home = prop.home;
         prop.planes_pose = home;
-        if let Some(rigid) = self.rigid_mut(body) {
-            rigid.set_enabled(true);
-            rigid.set_position(home, true);
-            rigid.set_linvel(Vec3::ZERO, true);
-            rigid.set_angvel(Vec3::ZERO, true);
+        let handle = self.bodies[body.index()].handle;
+        {
+            let world = self.b3_world_mut();
+            body_enable(world, handle);
+            body_set_transform(
+                world,
+                handle,
+                to_b3(home.position),
+                to_b3_quat(home.rotation),
+            );
+            body_set_linear_velocity(world, handle, B3Vec3::default());
+            body_set_angular_velocity(world, handle, B3Vec3::default());
+            body_set_awake(world, handle, true);
         }
+        self.refresh_planes();
         true
     }
 
@@ -609,34 +676,44 @@ impl PhysicsWorld {
         if self.prop(body).is_none() {
             return;
         }
-        if let Some(rigid) = self.rigid_mut(body) {
-            rigid.set_position(Pose::from_parts(pose.position, pose.rotation), false);
-        }
+        let Some(handle) = self.handle(body) else {
+            return;
+        };
+        body_set_transform(
+            self.b3_world_mut(),
+            handle,
+            to_b3(pose.position),
+            to_b3_quat(pose.rotation),
+        );
     }
 
     /// Brings collision queries up to date after props were placed with
     /// [`PhysicsWorld::set_pose`], without advancing time.
     pub fn refresh(&mut self) {
-        self.rapier.detect_collisions(&(), &());
         self.refresh_planes();
     }
 
     /// Sets a dynamic body's velocities (angular in radians/s), waking it.
     pub fn set_velocity(&mut self, body: BodyId, linear: Vec3, angular: Vec3) {
-        if let Some(rigid) = self.rigid_mut(body)
-            && rigid.is_dynamic()
-        {
-            rigid.set_linvel(linear, true);
-            rigid.set_angvel(angular, true);
+        let Some(handle) = self.handle(body) else {
+            return;
+        };
+        let world = self.b3_world_mut();
+        if body_get_type(world, handle) != BodyType::Dynamic {
+            return;
         }
+        body_set_linear_velocity(world, handle, to_b3(linear));
+        body_set_angular_velocity(world, handle, to_b3(angular));
     }
 
     /// Applies `impulse` (kg·units/s) at `point`, waking the body.
     pub fn apply_impulse(&mut self, body: BodyId, impulse: Vec3, point: Vec3) {
-        if let Some(rigid) = self.rigid_mut(body)
-            && rigid.is_dynamic()
-        {
-            rigid.apply_impulse_at_point(impulse, point, true);
+        let Some(handle) = self.handle(body) else {
+            return;
+        };
+        let world = self.b3_world_mut();
+        if body_get_type(world, handle) == BodyType::Dynamic {
+            body_apply_linear_impulse(world, handle, to_b3(impulse), to_b3(point), true);
         }
     }
 
@@ -644,27 +721,64 @@ impl PhysicsWorld {
     /// prop ignores gravity and does not collide with its holder. A fixed
     /// prop that may be freed by grabbing becomes dynamic.
     pub fn set_held(&mut self, prop: BodyId, player: Option<BodyId>) {
-        let mut released = Vec::new();
-        self.held.retain(|&pair| {
-            let keep = pair.1 != prop;
-            if !keep {
-                released.push(pair);
+        let mut moved = Vec::new();
+        self.held.retain(|pair| {
+            if pair.prop != prop {
+                return true;
             }
-            keep
+            moved.push(*pair);
+            false
         });
-        self.released.retain(|&(_, other)| other != prop);
-        if player.is_none() {
-            self.released.extend(released);
-        }
-        let free = self.prop(prop).is_some_and(|body| body.free_on_grab);
-        if let Some(player) = player {
-            self.held.push((player, prop));
-        }
-        if let Some(rigid) = self.rigid_mut(prop) {
-            if player.is_some() && free && !rigid.is_dynamic() {
-                rigid.set_body_type(RigidBodyType::Dynamic, true);
+        let mut old_released = Vec::new();
+        self.released.retain(|pair| {
+            if pair.prop != prop {
+                return true;
             }
-            rigid.set_gravity_scale(if player.is_some() { 0.0 } else { 1.0 }, true);
+            old_released.push(*pair);
+            false
+        });
+        let mut to_destroy = old_released;
+        if player.is_none() {
+            self.released.extend(moved);
+        } else {
+            to_destroy.extend(moved);
+        }
+        if !to_destroy.is_empty() {
+            let world = self.b3_world_mut();
+            for pair in to_destroy {
+                b3::joint::destroy_joint(world, pair.joint, true);
+            }
+        }
+
+        let free = self.prop(prop).is_some_and(|body| body.free_on_grab);
+        let Some(prop_handle) = self.handle(prop) else {
+            return;
+        };
+        {
+            let world = self.b3_world_mut();
+            if player.is_some() && free && body_get_type(world, prop_handle) != BodyType::Dynamic {
+                body_set_type(world, prop_handle, BodyType::Dynamic);
+            }
+            body_set_gravity_scale(world, prop_handle, if player.is_some() { 0.0 } else { 1.0 });
+        }
+
+        let Some(player) = player else {
+            return;
+        };
+        let Some(player_handle) = self.handle(player) else {
+            return;
+        };
+        let mut def = b3::default_filter_joint_def();
+        def.base.body_id_a = player_handle;
+        def.base.body_id_b = prop_handle;
+        def.base.collide_connected = false;
+        let joint = b3::joint::create_filter_joint(self.b3_world_mut(), &def);
+        if joint.index1 != 0 {
+            self.held.push(IgnoredPair {
+                player,
+                prop,
+                joint,
+            });
         }
     }
 
@@ -672,25 +786,36 @@ impl PhysicsWorld {
     /// prop, or let go of it and has not come apart from it yet.
     #[must_use]
     pub fn ignores(&self, player: BodyId, prop: BodyId) -> bool {
-        self.held.contains(&(player, prop)) || self.released.contains(&(player, prop))
+        self.held
+            .iter()
+            .any(|pair| pair.player == player && pair.prop == prop)
+            || self
+                .released
+                .iter()
+                .any(|pair| pair.player == player && pair.prop == prop)
     }
 
     /// Stops ignoring released pairs whose bounds no longer overlap.
     fn forget_separated(&mut self) {
-        let bounds = |body: BodyId| {
-            let collider = self.bodies.get(body.index())?.collider;
-            Some(self.rapier.colliders.get(collider)?.compute_aabb())
-        };
-        let apart: Vec<_> = self
+        let separated: Vec<IgnoredPair> = self
             .released
             .iter()
             .copied()
-            .filter(|&(player, prop)| match (bounds(player), bounds(prop)) {
-                (Some(a), Some(b)) => !a.intersects(&b),
-                _ => true,
+            .filter(|pair| {
+                let (Some(player), Some(prop)) = (self.handle(pair.player), self.handle(pair.prop))
+                else {
+                    return true;
+                };
+                let a = body_compute_aabb(&self.b3_world(), player);
+                let b = body_compute_aabb(&self.b3_world(), prop);
+                !aabb_overlap(a, b)
             })
             .collect();
-        self.released.retain(|pair| !apart.contains(pair));
+        for pair in &separated {
+            b3::joint::destroy_joint(self.b3_world_mut(), pair.joint, true);
+        }
+        self.released
+            .retain(|pair| !separated.iter().any(|gone| gone.joint == pair.joint));
     }
 
     /// The player holding `prop`, if any.
@@ -698,8 +823,8 @@ impl PhysicsWorld {
     pub fn holder(&self, prop: BodyId) -> Option<BodyId> {
         self.held
             .iter()
-            .find(|&&(_, held)| held == prop)
-            .map(|&(player, _)| player)
+            .find(|pair| pair.prop == prop)
+            .map(|pair| pair.player)
     }
 
     /// Pushes `prop` away from a player who walked into it: the player,
@@ -718,21 +843,52 @@ impl PhysicsWorld {
         self.apply_impulse(prop, -normal * change * mass, center);
     }
 
+    /// The Box3D world, for reads.
+    fn b3_world(&self) -> MutexGuard<'_, World> {
+        self.world.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The Box3D world, for writes. `&mut self` already guarantees exclusive
+    /// access, so no runtime lock is needed.
+    fn b3_world_mut(&mut self) -> &mut World {
+        self.world.get_mut().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn next_id(&self) -> BodyId {
         BodyId(u32::try_from(self.bodies.len()).unwrap_or(u32::MAX))
     }
 
-    fn handle(&self, body: BodyId) -> Option<RigidBodyHandle> {
+    fn handle(&self, body: BodyId) -> Option<b3::BodyId> {
         self.bodies.get(body.index()).map(|body| body.handle)
     }
 
-    fn rigid(&self, body: BodyId) -> Option<&rapier3d::prelude::RigidBody> {
-        self.rapier.bodies.get(self.handle(body)?)
+    fn body_id(&self, handle: b3::BodyId) -> Option<BodyId> {
+        self.bodies
+            .iter()
+            .position(|body| body.handle == handle)
+            .map(|index| BodyId(index as u32))
     }
 
-    fn rigid_mut(&mut self, body: BodyId) -> Option<&mut rapier3d::prelude::RigidBody> {
-        let handle = self.handle(body)?;
-        self.rapier.bodies.get_mut(handle)
+    /// Destroys the filter joints that made `prop` ignore players.
+    fn release_ignored(&mut self, prop: BodyId) {
+        let mut joints = Vec::new();
+        self.held.retain(|pair| {
+            if pair.prop != prop {
+                return true;
+            }
+            joints.push(pair.joint);
+            false
+        });
+        self.released.retain(|pair| {
+            if pair.prop != prop {
+                return true;
+            }
+            joints.push(pair.joint);
+            false
+        });
+        for joint in joints {
+            b3::joint::destroy_joint(self.b3_world_mut(), joint, true);
+        }
     }
 
     /// A prop that is still in the world.
@@ -750,29 +906,29 @@ impl PhysicsWorld {
 
     /// The linear velocity of every awake dynamic prop, before a step.
     fn prop_velocities(&self) -> Vec<(BodyId, Vec3)> {
+        let world = self.b3_world();
         self.props()
             .filter_map(|id| {
-                let rigid = self.rigid(id)?;
-                (rigid.is_dynamic() && !rigid.is_sleeping()).then(|| (id, rigid.linvel()))
+                let handle = self.handle(id)?;
+                let dynamic = body_get_type(&world, handle) == BodyType::Dynamic;
+                (dynamic && body_is_awake(&world, handle))
+                    .then(|| (id, from_b3(body_get_linear_velocity(&world, handle))))
             })
             .collect()
     }
 
     /// Makes the props moving faster than `ccd_min_speed` bullets for this
-    /// step: rapier sweeps those against the other props in their way, which
+    /// step: Box3D sweeps those against the other props in their way, which
     /// stops a hard throw from passing through a crate, while slow props
     /// (almost all of them, almost all of the time) cost nothing extra.
-    /// Rapier never sweeps one bullet against another, which is why
-    /// bullets are not made of every prop.
     fn sweep_fast_props(&mut self, velocities: &[(BodyId, Vec3)]) {
         let threshold = self.config.ccd_min_speed;
         for &(id, velocity) in velocities {
             let fast = velocity.length() > threshold;
-            if let Some(rigid) = self.rigid_mut(id)
-                && rigid.is_ccd_enabled() != fast
-            {
-                rigid.enable_ccd(fast);
-            }
+            let Some(handle) = self.handle(id) else {
+                continue;
+            };
+            body_set_bullet(self.b3_world_mut(), handle, fast);
         }
     }
 
@@ -780,34 +936,36 @@ impl PhysicsWorld {
     fn clamp_velocities(&mut self) {
         let max_speed = self.config.max_speed;
         let max_spin = self.config.max_angular_speed.to_radians();
-        for body in &self.bodies {
-            let Some(rigid) = self.rapier.bodies.get_mut(body.handle) else {
-                continue;
-            };
-            if !rigid.is_dynamic() || rigid.is_sleeping() {
+        let world = self.world.get_mut().unwrap_or_else(PoisonError::into_inner);
+        let bodies = &self.bodies;
+        for body in bodies {
+            let handle = body.handle;
+            if body_get_type(world, handle) != BodyType::Dynamic || !body_is_awake(world, handle) {
                 continue;
             }
-            let linear = rigid.linvel();
+            let linear = from_b3(body_get_linear_velocity(world, handle));
             if linear.length() > max_speed {
-                rigid.set_linvel(linear.clamp_length_max(max_speed), false);
+                body_set_linear_velocity(world, handle, to_b3(linear.clamp_length_max(max_speed)));
             }
-            let angular = rigid.angvel();
+            let angular = from_b3(body_get_angular_velocity(world, handle));
             if angular.length() > max_spin {
-                rigid.set_angvel(angular.clamp_length_max(max_spin), false);
+                body_set_angular_velocity(world, handle, to_b3(angular.clamp_length_max(max_spin)));
             }
         }
     }
 
     /// Rebuilds the clip planes of every prop that moved.
     fn refresh_planes(&mut self) {
+        let world = self.world.get_mut().unwrap_or_else(PoisonError::into_inner);
         for body in &mut self.bodies {
             let BodyKind::Prop(prop) = &mut body.kind else {
                 continue;
             };
-            let Some(rigid) = self.rapier.bodies.get(body.handle) else {
-                continue;
+            let transform = b3::body::body_get_transform(world, body.handle);
+            let pose = BodyPose {
+                position: from_b3(transform.p),
+                rotation: from_b3_quat(transform.q),
             };
-            let pose = *rigid.position();
             if !moved(&prop.planes_pose, &pose) {
                 continue;
             }
@@ -815,17 +973,50 @@ impl PhysicsWorld {
                 (piece.mins, piece.maxs) =
                     piece
                         .hull
-                        .world_planes(pose.rotation, pose.translation, &mut piece.planes);
+                        .world_planes(pose.rotation, pose.position, &mut piece.planes);
             }
             prop.planes_pose = pose;
         }
     }
 }
 
+/// Adds a player's box shape to `handle`.
+fn add_player_shape(world: &mut World, handle: b3::BodyId, hull: &Hull) -> b3::ShapeId {
+    let extents = hull.extents();
+    let box_hull = b3::hull::make_box_hull(extents.x, extents.y, extents.z);
+    let mut shape_def = b3::default_shape_def();
+    shape_def.density = 0.0;
+    shape_def.update_body_mass = false;
+    shape_def.filter = collision_filter(GROUP_PLAYER);
+    shape_def.enable_contact_events = true;
+    create_hull_shape(world, handle, &shape_def, &box_hull.base)
+}
+
+/// Converts a piece of our collision hull to Box3D's hull, falling back to a
+/// box if the point set is degenerate. Returns the hulls and their total
+/// volume in cubic Source units.
+fn prepared_hulls(pieces: &[ConvexHull]) -> (Vec<HullData>, f32) {
+    let mut hulls = Vec::with_capacity(pieces.len());
+    let mut volume = 0.0;
+    for piece in pieces {
+        let points: Vec<B3Vec3> = piece.vertices().iter().map(|&point| to_b3(point)).collect();
+        let hull =
+            b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES).unwrap_or_else(|| {
+                let (mins, maxs) = piece.bounds();
+                let half = ((maxs - mins) * 0.5).max(Vec3::splat(0.05));
+                let center = (mins + maxs) * 0.5;
+                make_offset_box_hull(half.x, half.y, half.z, to_b3(center)).base
+            });
+        volume += hull.volume.max(0.0);
+        hulls.push(hull);
+    }
+    (hulls, volume)
+}
+
 /// A piece with its planes built for `pose`.
-fn piece_at(hull: ConvexHull, pose: &Pose) -> Piece {
+fn piece_at(hull: ConvexHull, pose: &BodyPose) -> Piece {
     let mut planes = Vec::new();
-    let (mins, maxs) = hull.world_planes(pose.rotation, pose.translation, &mut planes);
+    let (mins, maxs) = hull.world_planes(pose.rotation, pose.position, &mut planes);
     Piece {
         hull,
         planes,
@@ -841,12 +1032,12 @@ fn piece_at(hull: ConvexHull, pose: &Pose) -> Piece {
 /// rotations would drown in `f32` rounding (`1.0 - 1e-8` *is* `1.0`), so
 /// every rotated prop whose rotation is not exactly unit length would seem
 /// to move every tick and have its planes rebuilt for nothing.
-fn moved(a: &Pose, b: &Pose) -> bool {
-    a.translation.distance_squared(b.translation) > MOVED_EPSILON || a.rotation != b.rotation
+fn moved(a: &BodyPose, b: &BodyPose) -> bool {
+    a.position.distance_squared(b.position) > MOVED_EPSILON || a.rotation != b.rotation
 }
 
-/// The interaction groups of a collider in `group`: who it collides with.
-fn interaction(group: Group) -> InteractionGroups {
+/// The collision filter of a body's shapes in `group`: who it collides with.
+fn collision_filter(group: u64) -> Filter {
     let filter = if group == GROUP_WORLD {
         GROUP_PROP | GROUP_DEBRIS
     } else if group == GROUP_PROP {
@@ -856,16 +1047,53 @@ fn interaction(group: Group) -> InteractionGroups {
     } else {
         GROUP_PROP
     };
-    InteractionGroups::new(group, filter, InteractionTestMode::And)
+    Filter {
+        category_bits: group,
+        mask_bits: filter,
+        group_index: 0,
+    }
 }
 
-/// A player's kinematic box.
-fn player_collider(hull: &Hull) -> ColliderBuilder {
-    let extents = hull.extents();
-    ColliderBuilder::cuboid(extents.x, extents.y, extents.z)
-        .translation(hull.center())
-        .collision_groups(interaction(GROUP_PLAYER))
-        .active_hooks(ActiveHooks::FILTER_CONTACT_PAIRS)
+/// A query filter for the props in `groups`.
+fn query_filter(groups: u64) -> QueryFilter {
+    QueryFilter {
+        category_bits: GROUP_PROP,
+        mask_bits: groups,
+        id: 0,
+        name: String::new(),
+    }
+}
+
+fn aabb_overlap(a: b3::Aabb, b: b3::Aabb) -> bool {
+    a.lower_bound.x <= b.upper_bound.x
+        && b.lower_bound.x <= a.upper_bound.x
+        && a.lower_bound.y <= b.upper_bound.y
+        && b.lower_bound.y <= a.upper_bound.y
+        && a.lower_bound.z <= b.upper_bound.z
+        && b.lower_bound.z <= a.upper_bound.z
+}
+
+pub(crate) fn to_b3(value: Vec3) -> B3Vec3 {
+    B3Vec3 {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+    }
+}
+
+pub(crate) fn from_b3(value: B3Vec3) -> Vec3 {
+    Vec3::new(value.x, value.y, value.z)
+}
+
+pub(crate) fn to_b3_quat(value: Quat) -> b3::Quat {
+    b3::Quat {
+        v: to_b3(value.xyz()),
+        s: value.w,
+    }
+}
+
+pub(crate) fn from_b3_quat(value: b3::Quat) -> Quat {
+    Quat::from_xyzw(value.v.x, value.v.y, value.v.z, value.s)
 }
 
 /// Shared test fixtures.
@@ -889,16 +1117,31 @@ mod tests {
         // often are: its dot product with itself rounds below 1.
         let rotation = Quat::from_xyzw(0.5, 0.5, 0.5, 0.499_999_9);
         assert!(rotation.dot(rotation) < 1.0);
-        let pose = Pose::from_parts(Vec3::new(10.0, -4.0, 2.0), rotation);
+        let pose = BodyPose {
+            position: Vec3::new(10.0, -4.0, 2.0),
+            rotation,
+        };
         assert!(!moved(&pose, &pose));
     }
 
     #[test]
     fn moving_or_turning_at_all_is_moving() {
-        let pose = Pose::from_parts(Vec3::ZERO, Quat::IDENTITY);
-        let slid = Pose::from_parts(Vec3::new(0.01, 0.0, 0.0), Quat::IDENTITY);
-        let turned = Pose::from_parts(Vec3::ZERO, Quat::from_rotation_z(1e-3));
-        let crept = Pose::from_parts(Vec3::new(1e-5, 0.0, 0.0), Quat::IDENTITY);
+        let pose = BodyPose {
+            position: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+        };
+        let slid = BodyPose {
+            position: Vec3::new(0.01, 0.0, 0.0),
+            ..pose
+        };
+        let turned = BodyPose {
+            rotation: Quat::from_rotation_z(1e-3),
+            ..pose
+        };
+        let crept = BodyPose {
+            position: Vec3::new(1e-5, 0.0, 0.0),
+            ..pose
+        };
         assert!(moved(&pose, &slid));
         assert!(moved(&pose, &turned));
         assert!(!moved(&pose, &crept));

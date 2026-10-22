@@ -21,14 +21,8 @@ pub struct PhysicsConfig {
     pub max_speed: f32,
     /// Fastest a prop may spin, degrees/s.
     pub max_angular_speed: f32,
-    /// Constraint solver iterations per tick: more is stiffer stacking at
-    /// a higher cost.
-    pub solver_iterations: u32,
-    /// Gauss-Seidel passes within each solver iteration: more keeps hard
-    /// hits from sinking props into each other, at a higher cost.
-    pub pgs_iterations: u32,
-    /// Sub-steps continuous collision detection may take within a tick, so
-    /// fast props are stopped by other props and not only by the map.
+    /// Box3D solver sub-steps per tick: more keeps fast hits and stacks
+    /// from sinking props into each other, at a higher cost.
     pub ccd_substeps: u32,
     /// A prop moving faster than this, units/s, is swept against the other
     /// props along its path (it is a "bullet"); slower ones are not, which
@@ -225,19 +219,6 @@ impl PhysicsConfig {
         check.positive("gravity", self.gravity);
         check.positive("max_speed", self.max_speed);
         check.positive("max_angular_speed", self.max_angular_speed);
-        if !(1..=64).contains(&self.solver_iterations) {
-            check.fail(
-                "solver_iterations",
-                &format!("must be within 1..=64, got {}", self.solver_iterations),
-            );
-        }
-
-        if !(1..=16).contains(&self.pgs_iterations) {
-            check.fail(
-                "pgs_iterations",
-                &format!("must be within 1..=16, got {}", self.pgs_iterations),
-            );
-        }
         if self.ccd_substeps > 16 {
             check.fail(
                 "ccd_substeps",

@@ -1,22 +1,18 @@
 //! Props striking props and the map: the impacts that make noise and break
 //! things.
 //!
-//! Rapier reports a collision event when two colliders begin to touch.
-//! [`Collector`] gathers those during a step, with the contact normal and
-//! point; once the step is over, [`PhysicsWorld::contact_impacts`] works out
-//! how hard each hit was from the bodies' velocities *before* the step (the
-//! solver has already taken the speed out of them by then). Contacts with
-//! players are not counted here: [`super::contacts`] handles those.
+//! Box3D reports a contact hit event when two shapes touch faster than the
+//! world's hit-event threshold. The event carries the point and the
+//! approach speed measured by the solver, without having to reconstruct the
+//! velocities before the step. Contacts with players are not counted here:
+//! [`super::contacts`] handles those.
 
-use std::sync::Mutex;
-
+use box3d_rust as b3;
 use glam::Vec3;
-use rapier3d::prelude::{
-    ColliderHandle, ColliderSet, CollisionEvent, ContactPair, EventHandler, Real, RigidBodySet,
-    SoftBodySet, SoftBodyTearEvent,
-};
 
-use super::{BodyId, BodyKind, GROUP_PLAYER, GROUP_WORLD, PhysicsWorld};
+use b3::world::World;
+
+use super::{BodyId, BodyKind, PhysicsWorld, from_b3};
 
 /// A prop striking another prop or the map.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,13 +27,15 @@ pub struct ContactImpact {
     pub position: Vec3,
 }
 
-/// What a collider belongs to.
+/// What a shape belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Party {
-    /// The map.
+    /// The map or one of its movers.
     Map,
     /// A prop.
     Prop(BodyId),
+    /// A player's kinematic box.
+    Player,
 }
 
 /// A prop sliding along something.
@@ -54,77 +52,6 @@ pub struct Scrape {
 /// Most scrapes reported at once: the loudest ones.
 const MAX_SCRAPES: usize = 6;
 
-/// A contact that began during a step.
-#[derive(Debug, Clone, Copy)]
-struct Started {
-    first: ColliderHandle,
-    second: ColliderHandle,
-    /// The contact normal, from the first collider to the second.
-    normal: Vec3,
-    point: Vec3,
-}
-
-/// Gathers the contacts that begin during a step.
-#[derive(Debug, Default)]
-pub(super) struct Collector {
-    started: Mutex<Vec<Started>>,
-}
-
-impl EventHandler for Collector {
-    fn handle_collision_event(
-        &self,
-        _bodies: &RigidBodySet,
-        colliders: &ColliderSet,
-        event: CollisionEvent,
-        contact_pair: Option<&ContactPair>,
-    ) {
-        let CollisionEvent::Started(first, second, _) = event else {
-            return;
-        };
-        let Some((manifold, contact)) = contact_pair.and_then(ContactPair::find_deepest_contact)
-        else {
-            return;
-        };
-        let Some(collider) = colliders.get(first) else {
-            return;
-        };
-        let point = collider.position().transform_point(contact.local_p1);
-        let mut started = self
-            .started
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        started.push(Started {
-            first,
-            second,
-            normal: manifold.data.normal,
-            point,
-        });
-    }
-
-    fn handle_contact_force_event(
-        &self,
-        _dt: Real,
-        _bodies: &RigidBodySet,
-        _colliders: &ColliderSet,
-        _contact_pair: &ContactPair,
-        _total_force_magnitude: Real,
-    ) {
-    }
-
-    fn handle_soft_body_tear_event(&self, _soft_bodies: &SoftBodySet, _event: &SoftBodyTearEvent) {}
-}
-
-impl Collector {
-    fn take(&self) -> Vec<Started> {
-        std::mem::take(
-            &mut *self
-                .started
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-    }
-}
-
 impl PhysicsWorld {
     /// The props sliding along something right now, loudest first: awake
     /// props in contact that move faster than the configured scrape speed
@@ -132,24 +59,30 @@ impl PhysicsWorld {
     #[must_use]
     pub fn scrapes(&self) -> Vec<Scrape> {
         let threshold = self.config.breakables.impact.scrape_speed;
+        let world = self.b3_world();
         let mut scrapes: Vec<Scrape> = self
             .props()
             .filter(|&body| self.holder(body).is_none())
             .filter_map(|body| {
-                let rigid = self.rigid(body)?;
-                if !rigid.is_dynamic() || rigid.is_sleeping() {
+                let handle = self.handle(body)?;
+                if b3::body::body_get_type(&world, handle) != b3::BodyType::Dynamic
+                    || !b3::body::body_is_awake(&world, handle)
+                {
                     return None;
                 }
-                let speed = rigid.linvel().length();
+                let speed = from_b3(b3::body::body_get_linear_velocity(&world, handle)).length();
                 let radius = self.radius(body)?.max(1.0);
-                let rolling = rigid.angvel().length() * radius > 0.65 * speed;
-                let touching = self
-                    .rapier
-                    .contact_pairs_with(self.bodies.get(body.index())?.collider)
-                    .any(ContactPair::has_any_active_contact);
+                let rolling = from_b3(b3::body::body_get_angular_velocity(&world, handle)).length()
+                    * radius
+                    > 0.65 * speed;
+                let capacity = usize::try_from(b3::body::body_get_contact_capacity(&world, handle))
+                    .unwrap_or(0)
+                    .min(8);
+                let touching = capacity > 0
+                    && !b3::body::body_get_contact_data(&world, handle, capacity).is_empty();
                 (speed > threshold && !rolling && touching).then(|| Scrape {
                     body,
-                    position: rigid.center_of_mass(),
+                    position: from_b3(b3::body::body_get_world_center(&world, handle)),
                     speed,
                 })
             })
@@ -159,55 +92,49 @@ impl PhysicsWorld {
         scrapes
     }
 
-    /// The impacts of props on props and on the map that began during the
-    /// step `collector` listened to, given every awake prop's velocity
-    /// before it. Slower than `floor` units/s are left out.
+    /// The impacts of props on props and on the map that happened during
+    /// the step just taken. Slower than `floor` units/s are left out.
     pub(super) fn contact_impacts(
         &self,
-        collector: &Collector,
-        before: &[(BodyId, Vec3)],
+        _before: &[(BodyId, Vec3)],
         floor: f32,
     ) -> Vec<ContactImpact> {
-        let velocity = |body: Option<BodyId>| {
-            body.and_then(|body| before.iter().find(|(id, _)| *id == body))
-                .map_or(Vec3::ZERO, |&(_, velocity)| velocity)
-        };
-        collector
-            .take()
-            .into_iter()
-            .filter_map(|contact| {
-                let prop_of = |party| match party {
-                    Party::Prop(body) => Some(body),
-                    Party::Map => None,
+        let world = self.b3_world();
+        let events = b3::world::world_get_contact_events(&world);
+        events
+            .hit_events
+            .iter()
+            .filter_map(|event| {
+                let first = self.contact_party(&world, event.shape_id_a)?;
+                let second = self.contact_party(&world, event.shape_id_b)?;
+                let (body, other) = match (first, second) {
+                    (Party::Prop(body), Party::Prop(other)) => (body, Some(other)),
+                    (Party::Prop(body), Party::Map | Party::Player) => (body, None),
+                    (Party::Map | Party::Player, Party::Prop(body)) => (body, None),
+                    _ => return None,
                 };
-                let first = prop_of(self.contact_party(contact.first)?);
-                let second = prop_of(self.contact_party(contact.second)?);
-                let closing = (velocity(first) - velocity(second)).dot(contact.normal);
-                // Whichever is a prop reports it; props against props are
-                // reported once, by the first.
-                let body = first.or(second)?;
-                let other = if first.is_some() { second } else { None };
-                (closing > floor).then_some(ContactImpact {
+                if matches!(first, Party::Player) || matches!(second, Party::Player) {
+                    return None;
+                }
+                (event.approach_speed > floor).then_some(ContactImpact {
                     body,
                     other,
-                    speed: closing,
-                    position: contact.point,
+                    speed: event.approach_speed,
+                    position: from_b3(event.point),
                 })
             })
             .collect()
     }
 
-    /// What a collider belongs to; `None` for a player (or nothing known).
-    fn contact_party(&self, collider: ColliderHandle) -> Option<Party> {
-        let collider = self.rapier.colliders.get(collider)?;
-        let groups = collider.collision_groups();
-        if groups.memberships.contains(GROUP_PLAYER) {
-            return None;
-        }
-        if groups.memberships.contains(GROUP_WORLD) {
+    /// What a shape belongs to.
+    fn contact_party(&self, world: &World, shape: b3::ShapeId) -> Option<Party> {
+        let handle = b3::shape::shape_get_body(world, shape);
+        let Some(id) = self.body_id(handle) else {
             return Some(Party::Map);
-        }
-        let id = BodyId(collider.user_data as u32);
-        matches!(self.bodies.get(id.index())?.kind, BodyKind::Prop(_)).then_some(Party::Prop(id))
+        };
+        Some(match self.bodies.get(id.index())?.kind {
+            BodyKind::Prop(_) => Party::Prop(id),
+            BodyKind::Player { .. } => Party::Player,
+        })
     }
 }
