@@ -81,7 +81,7 @@ pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsCo
 pub use player::{ArmorConfig, HealthConfig, PlayerAnimationConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, PointsConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;
-pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig};
+pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig, WeaponSelectSounds};
 pub use validate::Problem;
 pub use weapons::{
     BlipConfig, ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig,

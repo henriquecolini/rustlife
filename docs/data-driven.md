@@ -134,6 +134,7 @@ an entity class to it so maps place it (`entity_map.ron`):
 | fire mode `ammo` | `Unlimited`, `Clip(n)` (rounds from the clip), `Reserve(ammo, count)` (rounds from carried ammo) |
 | fire mode `on_release` | `true`: the shot goes off when the button is let go, the weapon primed while it is held (a grenade) |
 | `consumable` | `true`: the weapon is its own ammo, carried only while it has rounds and put away with the last |
+| `icon` | The letter of the weapon's icon in the HUD's icon font (`weapon_icon_font` in `hud.ron`, by default the game's `resource/halflife2.ttf`); the weapon list shows its name alone without one |
 | fire mode `shot` | `Hitscan((pellets, damage, spread, range, falloff, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
 | `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
 | projectile `body` | `None`, or a rigid cylinder `(radius, height, model_center, surface, rolled, blip, mass, friction, spin, damping)`; `blip` is `None` or `(interval, fast_interval, warn_time)` |

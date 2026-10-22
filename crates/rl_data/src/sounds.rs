@@ -41,6 +41,20 @@ pub struct SoundsConfig {
     pub button: String,
     /// Props knocking about: impacts and scraping.
     pub props: PropSoundsConfig,
+    /// Choosing a weapon from the weapon list.
+    pub weapon_select: WeaponSelectSounds,
+}
+
+/// The sounds of the weapon list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponSelectSounds {
+    /// The cursor moving to another weapon.
+    pub step: String,
+    /// A weapon picked.
+    pub pick: String,
+    /// The list closing with no pick.
+    pub close: String,
 }
 
 /// How props sound as they strike things and slide about. The sounds
@@ -124,6 +138,10 @@ impl SoundsConfig {
         check.non_negative("props.cooldown", props.cooldown);
         check.positive("props.scrape_timeout", props.scrape_timeout);
         check.positive("props.scrape_loud_speed", props.scrape_loud_speed);
+        let select = &self.weapon_select;
+        named(check, "weapon_select.step", &select.step);
+        named(check, "weapon_select.pick", &select.pick);
+        named(check, "weapon_select.close", &select.close);
         if !self.button.contains("{}") {
             check.fail("button", "must contain {} for the button's sound number");
         }
@@ -180,6 +198,11 @@ mod tests {
                 max_per_frame: 4,
                 scrape_timeout: 0.3,
                 scrape_loud_speed: 400.0,
+            },
+            weapon_select: WeaponSelectSounds {
+                step: "Player.WeaponSelectionMoveSlot".to_owned(),
+                pick: "Player.WeaponSelected".to_owned(),
+                close: "Player.WeaponSelectionClose".to_owned(),
             },
         }
     }

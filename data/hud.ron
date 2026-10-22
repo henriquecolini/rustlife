@@ -11,4 +11,7 @@ Hud(
         lines: 5,
         seconds: 6.0,
     ),
+    // The game's font whose letters are the weapons' icons (`icon` in a
+    // weapon's file picks the letter).
+    weapon_icon_font: "resource/halflife2.ttf",
 )

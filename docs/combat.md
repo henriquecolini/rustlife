@@ -55,7 +55,9 @@ The mouse wheel does not switch by itself: it opens a weapon list above the
 ammo counter and moves a cursor through the usable weapons
 (`Inventory::cycle`). Primary fire confirms the pick (and does not fire);
 after a second without scrolling the list fades and the pick is forgotten,
-so the fire button fires as usual.
+so the fire button fires as usual. Moving the cursor, picking and the list
+timing out each play a sound (`weapon_select` in `sounds.ron`), and each row
+shows the weapon's icon, a glyph of the game's icon font.
 
 The **Manipulator** is a weapon whose fire modes are `Shot::Manipulator`.
 The inventory never fires it: once it is deployed, the simulation runs the

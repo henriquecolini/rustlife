@@ -9,6 +9,9 @@ use crate::net::Game;
 use crate::selector::WeaponSelector;
 use crate::ui::{Fonts, theme};
 
+/// Height of the weapon icons, logical pixels.
+const ICON_SIZE: f32 = 34.0;
+
 /// Most weapons the list has room for.
 const SLOTS: usize = 10;
 
@@ -38,14 +41,18 @@ pub(super) struct WeaponList;
 #[derive(Component)]
 pub(super) struct SlotCell(usize);
 
-/// The slot number and name inside a row.
-#[derive(Component)]
-pub(super) struct SlotNumber(usize);
+/// A piece of text in a row, and the row's index.
+#[derive(Component, Clone, Copy)]
+pub(super) enum SlotText {
+    /// The slot number.
+    Number(usize),
+    /// The weapon's name.
+    Name(usize),
+    /// The weapon's icon glyph, drawn in the game's icon font.
+    Icon(usize),
+}
 
-#[derive(Component)]
-pub(super) struct SlotName(usize);
-
-pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
+pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts, icons: Handle<Font>) {
     commands
         .spawn(anchored(
             JustifyContent::FlexEnd,
@@ -60,14 +67,14 @@ pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
                 ..default()
             })
             .with_children(|column| {
-                spawn_list(column, fonts);
+                spawn_list(column, fonts, icons);
                 spawn_ammo(column, fonts);
             });
         });
 }
 
 /// The weapon list, one row per possible weapon.
-fn spawn_list(column: &mut ChildSpawnerCommands, fonts: &Fonts) {
+fn spawn_list(column: &mut ChildSpawnerCommands, fonts: &Fonts, icons: Handle<Font>) {
     column
         .spawn((
             WeaponList,
@@ -96,8 +103,26 @@ fn spawn_list(column: &mut ChildSpawnerCommands, fonts: &Fonts) {
                     BorderColor::all(Color::NONE),
                 ))
                 .with_children(|row| {
-                    row.spawn((SlotNumber(index), fonts.bold("", 18.0, theme::ACCENT)));
-                    row.spawn((SlotName(index), fonts.text("", 17.0, theme::TEXT)));
+                    row.spawn((SlotText::Number(index), fonts.bold("", 18.0, theme::ACCENT)));
+                    row.spawn((
+                        SlotText::Name(index),
+                        Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        },
+                        fonts.text("", 17.0, theme::TEXT),
+                    ));
+                    row.spawn((
+                        SlotText::Icon(index),
+                        Text::new(""),
+                        TextColor(theme::TEXT),
+                        Pickable::IGNORE,
+                        TextFont {
+                            font: icons.clone().into(),
+                            font_size: FontSize::Px(ICON_SIZE),
+                            ..default()
+                        },
+                    ));
                 });
             }
         });
@@ -192,8 +217,7 @@ pub(super) fn update_list(
     selector: Res<WeaponSelector>,
     mut list: Query<&mut Node, (With<WeaponList>, Without<SlotCell>)>,
     mut cells: Query<(&SlotCell, &mut Node, &mut BackgroundColor, &mut BorderColor)>,
-    mut numbers: Query<(&SlotNumber, &mut Text, &mut TextColor), Without<SlotName>>,
-    mut names: Query<(&SlotName, &mut Text, &mut TextColor), Without<SlotNumber>>,
+    mut texts: Query<(&SlotText, &mut Text, &mut TextColor)>,
 ) {
     let opacity = selector.opacity();
     let display = if opacity > 0.0 {
@@ -240,31 +264,43 @@ pub(super) fn update_list(
             Color::NONE
         });
     }
-    for (SlotNumber(index), mut text, mut color) in &mut numbers {
-        let value = slots
-            .get(*index)
-            .map_or_else(String::new, |slot| slot.slot.to_string());
-        if text.0 != value {
+    for (part, mut text, mut color) in &mut texts {
+        let (value, tint) = match *part {
+            SlotText::Number(index) => (
+                slots.get(index).map(|slot| slot.slot.to_string()),
+                theme::ACCENT.with_alpha(opacity),
+            ),
+            SlotText::Name(index) => (
+                slots.get(index).map(|slot| slot.name.clone()),
+                weapon_tint(slots.get(index), is_picked(index), opacity),
+            ),
+            SlotText::Icon(index) => (
+                slots
+                    .get(index)
+                    .map(|slot| slot.icon.map(String::from).unwrap_or_default()),
+                weapon_tint(slots.get(index), is_picked(index), opacity),
+            ),
+        };
+        if let Some(value) = value
+            && text.0 != value
+        {
             text.0 = value;
         }
-        color.0 = theme::ACCENT.with_alpha(opacity);
+        color.0 = tint;
     }
-    for (SlotName(index), mut text, mut color) in &mut names {
-        let Some(slot) = slots.get(*index) else {
-            continue;
-        };
-        if text.0 != slot.name {
-            text.0.clone_from(&slot.name);
-        }
-        let tint = if !slot.usable {
-            theme::TEXT_DIM.with_alpha(0.55)
-        } else if is_picked(*index) {
-            theme::TEXT
-        } else {
-            theme::TEXT_DIM
-        };
-        color.0 = tint.with_alpha(tint.alpha() * opacity);
-    }
+}
+
+/// The colour of a weapon's name and icon: dim when it cannot fire, bright
+/// when the cursor is on it.
+fn weapon_tint(slot: Option<&text::WeaponSlot>, picked: bool, opacity: f32) -> Color {
+    let tint = if slot.is_some_and(|slot| !slot.usable) {
+        theme::TEXT_DIM.with_alpha(0.55)
+    } else if picked {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    tint.with_alpha(tint.alpha() * opacity)
 }
 
 fn ammo_line(kind: AmmoText, ammo: &Ammo, blink: f32) -> (String, Color) {

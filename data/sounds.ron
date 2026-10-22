@@ -53,4 +53,11 @@ Sounds(
         scrape_timeout: 0.3,
         scrape_loud_speed: 400.0,
     ),
+    // The weapon list (mouse wheel): moving the cursor, picking a weapon, and
+    // closing with no pick.
+    weapon_select: (
+        step: "Player.WeaponSelectionMoveSlot",
+        pick: "Player.WeaponSelected",
+        close: "Player.WeaponSelectionClose",
+    ),
 )

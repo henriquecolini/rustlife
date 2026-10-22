@@ -72,6 +72,11 @@ pub struct WeaponConfig {
     /// last one.
     #[serde(default)]
     pub consumable: bool,
+    /// The glyph of the weapon's icon in the HUD's icon font (see
+    /// [`HudConfig::weapon_icon_font`](crate::HudConfig::weapon_icon_font));
+    /// the weapon list shows only its name without one.
+    #[serde(default)]
+    pub icon: Option<char>,
 }
 
 /// A weapon's magazine.
@@ -603,6 +608,7 @@ mod tests {
             sounds: BTreeMap::new(),
             hold: None,
             consumable: false,
+            icon: None,
         }
     }
 

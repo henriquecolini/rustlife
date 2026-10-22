@@ -3,6 +3,8 @@
 Weapon(
     name: "Launcher",
     slot: 5,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('i'),
     position: 0,
     view_model: Some("models/weapons/v_rpg.mdl"),
     world_model: "models/weapons/w_rocket_launcher.mdl",

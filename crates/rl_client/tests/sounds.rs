@@ -49,6 +49,15 @@ fn named_sounds_resolve_and_decode() {
         .cloned(),
     );
     names.extend(config.breaking.values().cloned());
+    names.extend(
+        [
+            &config.weapon_select.step,
+            &config.weapon_select.pick,
+            &config.weapon_select.close,
+        ]
+        .into_iter()
+        .cloned(),
+    );
     // Buttons name their sound by number; the stock maps' use none, so
     // only the pattern is checked (`Buttons.snd7`'s wave does not ship).
     names.push(config.button(1));

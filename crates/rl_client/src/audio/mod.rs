@@ -17,8 +17,8 @@
 //!
 //! What plays when is split by source: game events (`events`), the map's
 //! ambient sounds, moving doors and wall chargers (`world`), the
-//! soundscape of where the listener is (`soundscape`), and footsteps
-//! (`steps`).
+//! soundscape of where the listener is (`soundscape`), footsteps
+//! (`steps`), and the weapon list (`weapon_select`).
 
 use std::collections::HashMap;
 
@@ -39,6 +39,7 @@ mod events;
 mod props;
 mod soundscape;
 mod steps;
+mod weapon_select;
 mod world;
 
 /// Gap between the listener's ears, metres.
@@ -65,6 +66,7 @@ impl Plugin for SoundPlugin {
                 props::PropSoundsPlugin,
                 world::WorldSoundsPlugin,
                 steps::StepsPlugin,
+                weapon_select::WeaponSelectSoundsPlugin,
                 soundscape::SoundscapePlugin,
             ));
     }

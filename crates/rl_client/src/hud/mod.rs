@@ -19,6 +19,7 @@ mod vitals;
 mod weapons;
 
 use bevy::prelude::*;
+use rl_assets::SOURCE;
 use rl_data::Rgba;
 
 use crate::AppState;
@@ -114,11 +115,17 @@ pub(crate) fn anchored(justify: JustifyContent, align: AlignItems, margin: UiRec
     )
 }
 
-fn spawn_hud(mut commands: Commands, gameplay: Res<Gameplay>, fonts: Res<Fonts>) {
+fn spawn_hud(
+    mut commands: Commands,
+    gameplay: Res<Gameplay>,
+    fonts: Res<Fonts>,
+    assets: Res<AssetServer>,
+) {
     spawn_hurt_edges(&mut commands);
     spawn_crosshair(&mut commands, &gameplay.0.hud);
     vitals::spawn(&mut commands, &fonts);
-    weapons::spawn(&mut commands, &fonts);
+    let icons = assets.load(format!("{SOURCE}://{}", gameplay.0.hud.weapon_icon_font));
+    weapons::spawn(&mut commands, &fonts, icons);
     status::spawn(&mut commands, &fonts);
     feed::spawn(
         &mut commands,

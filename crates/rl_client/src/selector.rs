@@ -16,8 +16,19 @@ pub(crate) const HOLD_SECS: f32 = 1.0;
 /// Seconds the list takes to fade away once the hold is over.
 pub(crate) const FADE_SECS: f32 = 0.2;
 
+/// Something that happened to the list, for its sounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Cue {
+    /// The cursor moved.
+    Step,
+    /// A weapon was picked.
+    Pick,
+    /// The hold ran out with no pick.
+    Close,
+}
+
 /// Where the player is in picking a weapon with the wheel.
-#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub(crate) struct WeaponSelector {
     /// The weapon the cursor is on; kept after the hold for the fade.
     cursor: Option<WeaponId>,
@@ -25,6 +36,8 @@ pub(crate) struct WeaponSelector {
     idle: f32,
     /// A click just confirmed a pick and the button is still down.
     swallow_attack: bool,
+    /// What happened since the sounds last looked.
+    cues: Vec<Cue>,
 }
 
 impl Default for WeaponSelector {
@@ -33,6 +46,7 @@ impl Default for WeaponSelector {
             cursor: None,
             idle: f32::INFINITY,
             swallow_attack: false,
+            cues: Vec::new(),
         }
     }
 }
@@ -40,7 +54,16 @@ impl Default for WeaponSelector {
 impl WeaponSelector {
     /// Lets `secs` pass.
     pub(crate) fn advance(&mut self, secs: f32) {
+        let was_open = self.is_open();
         self.idle += secs;
+        if was_open && !self.is_open() {
+            self.cues.push(Cue::Close);
+        }
+    }
+
+    /// What happened to the list since this was last called.
+    pub(crate) fn take_cues(&mut self) -> Vec<Cue> {
+        std::mem::take(&mut self.cues)
     }
 
     /// Whether a pick is under way: the fire button confirms it instead of
@@ -70,6 +93,7 @@ impl WeaponSelector {
         } else {
             inventory.active()
         };
+        self.cues.push(Cue::Step);
         self.cursor = inventory.cycle(arsenal, from, forward).or(from);
         self.idle = 0.0;
     }
@@ -81,6 +105,7 @@ impl WeaponSelector {
             return None;
         }
         self.swallow_attack = true;
+        self.cues.push(Cue::Pick);
         self.dismiss()
     }
 
@@ -194,6 +219,30 @@ mod tests {
         assert!(selector.swallows_attack(true, false));
         assert!(!selector.swallows_attack(false, false), "released");
         assert!(!selector.swallows_attack(true, true), "a new press fires");
+    }
+
+    #[test]
+    fn the_list_cues_its_sounds() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        selector.scroll(&inventory, &arsenal, true);
+        selector.scroll(&inventory, &arsenal, true);
+        assert_eq!(selector.take_cues(), [Cue::Step, Cue::Step]);
+        assert!(selector.take_cues().is_empty(), "taken");
+        selector.confirm();
+        selector.advance(HOLD_SECS + 1.0);
+        assert_eq!(selector.take_cues(), [Cue::Pick], "no close after a pick");
+
+        selector.scroll(&inventory, &arsenal, true);
+        selector.take_cues();
+        selector.advance(HOLD_SECS + 0.1);
+        selector.advance(0.1);
+        assert_eq!(
+            selector.take_cues(),
+            [Cue::Close],
+            "once, when the hold ends"
+        );
     }
 
     #[test]

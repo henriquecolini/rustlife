@@ -2,6 +2,8 @@
 Weapon(
     name: "Pry Bar",
     slot: 1,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('c'),
     position: 1,
     view_model: Some("models/weapons/v_crowbar.mdl"),
     world_model: "models/weapons/w_crowbar.mdl",

@@ -2,6 +2,8 @@
 Weapon(
     name: "Sidearm",
     slot: 2,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('d'),
     position: 0,
     view_model: Some("models/weapons/v_pistol.mdl"),
     world_model: "models/weapons/w_pistol.mdl",

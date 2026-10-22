@@ -23,6 +23,9 @@ pub struct HudConfig {
     pub crosshair: CrosshairConfig,
     /// Recent kills.
     pub kill_feed: KillFeedConfig,
+    /// The font file in the mounted game whose glyphs are the weapons'
+    /// icons (a weapon's `icon` is a character of it).
+    pub weapon_icon_font: String,
 }
 
 /// The crosshair: four strokes around a gap.
@@ -67,5 +70,8 @@ impl HudConfig {
             check.fail("kill_feed.lines", "must be at least 1");
         }
         check.positive("kill_feed.seconds", self.kill_feed.seconds);
+        if self.weapon_icon_font.trim().is_empty() {
+            check.fail("weapon_icon_font", "must name a font file");
+        }
     }
 }

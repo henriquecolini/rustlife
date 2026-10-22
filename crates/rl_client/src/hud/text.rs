@@ -131,6 +131,8 @@ pub(crate) struct WeaponSlot {
     pub(crate) slot: u8,
     /// Its name.
     pub(crate) name: String,
+    /// Its icon's glyph, if it has one.
+    pub(crate) icon: Option<char>,
     /// In hand.
     pub(crate) active: bool,
     /// Has ammo to fire.
@@ -150,6 +152,7 @@ pub(crate) fn weapon_slots(inventory: &Inventory, arsenal: &Arsenal) -> Vec<Weap
             weapon,
             slot: config.slot,
             name: config.name.clone(),
+            icon: config.icon,
             active: inventory.active() == Some(weapon),
             usable: inventory.usable(arsenal, weapon),
         })

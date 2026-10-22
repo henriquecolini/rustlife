@@ -2,6 +2,8 @@
 Weapon(
     name: "Hand Cannon",
     slot: 2,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('e'),
     position: 1,
     view_model: Some("models/weapons/v_357.mdl"),
     world_model: "models/weapons/w_357.mdl",

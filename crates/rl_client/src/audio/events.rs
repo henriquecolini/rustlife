@@ -71,6 +71,11 @@ fn preload(game: Game, mut done: Local<bool>, mut player: SoundPlayer) {
             &sounds.flesh_impact,
         ])
         .chain(sounds.breaking.values())
+        .chain([
+            &sounds.weapon_select.step,
+            &sounds.weapon_select.pick,
+            &sounds.weapon_select.close,
+        ])
         .cloned()
         .collect::<Vec<_>>();
     for name in named {
