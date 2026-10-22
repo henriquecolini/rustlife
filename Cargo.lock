@@ -5596,6 +5596,7 @@ name = "rl_client"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "rapier3d",
  "rl_assets",
  "rl_config",
  "rl_data",

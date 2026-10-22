@@ -29,6 +29,7 @@ use crate::animation::{Animated, SequencePlayer};
 use crate::net::{Drawn, Game};
 use crate::player::Gameplay;
 use crate::props::{LightAt, ModelHandles, Moving, PhysicsBody, spawn_model};
+use crate::ragdolls::Ragdoll;
 
 /// Draws the game's pickups, projectiles and other players.
 pub struct ActorsPlugin;
@@ -164,22 +165,44 @@ fn draw_players(
     gameplay: Res<Gameplay>,
     mut models: ResMut<ModelHandles>,
     asset_server: Res<AssetServer>,
-    mut views: Query<(Entity, &PlayerView, &mut Transform, &mut Visibility)>,
+    time: Res<Time>,
+    corpses: Query<&Ragdoll>,
+    mut views: Query<(Entity, &PlayerView, &mut Transform, &mut Visibility), Without<Ragdoll>>,
 ) {
     let Some(world) = &drawn.0 else {
         return;
     };
     let local = game.local();
+    // The interpolated world is deliberately a little behind the server.
+    // A player the replica already knows is dead must be hidden at once,
+    // even if the pose being interpolated still says alive; conversely a
+    // respawn waits for the drawn pose to catch up rather than appearing at
+    // the corpse's position.
+    let authoritative_alive = |id: PlayerId| {
+        game.sim()
+            .and_then(|sim| sim.player(id))
+            .is_some_and(rl_sim::simulation::Player::alive)
+    };
+    // A kill message can arrive just before the snapshot that marks the
+    // player dead. Until that snapshot catches up, the fresh corpse is the
+    // authority on them being down.
+    let just_died = |id: PlayerId| {
+        corpses
+            .iter()
+            .any(|corpse| corpse.player == id && time.elapsed_secs() - corpse.born < 1.0)
+    };
     let mut shown = Vec::new();
     for (entity, view, mut transform, mut visibility) in &mut views {
         match world.players.get(&view.0).filter(|_| Some(view.0) != local) {
             Some(pose) => {
                 *transform = player_transform(pose.feet, pose.yaw);
-                visibility.set_if_neq(if pose.alive {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
+                visibility.set_if_neq(
+                    if pose.alive && authoritative_alive(view.0) && !just_died(view.0) {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    },
+                );
                 shown.push(view.0);
             }
             None => commands.entity(entity).try_despawn(),
@@ -200,7 +223,17 @@ fn draw_players(
             model,
             player_transform(pose.feet, pose.yaw),
         );
-        commands.entity(entity).insert((PlayerView(id), Moving));
+        commands.entity(entity).insert((
+            PlayerView(id),
+            Moving,
+            // A model spawned for a player who is already dead must not
+            // show its rest pose for a frame before the next pass hides it.
+            if pose.alive && authoritative_alive(id) && !just_died(id) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+        ));
     }
 }
 

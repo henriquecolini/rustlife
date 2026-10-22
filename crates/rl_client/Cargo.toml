@@ -17,6 +17,7 @@ rl_level.workspace = true
 rl_net.workspace = true
 rl_server.workspace = true
 rl_sim.workspace = true
+rapier3d.workspace = true
 source_fs.workspace = true
 source_formats.workspace = true
 bevy.workspace = true

@@ -32,6 +32,7 @@ use crate::movers::MoversPlugin;
 use crate::net::{NetPlugin, NetSettings};
 use crate::player::PlayerPlugin;
 use crate::props::PropsPlugin;
+use crate::ragdolls::RagdollsPlugin;
 use crate::script::InputScript;
 use crate::settings::{Settings, SettingsPlugin};
 use crate::sky::SkyPlugin;
@@ -59,6 +60,7 @@ pub mod net;
 pub mod particles;
 pub mod player;
 pub mod props;
+pub mod ragdolls;
 pub mod script;
 mod selector;
 pub mod settings;
@@ -185,6 +187,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         particles::ParticlesPlugin,
         GrenadesPlugin,
         SurfacesPlugin,
+        RagdollsPlugin,
         DecalsPlugin,
     ));
     if let Some(script) = options.script {
