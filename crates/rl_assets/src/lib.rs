@@ -22,6 +22,7 @@ use bevy_app::{App, Plugin};
 use bevy_asset::AssetApp;
 
 pub mod coords;
+pub mod decal;
 pub mod irradiance;
 pub mod light_field;
 pub mod map;
@@ -34,6 +35,7 @@ pub mod sprite;
 pub mod texture;
 pub mod vertex_lighting;
 
+pub use decal::{DecalAsset, DecalLoadError, DecalLoader};
 pub use map::{
     BspLoader, IrradianceVolumeData, MapAsset, MapBrushEntity, MapLoadError, MapMesh, PlacedProp,
     Spawn,
@@ -66,6 +68,7 @@ impl Plugin for SourceLoadersPlugin {
         app.init_asset::<VertexLightingAsset>();
         app.init_asset::<SoundAsset>();
         app.init_asset::<SpriteAsset>();
+        app.init_asset::<DecalAsset>();
         let bc = Arc::new(AtomicBool::new(false));
         app.insert_resource(BlockCompression(Arc::clone(&bc)));
         let detail = TextureDetail::default();
@@ -77,6 +80,7 @@ impl Plugin for SourceLoadersPlugin {
         app.register_asset_loader(VhvLoader);
         app.register_asset_loader(SoundLoader);
         app.register_asset_loader(SpriteLoader);
+        app.register_asset_loader(DecalLoader);
     }
 
     /// Tells the texture loader, once the GPU is known, whether to keep

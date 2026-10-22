@@ -2,9 +2,11 @@
 //!
 //! Effects are drawn with the game's own sprite materials (named relative
 //! to `materials/`, without extension), on quads facing the camera: muzzle
-//! flashes, bullet tracers, sparks where bullets strike, and explosions,
-//! whose sprites may be animated, and what a thrown grenade shows: a red dot
-//! flashing with its ticking and a red trail behind it.
+//! flashes, bullet tracers, the spray and decals where bullets strike, and
+//! explosions, whose sprites may be animated, and what a thrown grenade
+//! shows: a red dot flashing with its ticking and a red trail behind it.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +20,12 @@ pub struct EffectsConfig {
     pub muzzle_flash: MuzzleFlashConfig,
     /// A bullet's streak.
     pub tracer: TracerConfig,
-    /// A bullet or swing striking something.
-    pub impact: SpriteEffectConfig,
+    /// What a bullet throws off and leaves where it strikes, by surface
+    /// class (`concrete`, `metal`, `wood`, `glass`, `dirt`, `water`);
+    /// `default` catches the rest.
+    pub bullet_impacts: BTreeMap<String, ImpactEffectConfig>,
+    /// A bullet striking a player: blood and the stain it leaves.
+    pub blood: ImpactEffectConfig,
     /// A blast.
     pub explosion: ExplosionEffectConfig,
     /// A grenade in flight.
@@ -57,16 +63,65 @@ pub struct TracerConfig {
     pub speed: f32,
 }
 
-/// A sprite shown at a point for a while.
+/// What a bullet throws off a surface and the mark it leaves: spray
+/// sprites flying away from the surface, and decals drawn flat on it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpriteEffectConfig {
-    /// The sprite.
-    pub sprite: String,
-    /// Size, units.
+pub struct ImpactEffectConfig {
+    /// Sprites to fling off, one per particle chosen at random.
+    pub sprites: Vec<String>,
+    /// A spray sprite's size, units.
     pub size: f32,
-    /// How long it shows, seconds.
+    /// How fast spray flies, units/s.
+    pub speed: f32,
+    /// How many spray sprites.
+    pub particles: u32,
+    /// How long spray lives, seconds.
     pub duration: f32,
+    /// A tint multiplied into the spray sprites (linear RGB), for game
+    /// textures that are drawn white and coloured by the engine.
+    pub color: [f32; 3],
+    /// Whether the spray is lit by the scene rather than drawn fullbright.
+    /// The game's impact sprites are fullbright; blood should fall under the
+    /// same light as everything else.
+    pub lit: bool,
+    /// Decals to choose from; empty for a surface that keeps no mark.
+    pub decals: Vec<String>,
+    /// A decal's size, units.
+    pub decal_size: f32,
+    /// How long a decal stays, seconds.
+    pub decal_life: f32,
+}
+
+impl ImpactEffectConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if self.sprites.is_empty() {
+            check.fail(&format!("{field}.sprites"), "needs at least one sprite");
+        }
+        for (index, sprite) in self.sprites.iter().enumerate() {
+            if sprite.trim().is_empty() {
+                check.fail(&format!("{field}.sprites[{index}]"), "must name a sprite");
+            }
+        }
+        check.positive(&format!("{field}.size"), self.size);
+        check.positive(&format!("{field}.speed"), self.speed);
+        check.positive(&format!("{field}.duration"), self.duration);
+        for (axis, value) in self.color.iter().enumerate() {
+            check.non_negative(&format!("{field}.color[{axis}]"), *value);
+        }
+        if self.particles == 0 {
+            check.fail(&format!("{field}.particles"), "needs at least one");
+        }
+        for (index, decal) in self.decals.iter().enumerate() {
+            if decal.trim().is_empty() {
+                check.fail(&format!("{field}.decals[{index}]"), "must name a decal");
+            }
+        }
+        if !self.decals.is_empty() {
+            check.positive(&format!("{field}.decal_size"), self.decal_size);
+            check.non_negative(&format!("{field}.decal_life"), self.decal_life);
+        }
+    }
 }
 
 /// An explosion, drawn as particles the client makes itself: a flash, a
@@ -125,6 +180,15 @@ pub struct GrenadeEffectConfig {
 }
 
 impl EffectsConfig {
+    /// What a bullet throws off the surface class `class`, or the default
+    /// surface's effect.
+    #[must_use]
+    pub fn bullet_impact(&self, class: &str) -> Option<&ImpactEffectConfig> {
+        self.bullet_impacts
+            .get(class)
+            .or_else(|| self.bullet_impacts.get("default"))
+    }
+
     pub(crate) fn validate(&self, check: &mut Validator) {
         let named = |check: &mut Validator, field: &str, sprite: &str| {
             if sprite.trim().is_empty() {
@@ -145,9 +209,13 @@ impl EffectsConfig {
         check.positive("tracer.width", self.tracer.width);
         check.positive("tracer.length", self.tracer.length);
         check.positive("tracer.speed", self.tracer.speed);
-        named(check, "impact.sprite", &self.impact.sprite);
-        check.positive("impact.size", self.impact.size);
-        check.positive("impact.duration", self.impact.duration);
+        if !self.bullet_impacts.contains_key("default") {
+            check.fail("bullet_impacts", "needs a \"default\" surface");
+        }
+        for (surface, impact) in &self.bullet_impacts {
+            impact.validate(check, &format!("bullet_impacts.{surface}"));
+        }
+        self.blood.validate(check, "blood");
         let grenade = &self.grenade;
         check.positive("grenade.dot_size", grenade.dot_size);
         check.range("grenade.dot_dim", grenade.dot_dim, 0.0, 1.0);
@@ -178,6 +246,21 @@ impl EffectsConfig {
 mod tests {
     use super::*;
 
+    fn impact() -> ImpactEffectConfig {
+        ImpactEffectConfig {
+            sprites: vec!["effects/spark".to_owned()],
+            size: 3.0,
+            speed: 60.0,
+            particles: 5,
+            duration: 0.4,
+            color: [1.0; 3],
+            lit: false,
+            decals: vec!["decals/concrete/shot1".to_owned()],
+            decal_size: 10.0,
+            decal_life: 20.0,
+        }
+    }
+
     fn config() -> EffectsConfig {
         EffectsConfig {
             muzzle_flash: MuzzleFlashConfig {
@@ -192,11 +275,11 @@ mod tests {
                 length: 120.0,
                 speed: 6000.0,
             },
-            impact: SpriteEffectConfig {
-                sprite: "effects/spark".to_owned(),
-                size: 8.0,
-                duration: 0.1,
-            },
+            bullet_impacts: BTreeMap::from([
+                ("default".to_owned(), impact()),
+                ("metal".to_owned(), impact()),
+            ]),
+            blood: impact(),
             explosion: ExplosionEffectConfig {
                 size_per_radius: 1.2,
                 rise: 0.3,
@@ -233,7 +316,11 @@ mod tests {
         let mut bad = config();
         bad.muzzle_flash.sprites.clear();
         bad.tracer.speed = 0.0;
-        bad.impact.sprite.clear();
+        bad.bullet_impacts
+            .get_mut("default")
+            .expect("default impact")
+            .sprites
+            .clear();
         bad.explosion.duration = -1.0;
         bad.explosion.sparks = 5000;
         bad.explosion.rise = 2.0;

@@ -1,19 +1,22 @@
-//! Combat effects: muzzle flashes, tracers, impact sparks and explosions.
+//! Combat effects: muzzle flashes, tracers, bullet impacts and explosions.
 //!
-//! Each is one of the mounted game's sprite materials, as `effects.ron`
-//! names them, drawn on a quad facing the camera:
+//! Each is one of the mounted game's materials, as `effects.ron` names
+//! them, drawn on a quad facing the camera:
 //!
 //! - a **muzzle flash** when a gun fires, at its model's `muzzle`
 //!   attachment: the view model's in first person (drawn on its layer, so
 //!   it sits on the weapon in hand), the world model's for everyone else;
 //! - a **tracer** flying from the muzzle to where each bullet stopped, a
 //!   streak turned about its line to face the camera;
-//! - **sparks** where a bullet or swing strikes anything but a player;
+//! - **impact spray** where a bullet or swing strikes something, by its
+//!   surface class (concrete, metal, wood, glass, ...);
+//! - **blood** spray when a bullet strikes a player;
 //! - an **explosion**, which [`crate::particles`] draws.
 //!
 //! A sprite's frames lie side by side in one image (see
 //! [`rl_assets::SpriteAsset`]); a material shows one by shifting its
-//! texture coordinates.
+//! texture coordinates. The marks themselves are projected meshes; see
+//! [`crate::decals`].
 
 use std::collections::HashMap;
 
@@ -21,10 +24,13 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
-use rl_data::{EffectsConfig, MuzzleFlashConfig, Shot, SpriteEffectConfig, TracerConfig};
+use rl_data::{EffectsConfig, ImpactEffectConfig, MuzzleFlashConfig, Shot, TracerConfig};
+use rl_sim::collision::contents::MASK_PLAYER_SOLID;
+use rl_sim::collision::{CollisionQuery, Hull};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::view_direction;
 use rl_sim::rng::Rng;
+use rl_sim::scene::Scene as WorldScene;
 use rl_sim::simulation::{PlayerId, Simulation};
 use rl_sim::weapons::WeaponId;
 
@@ -32,9 +38,11 @@ use crate::AppState;
 use crate::actors::PlayerView;
 use crate::animation::Attachment;
 use crate::camera::FlyCam;
+use crate::decals::{DecalKind, DecalRequest, trace_stain};
 use crate::net::Game;
 use crate::particles::Blast;
 use crate::player::{LocalPlayer, Ticked};
+use crate::surfaces::{MapSurfaces, class_of_prop};
 use crate::viewmodel::{VIEW_FOV_DEGREES, VIEW_LAYER, ViewModel};
 use crate::world::MapScoped;
 
@@ -43,9 +51,17 @@ const MUZZLE: &str = "muzzle";
 /// Where a gun without a muzzle attachment fires from, relative to the
 /// eyes: forward, right and down, units.
 const FALLBACK_MUZZLE: Vec3 = Vec3::new(24.0, 5.0, 6.0);
-/// How far off a struck surface sparks are drawn, units, so they do not
+/// How far off a struck surface particles are drawn, units, so they do not
 /// cut into it.
 const IMPACT_LIFT: f32 = 1.0;
+/// Gravity pulling impact spray down, metres/s².
+const SPRAY_GRAVITY: f32 = -9.8;
+/// How quickly the air slows spray, per second.
+const SPRAY_DRAG: f32 = 2.5;
+/// How wide the cone of spray spreads around its main direction.
+const SPRAY_SPREAD: f32 = 0.6;
+/// Most spray particles one hit spawns.
+const MAX_SPRAY: u32 = 16;
 /// Most steps from an attachment up to the model that owns it.
 const MAX_DEPTH: usize = 64;
 
@@ -60,6 +76,7 @@ impl Plugin for EffectsPlugin {
                 load_sprites,
                 spawn_effects,
                 fly_tracers,
+                fly_spray,
                 follow_attachments,
                 face_camera,
                 expire,
@@ -74,8 +91,9 @@ impl Plugin for EffectsPlugin {
 #[derive(Resource)]
 struct Sprites {
     handles: HashMap<String, Handle<SpriteAsset>>,
-    /// A material per sprite showing its first frame, made once it loads.
-    materials: HashMap<String, Handle<StandardMaterial>>,
+    /// A material per sprite, tint and lighting, showing its first frame,
+    /// made once it loads.
+    materials: HashMap<(String, [u32; 3], bool), Handle<StandardMaterial>>,
     /// The unit quad every effect is drawn on.
     quad: Option<Handle<Mesh>>,
     /// Picks flashes and their roll.
@@ -101,22 +119,38 @@ impl Sprites {
         sprites: &Assets<SpriteAsset>,
         materials: &mut Assets<StandardMaterial>,
     ) -> Option<Handle<StandardMaterial>> {
-        if let Some(material) = self.materials.get(name) {
+        self.still_tinted(name, [1.0; 3], false, sprites, materials)
+    }
+
+    /// The same, multiplied by `color` and lit by the scene if `lit`.
+    fn still_tinted(
+        &mut self,
+        name: &str,
+        color: [f32; 3],
+        lit: bool,
+        sprites: &Assets<SpriteAsset>,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Option<Handle<StandardMaterial>> {
+        let key = (name.to_owned(), color.map(f32::to_bits), lit);
+        if let Some(material) = self.materials.get(&key) {
             return Some(material.clone());
         }
         let sprite = sprites.get(self.handles.get(name)?)?;
-        let material = materials.add(sprite_material(sprite));
-        self.materials.insert(name.to_owned(), material.clone());
+        let material = materials.add(sprite_material(sprite, color, lit));
+        self.materials.insert(key, material.clone());
         Some(material)
     }
 }
 
 /// How a sprite is drawn: unlit, both sides, added to what is behind it or
 /// blended over it, showing its first frame.
-fn sprite_material(sprite: &SpriteAsset) -> StandardMaterial {
+fn sprite_material(sprite: &SpriteAsset, color: [f32; 3], lit: bool) -> StandardMaterial {
     StandardMaterial {
+        base_color: Color::linear_rgb(color[0], color[1], color[2]),
         base_color_texture: Some(sprite.image.clone()),
-        unlit: true,
+        unlit: !lit,
+        perceptual_roughness: 1.0,
+        reflectance: 0.0,
         double_sided: true,
         cull_mode: None,
         alpha_mode: if sprite.additive {
@@ -155,6 +189,20 @@ struct FacesCamera {
 #[derive(Component)]
 struct AtAttachment(Entity);
 
+/// A sprite flung off a struck surface, metres and seconds.
+#[derive(Component)]
+struct Spray {
+    velocity: Vec3,
+    /// Downward acceleration, metres/s².
+    gravity: f32,
+    age: f32,
+    life: f32,
+    /// Size at birth and at death, metres.
+    size: (f32, f32),
+    /// Turn, radians/s.
+    spin: f32,
+}
+
 /// A tracer in flight, metres.
 #[derive(Component)]
 struct Tracer {
@@ -183,7 +231,8 @@ fn load_sprites(
     let Some(sim) = game.sim() else {
         return;
     };
-    for name in sprite_names(&sim.data().effects) {
+    let effects = &sim.data().effects;
+    for name in sprite_names(effects) {
         let handle = asset_server.load(format!("{SOURCE}://materials/{name}.vmt"));
         sprites.handles.insert(name.to_owned(), handle);
     }
@@ -196,7 +245,14 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
         .muzzle_flash
         .sprites
         .iter()
-        .chain([&effects.tracer.sprite, &effects.impact.sprite])
+        .chain([&effects.tracer.sprite])
+        .chain(
+            effects
+                .bullet_impacts
+                .values()
+                .chain([&effects.blood])
+                .flat_map(|impact| &impact.sprites),
+        )
         .map(String::as_str)
 }
 
@@ -395,21 +451,69 @@ impl Painter<'_, '_> {
         ));
     }
 
-    /// Sparks at `at`.
-    fn sparks(&mut self, quad: &Handle<Mesh>, impact: &SpriteEffectConfig, at: Vec3) {
-        let Some(material) =
-            self.sprites
-                .still(&impact.sprite, &self.sprite_assets, &mut self.materials)
-        else {
-            return;
-        };
-        let roll = self.sprites.rng.unit() * std::f32::consts::TAU;
-        let size = Vec2::splat(impact.size * coords::METERS_PER_UNIT);
-        let until = self.time.elapsed_secs() + impact.duration;
-        self.commands.spawn((
-            quad_bundle(quad, material, at, size, until),
-            FacesCamera { roll },
-        ));
+    /// Spray where a bullet or swing struck a surface.
+    fn surface_impact(
+        &mut self,
+        quad: &Handle<Mesh>,
+        impact: &ImpactEffectConfig,
+        at: Vec3,
+        normal: Vec3,
+    ) {
+        self.spray(quad, impact, at, normal);
+    }
+
+    /// Blood spray thrown out of a wound.
+    fn blood(
+        &mut self,
+        quad: &Handle<Mesh>,
+        impact: &ImpactEffectConfig,
+        at: Vec3,
+        direction: Vec3,
+    ) {
+        self.spray(quad, impact, at, direction);
+    }
+
+    /// Spray sprites flying roughly along `away` from `at`.
+    fn spray(&mut self, quad: &Handle<Mesh>, impact: &ImpactEffectConfig, at: Vec3, away: Vec3) {
+        let away = away.try_normalize().unwrap_or(Vec3::Z);
+        let (side, up) = away.any_orthonormal_pair();
+        let scale = coords::METERS_PER_UNIT;
+        for _ in 0..impact.particles.min(MAX_SPRAY) {
+            let name = &impact.sprites[self.sprites.rng.below(impact.sprites.len())];
+            let Some(material) = self.sprites.still_tinted(
+                name,
+                impact.color,
+                impact.lit,
+                &self.sprite_assets,
+                &mut self.materials,
+            ) else {
+                continue;
+            };
+            let (x, y) = self.sprites.rng.in_disc();
+            let direction = (away + (side * x + up * y) * SPRAY_SPREAD).normalize_or(away);
+            let speed = impact.speed * scale * (0.45 + 0.75 * self.sprites.rng.unit());
+            let life = impact.duration * (0.65 + 0.7 * self.sprites.rng.unit());
+            let particle_size = impact.size * scale * (0.65 + 0.7 * self.sprites.rng.unit());
+            let roll = self.sprites.rng.unit() * std::f32::consts::TAU;
+            self.commands.spawn((
+                quad_bundle(
+                    quad,
+                    material,
+                    at,
+                    Vec2::splat(particle_size),
+                    f32::INFINITY,
+                ),
+                FacesCamera { roll },
+                Spray {
+                    velocity: direction * speed,
+                    gravity: SPRAY_GRAVITY,
+                    age: 0.0,
+                    life,
+                    size: (particle_size, particle_size * 0.35),
+                    spin: (self.sprites.rng.unit() - 0.5) * 8.0,
+                },
+            ));
+        }
     }
 }
 
@@ -427,7 +531,9 @@ fn spawn_effects(
     mut ticks: MessageReader<Ticked>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
+    surfaces: Res<MapSurfaces>,
     mut blasts: MessageWriter<Blast>,
+    mut decals: MessageWriter<DecalRequest>,
     mut painter: Painter,
     scene: Scene,
 ) {
@@ -456,16 +562,66 @@ fn spawn_effects(
             }
         }
         for shot in &events.shots {
+            let bullets = fires_bullets(sim, shot.weapon);
             let end = coords::position(shot.trace.end.to_array());
-            if fires_bullets(sim, shot.weapon) {
+            let normal = coords::direction(shot.trace.normal.to_array());
+            if bullets {
                 let (_, start) = muzzle_of(shot.player);
                 painter.tracer(&quad, &effects.tracer, start, end);
             }
-            if !matches!(shot.trace.struck, Struck::Nothing | Struck::Player(_)) {
-                let lift = coords::direction(shot.trace.normal.to_array())
-                    * IMPACT_LIFT
-                    * coords::METERS_PER_UNIT;
-                painter.sparks(&quad, &effects.impact, end + lift);
+            let lift = normal * IMPACT_LIFT * coords::METERS_PER_UNIT;
+            match shot.trace.struck {
+                Struck::Nothing => {}
+                Struck::Player(_) => {
+                    let source_direction =
+                        (shot.trace.end - shot.start).normalize_or(shot.trace.normal);
+                    let spray_direction = shot.trace.normal.normalize_or(source_direction);
+                    painter.blood(
+                        &quad,
+                        &effects.blood,
+                        end,
+                        coords::direction(spray_direction.to_array()),
+                    );
+                    if bullets {
+                        let scene = WorldScene {
+                            world: sim.world(),
+                            physics: sim.physics(),
+                            ignore: None,
+                        };
+                        let trace = |to| {
+                            scene.trace_hull(shot.trace.end, to, &Hull::POINT, MASK_PLAYER_SOLID)
+                        };
+                        if let Some((at, normal, target)) =
+                            trace_stain(shot.trace.end, source_direction, trace)
+                        {
+                            decals.write(DecalRequest {
+                                kind: DecalKind::Blood,
+                                target,
+                                at,
+                                normal,
+                                direction: source_direction,
+                            });
+                        }
+                    }
+                }
+                Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
+                    let prop = surfaces.of_shot(sim, &shot.trace);
+                    let class = class_of_prop(prop);
+                    let Some(impact) = effects.bullet_impact(class.name()) else {
+                        continue;
+                    };
+                    painter.surface_impact(&quad, impact, end + lift, normal);
+                    if bullets {
+                        decals.write(DecalRequest {
+                            kind: DecalKind::Bullet(class),
+                            target: shot.trace.struck,
+                            at: shot.trace.end,
+                            normal: shot.trace.normal,
+                            direction: (shot.trace.end - shot.start)
+                                .normalize_or(shot.trace.normal),
+                        });
+                    }
+                }
             }
         }
         for explosion in &events.explosions {
@@ -497,6 +653,30 @@ fn fly_tracers(
         transform.translation = middle;
         transform.rotation = rotation;
         transform.scale = Vec3::new(tracer.width, length, 1.0);
+    }
+}
+
+/// Moves impact spray along its flight and shrinks it as it ages; removes
+/// it when its life is up.
+fn fly_spray(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut spray: Query<(Entity, &mut Spray, &mut Transform, &mut FacesCamera)>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut spray, mut transform, mut faces) in &mut spray {
+        spray.age += dt;
+        if spray.age >= spray.life {
+            commands.entity(entity).try_despawn();
+            continue;
+        }
+        spray.velocity.y += spray.gravity * dt;
+        spray.velocity *= (-SPRAY_DRAG * dt).exp();
+        transform.translation += spray.velocity * dt;
+        let t = (spray.age / spray.life).clamp(0.0, 1.0);
+        let size = spray.size.0 + (spray.size.1 - spray.size.0) * t;
+        transform.scale = Vec3::new(size, size, 1.0);
+        faces.roll += spray.spin * dt;
     }
 }
 
@@ -610,5 +790,9 @@ mod tests {
         let data = rl_data::GameData::builtin().expect("builtin data");
         let names: Vec<&str> = sprite_names(&data.effects).collect();
         assert!(names.contains(&"effects/muzzleflash1"));
+        assert!(names.contains(&"effects/fleck_cement1"));
+        assert!(names.contains(&"effects/blood"));
+        assert!(data.effects.bullet_impact("metal").is_some());
+        assert!(data.effects.bullet_impact("nonsense").is_some(), "default");
     }
 }

@@ -23,6 +23,7 @@ use crate::animation::ModelAnimationPlugin;
 use crate::audio::SoundPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
+use crate::decals::DecalsPlugin;
 use crate::effects::EffectsPlugin;
 use crate::fog::FogPlugin;
 use crate::grenades::GrenadesPlugin;
@@ -46,6 +47,7 @@ pub mod camera;
 pub mod capture;
 pub mod content;
 pub mod debris;
+pub mod decals;
 pub mod effects;
 pub mod fog;
 pub mod grenades;
@@ -183,6 +185,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         particles::ParticlesPlugin,
         GrenadesPlugin,
         SurfacesPlugin,
+        DecalsPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);
