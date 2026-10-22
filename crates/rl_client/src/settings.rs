@@ -369,7 +369,7 @@ fn apply_texture_detail(settings: Res<Settings>, detail: Option<Res<rl_assets::T
 fn apply_camera(
     settings: Res<Settings>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut cameras: Query<(&mut Projection, &mut Msaa), With<FlyCam>>,
+    mut cameras: Query<(&mut Projection, &mut Msaa, Has<FlyCam>)>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -377,12 +377,19 @@ fn apply_camera(
     let aspect = window.width() / window.height().max(1.0);
     let fov = vertical_fov(settings.video.fov, aspect);
     let wanted = msaa(&settings.video);
-    for (mut projection, mut msaa) in &mut cameras {
-        if let Projection::Perspective(perspective) = &mut *projection
+    for (mut projection, mut msaa, is_main) in &mut cameras {
+        // The view model's narrower view and the sky camera's scaled one are
+        // their own; only the player's camera follows the FOV setting.
+        if is_main
+            && let Projection::Perspective(perspective) = &mut *projection
             && (perspective.fov - fov).abs() > 1e-4
         {
             perspective.fov = fov;
         }
+        // Every 3D camera must sample alike. Cameras draw over one another
+        // (the sky behind the world, the view model over it); with mixed
+        // sample counts their passes cannot share the frame, and the world
+        // can vanish behind the sky.
         if *msaa != wanted {
             *msaa = wanted;
         }
