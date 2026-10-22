@@ -26,8 +26,8 @@ through adding a weapon and an item. How the game then uses them is in
 | `hud.ron` | HUD tunables (crosshair, kill feed, low-health mark) |
 | `net.ron` | Port, snapshot rate, interpolation delay, command redundancy and backlog, lag-compensation window ([netcode.md](netcode.md)) |
 | `map_logic.ron` | Use range, wall chargers' aim cone, map explosions, the per-tick event cap ([map-logic.md](map-logic.md)) |
-| `sounds.ron` | Footsteps, landings, deaths, explosions, impacts, breakables, buttons ([presentation.md](presentation.md)) |
-| `effects.ron` | Muzzle flash, tracer and spark sprites, and how explosions are drawn ([presentation.md](presentation.md)) |
+| `sounds.ron` | Fallback footsteps and impacts, landings, deaths, explosions, breakables, buttons; surface materials provide the per-surface sounds ([presentation.md](presentation.md)) |
+| `effects.ron` | Muzzle flash and tracer sprites, surface impact spray, projected decals and lit blood, and how explosions are drawn ([presentation.md](presentation.md)) |
 
 Every file documents its fields in comments, and every type in `rl_data`
 documents them in Rust.
@@ -139,7 +139,7 @@ an entity class to it so maps place it (`entity_map.ron`):
 | `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
 | projectile `body` | `None`, or a rigid cylinder `(radius, height, model_center, surface, rolled, blip, mass, friction, spin, damping)`; `blip` is `None` or `(interval, fast_interval, warn_time)` |
 | projectile `explosion` | `None`, or `(radius, damage, knockback, force)` |
-| `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `physgun`); `None` takes `player.ron`'s `default_hold` |
+| `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `gravgun`); `None` takes `player.ron`'s `default_hold` |
 | `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`, `blip` (a fuse ticking) |
 
 The ten built-in weapons cover every block: the Gravity Gun (a tool, the

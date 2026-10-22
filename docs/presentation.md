@@ -48,8 +48,17 @@ hand. The stance is idle, run, crouch, crouch-walk or jump, and the hold
 comes from the weapon's data (`hold: Some("shotgun")` gives `run_shotgun`,
 `cidle_shotgun`, ...). A run is blended by the direction of movement
 relative to the facing (`move_yaw`) and paced by speed against
-`run_speed`. The held weapon's world model is joined to the player's
-skeleton at the first bone they share, so it moves with the hand.
+`run_speed`; walking is the run sequence played slower, as HL2DM's models
+have no separate walk. The held weapon's world model is joined to the
+player's skeleton at the first bone they share, so it moves with the hand.
+
+When a player dies, their model becomes a ragdoll: the animation stops and
+each bone becomes a rigid body with a capsule collider, mass and angular
+limits at its joints, simulated by Rapier against the map. Non-adjacent
+bones collide with each other, so the corpse does not fold through itself.
+The pose starts from the one the player died in; the fatal shot pushes the
+bone it struck, and a nearby blast throws the whole body outwards. A corpse
+is visual only, lies for 25 seconds, and at most eight are kept.
 
 **The view model**, the local player's weapon in first person, is drawn by
 a second camera with a narrower field of view (Source's 54° across 4:3)
@@ -79,7 +88,8 @@ play at the listener. What plays, by source:
 |--------|--------|
 | Weapons (their data's `sounds`) | `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire` |
 | Items (their data's `sounds`) | `pickup`, and `use` looping while a station is drawn from |
-| `sounds.ron` | footsteps, hard landings, weapon pickups, deaths, explosions, bullet impacts on surfaces and flesh, breakables by material, buttons by sound number |
+| `sounds.ron` | fallback footsteps, hard landings, weapon pickups, deaths, explosions, fallback bullet impacts, breakables by material, buttons by sound number |
+| `surfaceproperties.txt` | footstep and bullet-impact sounds from the surface underfoot or struck: concrete, metal, wood, glass, flesh, dirt and the rest |
 | The map's logic | `ambient_generic`s as the logic switches them; doors' move and stop sounds (`noise1`, `noise2`), carried with them |
 | Soundscapes | the ambience of the nearest `env_soundscape` the listener can see and is within the radius of: its loops, and its random sounds every so often |
 
@@ -129,7 +139,9 @@ Combat effects draw the game's own sprite materials, named in
 |--------|------|-------|
 | Muzzle flash | a gun fires | one of `muzzle_flash.sprites` at random, briefly, rolled at random, at the gun's `muzzle` attachment: the view model's for the local player (on the view model's layer), the held world model's for others |
 | Tracer | a bullet flies | a streak of `tracer.length` flying at `tracer.speed` from the muzzle to where the bullet stopped, turned about its line to face the camera |
-| Sparks | a bullet or swing strikes the map or a prop | the `impact` sprite just off the surface |
+| Impact spray | a bullet or swing strikes the map or a prop | the surface class's sprites (concrete flecks, metal sparks, wood chips, glass shards, water splash) thrown off the surface |
+| Bullet decal | a bullet strikes a surface | one of the surface class's decal materials, projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them |
+| Blood | a bullet strikes a player | lit blood sprites thrown out of the wound, and a large blood decal on the floor or wall behind the player |
 | Explosion | something blows up | particles the game makes itself (below) |
 | Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |
 | Grenade trail | a grenade is in flight | a red ribbon of where it has been, turned to face the camera, tapering and fading over `grenade.trail_life` |

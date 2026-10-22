@@ -223,7 +223,9 @@ See [docs/netcode.md](docs/netcode.md).
    them into joints, inverse bind poses and `AnimationClip`s and skins the
    meshes. The client plays stance sequences on other players, holding
    their weapons' world models, and activities on the view model, drawn by
-   its own camera.
+   its own camera. A dead player's model becomes a client-side Rapier
+   ragdoll with joint limits, self collision and the killing blow applied
+   to the bone it hit.
 3. **Sound.** `source_formats` reads WAV files, soundscripts and
    soundscapes; `rl_assets` loads sounds as Bevy audio. The client plays
    the tick's events, the map's ambient and door sounds, soundscapes and
@@ -234,8 +236,11 @@ See [docs/netcode.md](docs/netcode.md).
    skybox with a camera of its own behind the world, fogs the views and
    draws water. DXT textures stay block-compressed on the GPU.
 5. **Effects.** Sprite materials load with all their frames
-   (`SpriteLoader`); muzzle flashes, tracers, sparks and explosions draw
-   them as `effects.ron` says.
+   (`SpriteLoader`); muzzle flashes, tracers, surface-class impact spray,
+   projected bullet and blood decals and explosions draw them as
+   `effects.ron` says.
+   Footstep and bullet-impact sounds come from the struck surface's
+   `surfaceproperties.txt` entry.
 
 See [docs/presentation.md](docs/presentation.md).
 
