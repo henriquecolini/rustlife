@@ -118,6 +118,9 @@ print_stderr = "warn"
 # Bevy is painfully slow unoptimised; optimise dependencies but keep our own
 # code quick to compile and debuggable.
 opt-level = 1
+# Line tables are enough to read a backtrace; full debug info is most of the
+# link time and target size of every test binary.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
@@ -125,7 +128,26 @@ opt-level = 3
 # weighs, and is rarely stepped into; leaving it out keeps `target/` to a
 # fraction of the size.
 debug = false
+# Our own code keeps debug assertions; dependencies do not pay for them.
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev.build-override]
+# Build scripts and procedural macros run on every build; compiling them
+# optimised makes large derive-heavy crates like Bevy build faster.
+opt-level = 3
 
 [profile.release]
+# Day-to-day release builds skip LTO: it dominates the link time, and
+# `dist` below keeps the fully optimised build for shipping.
+codegen-units = 16
+
+[profile.dist]
+inherits = "release"
 lto = "thin"
 codegen-units = 1
+
+[profile.release.build-override]
+# Keep build-time tools at the same optimisation as release, so switching
+# profiles reuses their compiled artifacts.
+opt-level = 3

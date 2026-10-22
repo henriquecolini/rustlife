@@ -1,2 +1,5 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+# Bevy as a shared library: rebuilding the client after a change relinks
+# only rustlife's own code instead of the whole engine.
+dev = "run -p rustlife --features bevy/dynamic_linking"

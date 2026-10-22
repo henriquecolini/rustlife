@@ -166,10 +166,16 @@ cargo run -p rustlife-server -- --map dm_lockdown --dummies 2   # dedicated serv
 ## Development
 
 ```sh
+cargo dev                   # run the client with Bevy linked dynamically (fast rebuilds)
 cargo xtask ci              # fmt, clippy -D warnings, tests, docs, audit, asset check
 cargo xtask content-tests   # tests that need a real HL2DM install
 cargo bench -p rl_sim       # trace and movement benchmarks
+cargo build --profile dist  # fully optimised (LTO) client for playing and shipping
 ```
+
+`cargo dev` builds Bevy as a shared library, so a change to rustlife relinks
+only its own code. Use a plain `cargo build` or `cargo run` for a
+self-contained binary.
 
 The content tests read their inputs from environment variables and skip
 silently when unset: `RUSTLIFE_TEST_GAME_DIR` (an HL2DM install),

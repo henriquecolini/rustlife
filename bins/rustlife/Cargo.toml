@@ -21,6 +21,9 @@ rl_net.workspace = true
 source_fs.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+# Only enabled by `cargo dev`, which turns Bevy into a shared library so
+# changing rustlife relinks just its own code. It is not used directly.
+bevy = { workspace = true, optional = true }
 
 [lints]
 workspace = true

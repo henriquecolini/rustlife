@@ -5796,6 +5796,7 @@ name = "rustlife"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bevy",
  "clap",
  "rl_client",
  "rl_config",
