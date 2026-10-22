@@ -110,7 +110,7 @@ fn spawn_pickups(
     for (index, pickup) in sim.pickups().iter().enumerate() {
         let transform = Transform {
             translation: coords::position(pickup.origin.to_array()),
-            rotation: coords::rotation(pickup.angles),
+            rotation: coords::rotation(pickup.model_angles()),
             ..default()
         };
         let entity = spawn_model(

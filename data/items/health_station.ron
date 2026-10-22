@@ -3,6 +3,10 @@
 Item(
     name: "Health station",
     model: "models/props_combine/health_charger001.mdl",
+    // The charger's front lies a quarter turn counter-clockwise of the
+    // entity's forward axis; turn it to put its front out from the wall the
+    // map mounts it on.
+    model_yaw: 90.0,
     gives: Health(50.0),
     // Seconds it takes to recharge once spent.
     respawn: 60.0,
