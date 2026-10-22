@@ -1,7 +1,7 @@
 // The Manipulator: grab, carry, throw and punt props. Its grip and throws
 // are tuned in tools/manipulator.ron; this file makes it a weapon.
 Weapon(
-    name: "Manipulator",
+    name: "Gravity Gun",
     slot: 1,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('m'),

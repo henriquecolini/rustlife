@@ -1,7 +1,7 @@
 // An energy rifle: accurate at range, with a bouncing charge orb that
 // shatters whoever it touches.
 Weapon(
-    name: "Arc Rifle",
+    name: "Pulse Rifle",
     slot: 3,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('l'),

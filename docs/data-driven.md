@@ -142,12 +142,13 @@ an entity class to it so maps place it (`entity_map.ron`):
 | `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `physgun`); `None` takes `player.ron`'s `default_hold` |
 | `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`, `blip` (a fuse ticking) |
 
-The ten built-in weapons cover every block: the Manipulator (a tool), the
-Pry Bar (melee), Sidearm and Hand Cannon (single bullets), SMG (automatic,
-with a reserve-fed grenade launcher), Arc Rifle (with a bouncing, fused
-orb), Scattergun (pellets, round-by-round reload, a two-shell secondary),
-Boltcaster (a fast projectile), Launcher (rockets) and Frag (a thrown,
-bouncing, fused grenade).
+The ten built-in weapons cover every block: the Gravity Gun (a tool, the
+`Manipulator` shot), the Crowbar (melee), 9MM Pistol and .357 Magnum
+(single bullets), SMG (automatic, with a reserve-fed grenade launcher),
+Pulse Rifle (with a bouncing, fused orb), Shotgun (pellets,
+round-by-round reload, a two-shell secondary), Crossbow (a fast
+projectile), RPG (rockets) and Grenade (a thrown, bouncing, fused
+grenade).
 
 ## Adding an item
 

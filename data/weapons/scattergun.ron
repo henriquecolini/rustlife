@@ -1,7 +1,7 @@
 // A pump shotgun, loaded a shell at a time. Secondary fire empties both
 // barrels' worth at once.
 Weapon(
-    name: "Scattergun",
+    name: "Shotgun",
     slot: 4,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('b'),

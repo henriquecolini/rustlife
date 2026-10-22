@@ -1,7 +1,7 @@
 // A rocket launcher. Rockets fly straight and burst on contact; one under
 // your own feet throws you about 640 units/s upwards.
 Weapon(
-    name: "Launcher",
+    name: "RPG",
     slot: 5,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('i'),

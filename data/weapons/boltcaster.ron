@@ -1,6 +1,6 @@
 // A rail crossbow: one fast, slightly dropping bolt that kills outright.
 Weapon(
-    name: "Boltcaster",
+    name: "Crossbow",
     slot: 4,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('g'),

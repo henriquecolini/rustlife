@@ -9,7 +9,7 @@
 // original (a red dot flashing in step with each tick, a red trail behind
 // it) and bursts 2.5 seconds after leaving the hand.
 Weapon(
-    name: "Frag",
+    name: "Grenade",
     slot: 5,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('k'),

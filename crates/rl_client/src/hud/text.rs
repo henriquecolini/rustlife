@@ -372,7 +372,7 @@ mod tests {
         let data = GameData::builtin().expect("builtin");
         let inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
         let slots = weapon_slots(&inventory, &arsenal);
-        assert_eq!(slots.first().map(|s| s.name.as_str()), Some("Manipulator"));
+        assert_eq!(slots.first().map(|s| s.name.as_str()), Some("Gravity Gun"));
         let active: Vec<_> = slots.iter().filter(|s| s.active).collect();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].name, "SMG");
@@ -399,7 +399,7 @@ mod tests {
     }
 
     /// A floor with two players, the second with `health` left, after one
-    /// shot from the first's Hand Cannon.
+    /// shot from the first's .357 Magnum.
     fn duel(health: f32, data: &GameData) -> Simulation {
         use rl_sim::collision::WorldBuilder;
         use rl_sim::movement::{Buttons, UserCmd};

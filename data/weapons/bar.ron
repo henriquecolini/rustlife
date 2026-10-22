@@ -1,6 +1,6 @@
 // A heavy steel bar for close work.
 Weapon(
-    name: "Pry Bar",
+    name: "Crowbar",
     slot: 1,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('c'),

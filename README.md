@@ -12,7 +12,7 @@ the same way.
 
 The gameplay is rustlife's own: Source-style movement (air-strafing,
 bunny-hopping, surfing), a fully data-driven arsenal including a physics
-*Manipulator* that grabs and launches props, and a free-for-all deathmatch
+*Gravity Gun* that grabs and launches props, and a free-for-all deathmatch
 mode, all tunable through RON files in [`data/`](data/).
 
 > **Status:** early development. See the roadmap below.
@@ -82,7 +82,7 @@ with rebindable keys, your name). `Esc` in a game opens the pause menu; the
 match keeps running behind it. In a map you play a
 free-for-all deathmatch from a spawn point, with Source-style movement
 ([docs/movement.md](docs/movement.md)), rustlife's own arsenal and pickups
-([docs/combat.md](docs/combat.md)) and the Manipulator, a tool that grabs
+([docs/combat.md](docs/combat.md)) and the Gravity Gun, a tool that grabs
 and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 
 | Input | Action |
@@ -99,8 +99,8 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Mouse wheel | Browse the weapon list; left mouse confirms the pick |
 | Q | Last weapon |
 | Tab | Scoreboard |
-| Right mouse (Manipulator) | Grab a prop (hold to pull a distant one in); press again to drop it |
-| Left mouse (Manipulator) | Throw the held prop, or punt the one under the crosshair |
+| Right mouse (Gravity Gun) | Grab a prop (hold to pull a distant one in); press again to drop it |
+| Left mouse (Gravity Gun) | Throw the held prop, or punt the one under the crosshair |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Pause menu: resume, settings, leave the match |
 | 1 – 4 | Vote for the next map while the scoreboard is up |

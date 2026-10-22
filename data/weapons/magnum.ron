@@ -1,6 +1,6 @@
 // A six-shot revolver: slow, precise, and two body shots take most players.
 Weapon(
-    name: "Hand Cannon",
+    name: ".357 Magnum",
     slot: 2,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('e'),

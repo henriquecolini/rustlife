@@ -1,6 +1,6 @@
 // A semi-automatic pistol: quick and accurate as fast as you can click.
 Weapon(
-    name: "Sidearm",
+    name: "9MM Pistol",
     slot: 2,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('d'),
