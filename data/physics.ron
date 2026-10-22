@@ -58,6 +58,9 @@ Physics(
         // about like a rocket's does.
         explosion_knockback: 500.0,
         explosion_force: 90000.0,
+        // Source prop_data health is tuned for HL2's damage; multiply it so
+        // bottles, cardboard boxes and sinks take a few solid hits.
+        health_scale: 3.0,
         // Props striking each other or the map. Closing slower than
         // report_speed is not even heard; the energy a blow carries beyond
         // min_energy breaks a prop that can break, at damage_per_joule.

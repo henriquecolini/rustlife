@@ -4,18 +4,32 @@
 //! models the prop's `prop_data` names (wood chunks, metal gibs, glass
 //! shards), flung out and bouncing on the map until they lie still, then
 //! shrinking away. They are only for show — the server knows nothing of
-//! them — so they are simple: gravity, bounces off the map's brushes, a
-//! little friction.
+//! them — but each is a real Box3D body with the model's `.phy` convex
+//! pieces (or its bounding box), colliding with the map and nothing else.
 
+use std::sync::{Mutex, PoisonError};
+
+use b3::body::{
+    body_get_transform, body_is_valid, body_set_angular_velocity, body_set_linear_velocity,
+    create_body, destroy_body,
+};
+use b3::hull::{HullData, make_offset_box_hull};
+use b3::math_functions::Vec3 as B3Vec3;
+use b3::shape::create_hull_shape;
+use b3::types::{BodyType, ShapeDef};
+use b3::world::World;
 use bevy::prelude::*;
-use rl_assets::coords;
-use rl_sim::collision::contents::SOLID;
+use box3d_rust as b3;
+use rl_assets::{ModelAsset, coords};
+use rl_data::GameData;
+use rl_sim::physics::UNITS_PER_METRE;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::net::Game;
 use crate::player::Ticked;
-use crate::props::{ModelHandles, Moving, spawn_model};
+use crate::props::{ModelHandles, Moving, Prop, spawn_model};
+use crate::visual_world::{DEBRIS_GROUP, WORLD_GROUP, build_static_world, filter};
 
 /// Most gibs one break throws.
 const MAX_GIBS: u32 = 10;
@@ -27,14 +41,12 @@ const BURST: f32 = 1.5;
 const PIECE_LIFE: (f32, f32) = (4.0, 30.0);
 /// Gibs thrown by a break whose prop does not say how many.
 const DEFAULT_GIBS: u32 = 4;
-/// Gravity on gibs, units/s².
-const GRAVITY: f32 = 800.0;
-/// How much speed a bounce keeps along the surface normal.
-const RESTITUTION: f32 = 0.35;
-/// How much speed a bounce keeps along the surface.
-const SLIDE_KEPT: f32 = 0.6;
-/// A gib slower than this lies still, units/s.
-const REST_SPEED: f32 = 35.0;
+/// Seconds of physics per fixed step.
+const STEP: f32 = 1.0 / 60.0;
+/// Most fixed steps one frame may run.
+const MAX_STEPS: usize = 4;
+/// Box3D sub-steps per fixed step, as in the engine's samples.
+const SUB_STEPS: i32 = 4;
 /// Seconds a gib lasts, and how many of them are spent shrinking away.
 const LIFETIME: f32 = 7.0;
 const SHRINK: f32 = 1.0;
@@ -44,19 +56,51 @@ const THROW: (f32, f32) = (120.0, 380.0);
 const BLAST_FACTOR: f32 = 2.2;
 /// Spin range, radians/s.
 const SPIN: f32 = 12.0;
+/// Smallest collider half-extent, Source units.
+const MIN_HALF_EXTENT: f32 = 0.05 * UNITS_PER_METRE;
 
 /// Throws gibs and moves them.
 pub struct DebrisPlugin;
 
 impl Plugin for DebrisPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (throw_gibs, move_gibs)
-                .chain()
-                .run_if(in_state(AppState::InGame)),
-        );
+        app.init_resource::<DebrisPhysics>()
+            .add_systems(OnExit(AppState::InGame), reset)
+            .add_systems(
+                Update,
+                (throw_gibs, make_gib_bodies, move_gibs)
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
+}
+
+/// The Box3D world the client's debris lives in.
+#[derive(Resource, Default)]
+struct DebrisPhysics {
+    world: Option<Mutex<World>>,
+    /// Leftover time, so physics always advances in fixed 1/60 s steps.
+    accumulator: f32,
+}
+
+impl DebrisPhysics {
+    /// The world, built from the map's collision when first needed.
+    fn world(&mut self, sim: &rl_sim::simulation::Simulation) -> &mut World {
+        self.world
+            .get_or_insert_with(|| Mutex::new(build_static_world(sim, DEBRIS_GROUP)))
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn current(&mut self) -> Option<&mut World> {
+        self.world
+            .as_mut()
+            .map(|world| world.get_mut().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+fn reset(mut physics: ResMut<DebrisPhysics>) {
+    *physics = DebrisPhysics::default();
 }
 
 /// One piece flying about.
@@ -66,14 +110,16 @@ struct Gib {
     position: Vec3,
     /// How it moves, units/s.
     velocity: Vec3,
-    /// How it tumbles, radians/s, about Bevy's axes.
+    /// How it tumbles, radians/s, Source axes.
     spin: Vec3,
+    /// Its source-space orientation.
+    rotation: Quat,
     /// Seconds since it was thrown.
     age: f32,
     /// Seconds it lasts, the last [`SHRINK`] of them shrinking away.
     life: f32,
-    /// It has come to rest.
-    at_rest: bool,
+    /// Its body, once its model has loaded.
+    body: Option<b3::BodyId>,
 }
 
 fn throw_gibs(
@@ -101,8 +147,7 @@ fn throw_gibs(
                     let direction = Vec3::new(x, y, up).normalize_or(Vec3::Z);
                     let speed =
                         (THROW.0 + (THROW.1 - THROW.0) * rng.unit() + piece.burst * BURST) * factor;
-                    let spin = Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5)
-                        * (2.0 * SPIN);
+                    let spin = random_spin(&mut rng);
                     let entity = spawn_model(
                         &mut commands,
                         &mut models,
@@ -119,13 +164,14 @@ fn throw_gibs(
                             position: broke.origin,
                             velocity: broke.velocity + direction * speed,
                             spin,
+                            rotation: broke.rotation,
                             age: 0.0,
                             life: if piece.fade > 0.0 {
                                 piece.fade.clamp(PIECE_LIFE.0, PIECE_LIFE.1)
                             } else {
                                 LIFETIME
                             },
-                            at_rest: false,
+                            body: None,
                         },
                         Moving,
                     ));
@@ -145,8 +191,6 @@ fn throw_gibs(
                 let up = 0.35 + 0.65 * rng.unit();
                 let direction = Vec3::new(x, y, up).normalize_or(Vec3::Z);
                 let speed = (THROW.0 + (THROW.1 - THROW.0) * rng.unit()) * factor;
-                let spin =
-                    Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5) * (2.0 * SPIN);
                 let position = broke.position + direction * 6.0;
                 let entity = spawn_model(
                     &mut commands,
@@ -159,10 +203,11 @@ fn throw_gibs(
                     Gib {
                         position,
                         velocity: direction * speed,
-                        spin,
+                        spin: random_spin(&mut rng),
+                        rotation: Quat::IDENTITY,
                         age: 0.0,
                         life: LIFETIME,
-                        at_rest: false,
+                        body: None,
                     },
                     Moving,
                 ));
@@ -171,51 +216,188 @@ fn throw_gibs(
     }
 }
 
-fn move_gibs(
-    mut commands: Commands,
-    time: Res<Time>,
+fn random_spin(rng: &mut Rng) -> Vec3 {
+    Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5) * (2.0 * SPIN)
+}
+
+/// Creates a body for each gib once its model's assets are loaded.
+fn make_gib_bodies(
+    mut physics: ResMut<DebrisPhysics>,
     game: Game,
-    mut gibs: Query<(Entity, &mut Gib, &mut Transform)>,
+    assets: Res<Assets<ModelAsset>>,
+    mut gibs: Query<(&mut Gib, &Prop)>,
 ) {
     let Some(sim) = game.sim() else {
         return;
     };
-    let dt = time.delta_secs().min(0.05);
-    for (entity, mut gib, mut transform) in &mut gibs {
-        gib.age += dt;
-        if gib.age >= gib.life {
-            commands.entity(entity).try_despawn();
+    let world = physics.world(sim);
+    for (mut gib, prop) in &mut gibs {
+        if gib.body.is_some() {
             continue;
         }
-        if !gib.at_rest {
-            step(&mut gib, dt, sim);
-            let turn = gib.spin * dt;
-            transform.rotation = Quat::from_scaled_axis(turn) * transform.rotation;
+        let Some(model) = assets.get(&prop.model) else {
+            continue;
+        };
+        if let Some(body) = add_gib_body(world, model, &gib, sim.data()) {
+            gib.body = Some(body);
+        } else {
+            tracing::debug!(model = ?prop.model, "gib model has no usable collision");
         }
-        transform.translation = coords::position(gib.position.to_array());
-        let shrink = ((gib.life - gib.age) / SHRINK).clamp(0.0, 1.0);
-        transform.scale = Vec3::splat(shrink);
     }
 }
 
-/// Advances a flying gib one frame, bouncing it off the map.
-fn step(gib: &mut Gib, dt: f32, sim: &rl_sim::simulation::Simulation) {
-    gib.velocity.z -= GRAVITY * dt;
-    let next = gib.position + gib.velocity * dt;
-    let trace = sim.world().trace_ray(gib.position, next, SOLID);
-    if !trace.hit() {
-        gib.position = next;
+/// Advances every debris body, poses its entity, and removes old pieces.
+fn move_gibs(
+    mut commands: Commands,
+    time: Res<Time>,
+    game: Game,
+    mut physics: ResMut<DebrisPhysics>,
+    mut gibs: Query<(Entity, &mut Gib, &mut Transform)>,
+) {
+    if game.sim().is_none() {
         return;
     }
-    gib.position = trace.end + trace.normal * 0.5;
-    let along = gib.velocity.dot(trace.normal);
-    let slide = gib.velocity - trace.normal * along;
-    gib.velocity = slide * SLIDE_KEPT - trace.normal * along * RESTITUTION;
-    gib.spin *= 0.7;
-    if gib.velocity.length() < REST_SPEED {
-        gib.velocity = Vec3::ZERO;
-        gib.at_rest = true;
+    let frame = time.delta_secs().min(STEP * MAX_STEPS as f32);
+    let mut expired = Vec::new();
+    for (entity, mut gib, _) in &mut gibs {
+        gib.age += frame;
+        if gib.age >= gib.life {
+            expired.push((entity, gib.body));
+        }
     }
+
+    physics.accumulator += frame;
+    let steps = ((physics.accumulator / STEP).floor() as usize).min(MAX_STEPS);
+    physics.accumulator -= STEP * steps as f32;
+    if let Some(world) = physics.current() {
+        for _ in 0..steps {
+            world.step(STEP, SUB_STEPS);
+        }
+        for (_, gib, mut transform) in &mut gibs {
+            let Some(body) = gib.body else {
+                continue;
+            };
+            if !body_is_valid(world, body) {
+                continue;
+            }
+            let body_transform = body_get_transform(world, body);
+            let position = b3v_to_glam(body_transform.p);
+            transform.translation = coords::position(position.to_array());
+            transform.rotation = coords::rotation_from_source(b3q_to_glam(body_transform.q));
+            let shrink = ((gib.life - gib.age) / SHRINK).clamp(0.0, 1.0);
+            transform.scale = Vec3::splat(shrink);
+        }
+    }
+
+    for (entity, body) in expired {
+        if let (Some(world), Some(body)) = (physics.current(), body)
+            && body_is_valid(world, body)
+        {
+            destroy_body(world, body);
+        }
+        commands.entity(entity).try_despawn();
+    }
+}
+
+/// Builds a debris body from a gib model's `.phy`, falling back to its
+/// bounds. The shape collides only with the map.
+fn add_gib_body(
+    world: &mut World,
+    model: &ModelAsset,
+    gib: &Gib,
+    data: &GameData,
+) -> Option<b3::BodyId> {
+    let (hulls, volume) = gib_hulls(model);
+    if hulls.is_empty() {
+        return None;
+    }
+    let material = data.physics.materials.get(&model.surface_prop);
+    let mass = model.physics.as_ref().map(|physics| physics.mass());
+    let density = match mass {
+        Some(mass) if mass > 0.0 && volume > 0.0 => mass / volume,
+        _ => material.density / (UNITS_PER_METRE * UNITS_PER_METRE * UNITS_PER_METRE),
+    }
+    .max(f32::EPSILON);
+
+    let mut body_def = b3::default_body_def();
+    body_def.type_ = BodyType::Dynamic;
+    body_def.position = b3v(gib.position);
+    body_def.rotation = b3q(gib.rotation);
+    body_def.linear_damping = 0.05;
+    body_def.angular_damping = 0.2;
+    body_def.is_bullet = true;
+    let body = create_body(world, &body_def);
+
+    let mut shape_def = ShapeDef::default();
+    shape_def.density = density;
+    shape_def.base_material.friction = material.friction;
+    shape_def.base_material.restitution = 0.12;
+    shape_def.filter = filter(DEBRIS_GROUP, WORLD_GROUP);
+    let mut created = false;
+    for hull in &hulls {
+        created |= create_hull_shape(world, body, &shape_def, hull).index1 != 0;
+    }
+    if !created {
+        destroy_body(world, body);
+        return None;
+    }
+    body_set_linear_velocity(world, body, b3v(gib.velocity));
+    body_set_angular_velocity(world, body, b3v(gib.spin));
+    Some(body)
+}
+
+/// The gib model's convex hulls and their total volume.
+fn gib_hulls(model: &ModelAsset) -> (Vec<HullData>, f32) {
+    let mut hulls = Vec::new();
+    let mut volume = 0.0;
+    if let Some(physics) = &model.physics {
+        for solid in &physics.solids {
+            for piece in &solid.pieces {
+                let points: Vec<B3Vec3> = piece
+                    .vertices
+                    .iter()
+                    .map(|point| b3v(Vec3::from(*point)))
+                    .collect();
+                if let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES)
+                {
+                    volume += hull.volume.max(0.0);
+                    hulls.push(hull);
+                }
+            }
+        }
+    }
+    if hulls.is_empty() {
+        let (mins, maxs) = model.source_bounds;
+        let half = ((Vec3::from(maxs) - Vec3::from(mins)) * 0.5).max(Vec3::splat(MIN_HALF_EXTENT));
+        let center = (Vec3::from(mins) + Vec3::from(maxs)) * 0.5;
+        let box_hull = make_offset_box_hull(half.x, half.y, half.z, b3v(center)).base;
+        volume = box_hull.volume.max(0.0);
+        hulls.push(box_hull);
+    }
+    (hulls, volume)
+}
+
+fn b3v(value: Vec3) -> B3Vec3 {
+    B3Vec3 {
+        x: value.x,
+        y: value.y,
+        z: value.z,
+    }
+}
+
+fn b3v_to_glam(value: B3Vec3) -> Vec3 {
+    Vec3::new(value.x, value.y, value.z)
+}
+
+fn b3q(value: Quat) -> b3::Quat {
+    b3::Quat {
+        v: b3v(value.xyz()),
+        s: value.w,
+    }
+}
+
+fn b3q_to_glam(value: b3::Quat) -> Quat {
+    Quat::from_xyzw(value.v.x, value.v.y, value.v.z, value.s)
 }
 
 #[cfg(test)]
@@ -234,37 +416,45 @@ mod tests {
                 Vec3::new(500.0, 500.0, 0.0),
             )
             .build();
-        Simulation::new(
-            Arc::new(world),
-            &rl_data::GameData::builtin().expect("builtin"),
-        )
+        Simulation::new(Arc::new(world), &GameData::builtin().expect("builtin"))
+    }
+
+    fn box_model() -> ModelAsset {
+        ModelAsset {
+            parts: Vec::new(),
+            skins: Vec::new(),
+            bounds: (Vec3::splat(-3.0), Vec3::splat(3.0)),
+            checksum: 0,
+            strip_vertex_ids: Vec::new(),
+            source_bounds: ([-3.0; 3], [3.0; 3]),
+            surface_prop: "wood".to_owned(),
+            physics: None,
+            animation: None,
+        }
     }
 
     #[test]
     fn a_thrown_gib_falls_bounces_and_comes_to_rest_on_the_floor() {
         let sim = floor();
-        let mut gib = Gib {
+        let mut world = build_static_world(&sim, DEBRIS_GROUP);
+        let gib = Gib {
             position: Vec3::new(0.0, 0.0, 40.0),
             velocity: Vec3::new(150.0, 0.0, 200.0),
             spin: Vec3::ONE,
+            rotation: Quat::IDENTITY,
             age: 0.0,
             life: LIFETIME,
-            at_rest: false,
+            body: None,
         };
+        let body = add_gib_body(&mut world, &box_model(), &gib, sim.data()).expect("body");
         let mut lowest = f32::MAX;
         for _ in 0..600 {
-            if gib.at_rest {
-                break;
-            }
-            step(&mut gib, 1.0 / 60.0, &sim);
-            lowest = lowest.min(gib.position.z);
+            world.step(STEP, SUB_STEPS);
+            lowest = lowest.min(b3v_to_glam(b3::body::body_get_world_center(&world, body)).z);
         }
-        assert!(gib.at_rest, "it settles: {gib:?}");
-        assert!(
-            gib.position.z > -1.0 && gib.position.z < 3.0,
-            "on the floor: {gib:?}"
-        );
-        assert!(lowest > -1.0, "never through it");
-        assert!(gib.position.x > 0.0, "travelled on");
+        let rest = b3v_to_glam(body_get_transform(&world, body).p);
+        assert!(lowest > -1.0, "never through the floor");
+        assert!((2.0..4.0).contains(&rest.z), "on the floor: {rest}");
+        assert!(rest.x > 0.0, "travelled on: {rest}");
     }
 }

@@ -205,8 +205,8 @@ fn physics_props_break_as_their_model_says_and_the_entity_overrides() {
         .breakable
         .expect("breakable");
     assert_eq!(
-        breakable.health, 20.0,
-        "the model's own value over its class's"
+        breakable.health, 60.0,
+        "the model's own value over its class's, scaled for rustlife damage"
     );
     assert_eq!(breakable.explosion, Some((120.0, 256.0)));
     assert_eq!(breakable.gibs, ["models/gibs/metal_gib1.mdl"]);
@@ -219,7 +219,7 @@ fn physics_props_break_as_their_model_says_and_the_entity_overrides() {
         .expect("solid")
         .breakable
         .expect("breakable");
-    assert_eq!(breakable.health, 55.0, "the entity's health wins");
+    assert_eq!(breakable.health, 165.0, "the entity's health wins, scaled");
     assert_eq!(breakable.explosion, Some((120.0, 100.0)));
 }
 
@@ -246,7 +246,7 @@ fn props_without_health_or_that_are_not_physics_props_do_not_break() {
             .expect("solid")
             .breakable
             .map(|breakable| breakable.health),
-        Some(30.0)
+        Some(90.0)
     );
     // A static prop never breaks, whatever its model says.
     let (barrel, mut fixed, table) = explosive_barrel(&table);

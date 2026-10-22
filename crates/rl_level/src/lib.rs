@@ -326,7 +326,10 @@ impl PropModel {
             &self.surface_prop,
             physics,
         )?;
-        desc.breakable = self.breakable(placement, propdata);
+        desc.breakable = self.breakable(placement, propdata).map(|mut breakable| {
+            breakable.health *= physics.breakables.health_scale;
+            breakable
+        });
         Some(desc)
     }
 

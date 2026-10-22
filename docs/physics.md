@@ -137,10 +137,15 @@ A physics prop whose model says it breaks (`prop_data` in the model, or a
 class in `scripts/propdata.txt`; a map entity's own `health` wins) has
 health. Blows (a bullet, a swing, a blast, a hard impact) queue up as the
 tick runs and are applied at its end, each scaled by what the prop is made
-of: a crate takes more from a club than a bullet. A prop whose health runs
+of: a crate takes more from a club than a bullet. Model health is
+multiplied by `breakables.health_scale` — Source's `prop_data` values are
+tuned for a lighter damage model — so bottles, boxes and sinks take a few
+solid hits rather than one. A prop whose health runs
 out *breaks*: it leaves the physics world (its body id stays), everyone is
 told (`PropBreak`, and the replicated `broken` set for those who join
-later), the client scatters its gibs, and the prop comes back where it was
+later), the client scatters its gibs as small Box3D bodies (the chunk's
+`.phy` convex pieces, or its bounds) that collide with the map and nothing
+else, and the prop comes back where it was
 if it respawns (`prop_physics_respawnable`).
 
 **Explosive barrels** do not use health. Bullets and knocks cannot break

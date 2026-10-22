@@ -49,6 +49,10 @@ pub struct BreakablesConfig {
     pub explosion_knockback: f32,
     /// Impulse given to props at the centre of such a blast, kg·units/s.
     pub explosion_force: f32,
+    /// Multiplier on every model's breakable health. Source `prop_data`
+    /// values are low for rustlife's damage scale; this makes bottles,
+    /// boxes and sinks take a few solid hits instead of one.
+    pub health_scale: f32,
     /// Props striking each other or the map, which make noise and may break
     /// the prop.
     pub impact: PropImpactConfig,
