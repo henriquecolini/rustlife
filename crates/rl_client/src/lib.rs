@@ -34,6 +34,7 @@ use crate::props::PropsPlugin;
 use crate::script::InputScript;
 use crate::settings::{Settings, SettingsPlugin};
 use crate::sky::SkyPlugin;
+use crate::surfaces::SurfacesPlugin;
 use crate::ui::UiPlugin;
 use crate::viewmodel::ViewModelPlugin;
 use crate::world::WorldPlugin;
@@ -60,6 +61,7 @@ pub mod script;
 mod selector;
 pub mod settings;
 pub mod sky;
+pub mod surfaces;
 pub mod ui;
 pub mod viewmodel;
 pub mod world;
@@ -180,6 +182,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         debris::DebrisPlugin,
         particles::ParticlesPlugin,
         GrenadesPlugin,
+        SurfacesPlugin,
     ));
     if let Some(script) = options.script {
         app.insert_resource(script);

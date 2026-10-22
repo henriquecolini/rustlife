@@ -78,6 +78,9 @@ pub(crate) struct Hit {
     pub(crate) normal: Vec3,
     /// Contents of the volume hit.
     pub(crate) contents: u32,
+    /// The material of the plane hit, as the map's collision model indexes
+    /// it.
+    pub(crate) material: Option<u16>,
     /// The sweep started inside some volume.
     pub(crate) start_solid: bool,
     /// The sweep lies entirely inside some volume.
@@ -90,6 +93,7 @@ impl Default for Hit {
             fraction: 1.0,
             normal: Vec3::ZERO,
             contents: 0,
+            material: None,
             start_solid: false,
             all_solid: false,
         }
@@ -105,6 +109,7 @@ impl Hit {
             self.fraction = other.fraction;
             self.normal = other.normal;
             self.contents = other.contents;
+            self.material = other.material;
         }
     }
 }
@@ -116,6 +121,8 @@ pub(crate) struct ClipPlane {
     pub(crate) dist: f32,
     /// Bevels only exist for box sweeps; rays ignore them.
     pub(crate) bevel: bool,
+    /// The plane's surface material, when it belongs to one.
+    pub(crate) material: Option<u16>,
 }
 
 /// Clips `sweep` against the convex volume bounded by `planes`, updating
@@ -129,6 +136,7 @@ pub(crate) fn clip_convex(
     let mut enter = NEVER_ENTERED;
     let mut leave = 1.0f32;
     let mut enter_normal = Vec3::ZERO;
+    let mut enter_material = None;
     let mut starts_out = false;
     let mut ends_out = false;
 
@@ -164,6 +172,7 @@ pub(crate) fn clip_convex(
             if fraction > enter {
                 enter = fraction;
                 enter_normal = plane.normal;
+                enter_material = plane.material;
             }
         } else {
             let fraction = (d1 + DIST_EPSILON) / (d1 - d2);
@@ -184,6 +193,7 @@ pub(crate) fn clip_convex(
         hit.fraction = enter.max(0.0);
         hit.normal = enter_normal;
         hit.contents = contents;
+        hit.material = enter_material;
     }
 }
 
@@ -206,6 +216,7 @@ mod tests {
             normal,
             dist: 1.0,
             bevel: false,
+            material: None,
         })
         .collect()
     }
@@ -230,6 +241,25 @@ mod tests {
     fn a_box_hits_earlier_by_its_extent() {
         let hit = sweep(Vec3::new(-11.0, 0.0, 0.0), Vec3::new(9.0, 0.0, 0.0), 2.0);
         assert!((hit.fraction - (8.0 - DIST_EPSILON) / 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_hit_carries_the_material_of_the_plane_entered() {
+        let mut planes = unit_cube();
+        for plane in &mut planes {
+            if plane.normal == Vec3::NEG_X {
+                plane.material = Some(7);
+            }
+        }
+        let mut hit = Hit::default();
+        let sweep = Sweep::new(
+            Vec3::new(-11.0, 0.0, 0.0),
+            Vec3::new(9.0, 0.0, 0.0),
+            Vec3::ZERO,
+            1,
+        );
+        clip_convex(&sweep, planes, 1, &mut hit);
+        assert_eq!((hit.fraction < 1.0, hit.material), (true, Some(7)));
     }
 
     #[test]
@@ -267,6 +297,7 @@ mod tests {
             normal: Vec3::X,
             dist: -5.0,
             bevel: true,
+            material: None,
         });
         let mut hit = Hit::default();
         let ray = Sweep::new(Vec3::new(-11.0, 0.0, 0.0), Vec3::ZERO, Vec3::ZERO, 1);

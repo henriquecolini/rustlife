@@ -222,6 +222,7 @@ impl ConvexHull {
                 normal,
                 dist: support(normal),
                 bevel: false,
+                material: None,
             });
         }
         let mut directions: Vec<Vec3> = planes.iter().map(|plane| plane.normal).collect();
@@ -237,6 +238,7 @@ impl ConvexHull {
                 normal: direction,
                 dist: support(direction),
                 bevel: true,
+                material: None,
             });
         };
         for axis in [Vec3::X, Vec3::Y, Vec3::Z] {

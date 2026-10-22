@@ -634,7 +634,8 @@ impl CollisionWorld {
                 if !overlaps(mins, maxs, triangle_mins, triangle_maxs) {
                     continue;
                 }
-                if let Some(planes) = prism_planes(triangle) {
+                if let Some(mut planes) = prism_planes(triangle) {
+                    planes.set_material(displacement.material);
                     clip_convex(
                         sweep,
                         planes.as_slice().iter().copied(),
@@ -675,6 +676,7 @@ impl CollisionWorld {
                 normal: Vec3::from(side.plane.normal),
                 dist: side.plane.dist,
                 bevel: side.bevel,
+                material: side.material,
             })
     }
 

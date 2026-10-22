@@ -19,9 +19,11 @@ use rl_sim::weapons::{Mode, WeaponId};
 use source_formats::entities::MapEntity;
 
 use super::SoundPlayer;
+use super::props::Surfaces;
 use crate::AppState;
 use crate::net::{Drawn, Game, LevelEntities};
 use crate::player::{LocalPlayer, Ticked};
+use crate::surfaces::MapSurfaces;
 
 /// Most impact sounds one tick plays: a shotgun's pellets sound as a few
 /// hits, not a dozen.
@@ -44,12 +46,13 @@ impl Plugin for EventSoundsPlugin {
 }
 
 /// Starts loading every sound the gameplay data names, once per game.
-fn preload(game: Game, mut done: Local<bool>, mut player: SoundPlayer) {
+fn preload(game: Game, surfaces: Res<Surfaces>, mut done: Local<bool>, mut player: SoundPlayer) {
     let Some(sim) = game.sim() else {
         *done = false;
         return;
     };
-    if *done {
+    // Reload the surface sounds when another map's table arrives.
+    if *done && !surfaces.is_changed() {
         return;
     }
     *done = true;
@@ -80,6 +83,9 @@ fn preload(game: Game, mut done: Local<bool>, mut player: SoundPlayer) {
         .collect::<Vec<_>>();
     for name in named {
         player.preload(&name);
+    }
+    for name in surfaces.0.sounds_used() {
+        player.preload(name);
     }
 }
 
@@ -143,6 +149,8 @@ fn play_events(
     mut ticks: MessageReader<Ticked>,
     game: Game,
     drawn: Res<Drawn>,
+    surfaces: Res<Surfaces>,
+    map_surfaces: Res<MapSurfaces>,
     local: Option<Res<LocalPlayer>>,
     entities: Res<LevelEntities>,
     mut player: SoundPlayer,
@@ -157,7 +165,7 @@ fn play_events(
         local: local.map(|local| local.id),
     };
     for Ticked(events) in ticks.read() {
-        weapon_sounds(events, &places, &mut player);
+        weapon_sounds(events, &places, &surfaces, &map_surfaces, &mut player);
         world_sounds(events, &places, &entities.0, &mut player);
     }
 }
@@ -173,7 +181,13 @@ fn weapon_sound<'a>(sim: &'a Simulation, weapon: WeaponId, purpose: &str) -> Opt
 
 /// Firing, reloading, switching, swings landing, bullets striking and the
 /// Manipulator.
-fn weapon_sounds(events: &TickEvents, places: &Places, player: &mut SoundPlayer) {
+fn weapon_sounds(
+    events: &TickEvents,
+    places: &Places,
+    surfaces: &Surfaces,
+    map_surfaces: &MapSurfaces,
+    player: &mut SoundPlayer,
+) {
     let sim = places.sim;
     let data = sim.data();
     let play = |player: &mut SoundPlayer, who: PlayerId, weapon: WeaponId, purpose: &str| {
@@ -227,12 +241,28 @@ fn weapon_sounds(events: &TickEvents, places: &Places, player: &mut SoundPlayer)
         let sounds: &SoundsConfig = &data.sounds;
         let name = match shot.trace.struck {
             Struck::Nothing => continue,
-            Struck::Player(_) => &sounds.flesh_impact,
-            Struck::World | Struck::Prop(_) | Struck::Brush(_) => &sounds.impact,
+            Struck::Player(_) => sounds.flesh_impact.clone(),
+            Struck::Prop(body) => {
+                let surface = sim.surface_of(body);
+                surface_bullet_impact(surfaces, surface).unwrap_or_else(|| sounds.impact.clone())
+            }
+            Struck::World | Struck::Brush(_) => {
+                let surface = map_surfaces
+                    .get(shot.trace.material)
+                    .map_or("default", |info| info.prop.as_str());
+                surface_bullet_impact(surfaces, surface).unwrap_or_else(|| sounds.impact.clone())
+            }
         };
         impacts += 1;
-        player.play(name, Some(shot.trace.end), 1.0);
+        player.play(&name, Some(shot.trace.end), 1.0);
     }
+}
+
+/// The sound a bullet makes on `surface`, from the game's own
+/// `surfaceproperties.txt`.
+fn surface_bullet_impact(surfaces: &Surfaces, surface: &str) -> Option<String> {
+    let sound = surfaces.0.sounds(surface);
+    (!sound.bullet_impact.is_empty()).then_some(sound.bullet_impact)
 }
 
 /// Blasts, pickups, deaths, falls, and the map's buttons and breakables.

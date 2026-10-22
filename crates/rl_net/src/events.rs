@@ -248,6 +248,7 @@ mod tests {
                 end: Vec3::X,
                 normal: Vec3::ZERO,
                 struck: Struck::Nothing,
+                material: None,
             },
         }
     }

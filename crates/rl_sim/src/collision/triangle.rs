@@ -47,8 +47,16 @@ impl TrianglePlanes {
                 normal,
                 dist,
                 bevel,
+                material: None,
             };
             self.count += 1;
+        }
+    }
+
+    /// Marks every plane with the displacement's `material`.
+    pub(crate) fn set_material(&mut self, material: Option<u16>) {
+        for plane in &mut self.planes[..self.count] {
+            plane.material = material;
         }
     }
 }
@@ -71,6 +79,7 @@ pub(crate) fn prism_planes(triangle: [Vec3; 3]) -> Option<TrianglePlanes> {
             normal: Vec3::Z,
             dist: 0.0,
             bevel: true,
+            material: None,
         }; MAX_PLANES],
         count: 0,
     };

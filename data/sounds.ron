@@ -3,6 +3,7 @@
 // mounted game, or a file under sound/.
 Sounds(
     footsteps: (
+        // Fallbacks when the surface underfoot names no step sounds.
         left: "Default.StepLeft",
         right: "Default.StepRight",
         // A step every this many seconds when running, and when walking or
@@ -21,7 +22,8 @@ Sounds(
     weapon_pickup: "Player.PickupWeapon",
     death: "Player.Death",
     explosion: "BaseExplosionEffect.Sound",
-    // Bullets and swings striking the map or a prop, and a player.
+    // Fallback bullet and swing impacts when the surface's own
+    // surfaceproperties.txt entry names none, and a player.
     impact: "Concrete.BulletImpact",
     flesh_impact: "Flesh.BulletImpact",
     // Breakables breaking, by the material the map gives them.

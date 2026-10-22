@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use rl_client::audio::Sounds;
 use rl_data::GameData;
+use source_formats::surfaceprops::SurfaceTable;
 use source_formats::wav;
 use source_fs::content::{ContentOptions, mount_game};
 
@@ -49,6 +50,13 @@ fn named_sounds_resolve_and_decode() {
         .cloned(),
     );
     names.extend(config.breaking.values().cloned());
+    let surfaces = vfs
+        .read("scripts/surfaceproperties.txt")
+        .ok()
+        .flatten()
+        .map(|bytes| SurfaceTable::parse(&String::from_utf8_lossy(&bytes)))
+        .unwrap_or_default();
+    names.extend(surfaces.sounds_used().map(str::to_owned));
     names.extend(
         [
             &config.weapon_select.step,

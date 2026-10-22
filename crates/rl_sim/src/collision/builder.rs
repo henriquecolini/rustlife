@@ -158,6 +158,7 @@ impl WorldBuilder {
         }
         self.map.displacements.push(DisplacementMesh {
             contents: contents::SOLID,
+            material: None,
             mins: mins.to_array(),
             maxs: maxs.to_array(),
             triangles: triangles
@@ -234,6 +235,7 @@ fn side(normal: Vec3, dist: f32, bevel: bool) -> CollisionSide {
             dist,
         },
         bevel,
+        material: None,
     }
 }
 

@@ -99,6 +99,9 @@ pub struct Trace {
     /// The BSP model of the brush entity hit (a door, a button, ...), if
     /// what stopped the trace was one; `None` for the world and props.
     pub model: Option<usize>,
+    /// The material of the surface hit, as the map's collision model
+    /// indexes it (`MapCollision::materials`); `None` for props and misses.
+    pub material: Option<u16>,
 }
 
 impl Trace {
@@ -138,6 +141,7 @@ impl Trace {
             all_solid: hit.all_solid,
             body: None,
             model: None,
+            material: hit.material,
         }
     }
 }

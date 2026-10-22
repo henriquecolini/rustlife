@@ -17,6 +17,10 @@ const MAX_BASE_DEPTH: usize = 8;
 /// surface (and `default`) do not say.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SurfaceSounds {
+    /// The left foot stepping on it.
+    pub step_left: String,
+    /// The right foot stepping on it.
+    pub step_right: String,
     /// A hard impact.
     pub impact_hard: String,
     /// A soft impact.
@@ -88,6 +92,16 @@ impl SurfaceTable {
         }
     }
 
+    /// Every sound the table names for footsteps or bullet impacts, for
+    /// loading them ahead of the first step or shot.
+    pub fn sounds_used(&self) -> impl Iterator<Item = &str> {
+        self.surfaces
+            .values()
+            .flat_map(|entries| entries.iter())
+            .filter(|(key, _)| matches!(key.as_str(), "stepleft" | "stepright" | "bulletimpact"))
+            .map(|(_, value)| value.as_str())
+    }
+
     fn apply(&self, name: &str, sounds: &mut SurfaceSounds, depth: usize) {
         if depth >= MAX_BASE_DEPTH {
             return;
@@ -100,6 +114,8 @@ impl SurfaceTable {
         }
         for (key, value) in own {
             let slot = match key.as_str() {
+                "stepleft" => &mut sounds.step_left,
+                "stepright" => &mut sounds.step_right,
                 "impacthard" => &mut sounds.impact_hard,
                 "impactsoft" => &mut sounds.impact_soft,
                 "scraperough" => &mut sounds.scrape_rough,
@@ -119,8 +135,8 @@ mod tests {
     use super::*;
 
     const TABLE: &str = r#"
-"default" { "impacthard" "Default.ImpactHard" "impactsoft" "Default.ImpactSoft" "scraperough" "Default.ScrapeRough" "scrapesmooth" "Default.ScrapeSmooth" "density" "2000" }
-"metal_box" { "impacthard" "Metal_Box.ImpactHard" "impactsoft" "Metal_Box.ImpactSoft" "scraperough" "MetalBox.Scrape" }
+"default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" "impacthard" "Default.ImpactHard" "impactsoft" "Default.ImpactSoft" "scraperough" "Default.ScrapeRough" "scrapesmooth" "Default.ScrapeSmooth" "density" "2000" }
+"metal_box" { "stepleft" "Metal_Box.StepLeft" "stepright" "Metal_Box.StepRight" "impacthard" "Metal_Box.ImpactHard" "impactsoft" "Metal_Box.ImpactSoft" "scraperough" "MetalBox.Scrape" }
 "Metal_Barrel" { "base" "metal_box" "impacthard" "Metal_Barrel.ImpactHard" "roll" "Metal_Barrel.Roll" }
 "loop_a" { "base" "loop_b" "break" "A" }
 "loop_b" { "base" "loop_a" "roll" "B" }
@@ -130,6 +146,8 @@ mod tests {
     fn surfaces_inherit_from_their_bases_and_default() {
         let table = SurfaceTable::parse(TABLE);
         let barrel = table.sounds("metal_barrel");
+        assert_eq!(barrel.step_left, "Metal_Box.StepLeft", "from its base");
+        assert_eq!(barrel.step_right, "Metal_Box.StepRight");
         assert_eq!(barrel.impact_hard, "Metal_Barrel.ImpactHard");
         assert_eq!(barrel.impact_soft, "Metal_Box.ImpactSoft", "from its base");
         assert_eq!(barrel.scrape_rough, "MetalBox.Scrape");
@@ -149,6 +167,18 @@ mod tests {
         assert_eq!(
             table.sounds("  METAL_BOX ").impact_soft,
             "Metal_Box.ImpactSoft"
+        );
+    }
+
+    #[test]
+    fn every_step_and_bullet_sound_is_listed_for_preloading() {
+        let table = SurfaceTable::parse(TABLE);
+        let names: Vec<&str> = table.sounds_used().collect();
+        assert!(names.contains(&"Metal_Box.StepLeft"));
+        assert!(names.contains(&"Default.BulletImpact"));
+        assert!(
+            !names.contains(&"MetalBox.Scrape"),
+            "not a step or bullet sound"
         );
     }
 

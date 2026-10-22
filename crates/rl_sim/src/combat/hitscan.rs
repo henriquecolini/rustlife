@@ -42,6 +42,9 @@ pub struct ShotTrace {
     pub normal: Vec3,
     /// What it stopped at.
     pub struck: Struck,
+    /// The material of the surface hit, as the map's collision model
+    /// indexes it; `None` for players, props and misses.
+    pub material: Option<u16>,
 }
 
 /// Traces `hull` from `start` to `end` through `scene` and every target
@@ -64,6 +67,7 @@ pub fn trace(
         } else {
             Struck::Nothing
         },
+        material: map.material,
     };
     let mut best_fraction = map.fraction;
     for target in targets.iter().filter(|target| target.player != shooter) {
@@ -75,6 +79,7 @@ pub fn trace(
                 end: start + (end - start) * fraction,
                 normal,
                 struck: Struck::Player(target.player),
+                material: None,
             };
         }
     }

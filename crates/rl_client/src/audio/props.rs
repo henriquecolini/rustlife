@@ -44,7 +44,7 @@ impl Plugin for PropSoundsPlugin {
 
 /// The game's surfaces and what they sound like.
 #[derive(Resource, Default)]
-struct Surfaces(SurfaceTable);
+pub(super) struct Surfaces(pub(super) SurfaceTable);
 
 /// The sliding props that have a scraping emitter, and when each was last
 /// reported.

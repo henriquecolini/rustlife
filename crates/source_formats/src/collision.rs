@@ -81,6 +81,10 @@ pub struct CollisionSide {
     /// ignored by point (ray) traces, whose hit normal would otherwise be the
     /// bevel's rather than the visible surface's.
     pub bevel: bool,
+    /// The side's material, as an index into [`MapCollision::materials`]:
+    /// what the surface looks and sounds like. `None` for a side without
+    /// one (a bevel, or a malformed reference).
+    pub material: Option<u16>,
 }
 
 /// A convex brush: the intersection of its sides' back half-spaces.
@@ -99,6 +103,9 @@ pub struct CollisionBrush {
 pub struct DisplacementMesh {
     /// `CONTENTS_*` flags (normally `CONTENTS_SOLID`).
     pub contents: u32,
+    /// The surface's material, as an index into
+    /// [`MapCollision::materials`].
+    pub material: Option<u16>,
     /// Bounds of every triangle, Source space.
     pub mins: [f32; 3],
     /// Bounds of every triangle, Source space.
@@ -165,6 +172,9 @@ pub struct MapCollision {
     pub brushes: Vec<CollisionBrush>,
     /// Brush sides, ranged into by [`CollisionBrush`].
     pub sides: Vec<CollisionSide>,
+    /// Material (texture) names, as the BSP's texture-info table indexes
+    /// them; sides and displacements refer to these.
+    pub materials: Vec<String>,
     /// Displacement surfaces (all belong to the world).
     pub displacements: Vec<DisplacementMesh>,
     /// BSP models; model 0 is the world.
@@ -198,8 +208,15 @@ fn load_inner(bytes: &[u8]) -> Result<MapCollision, BspError> {
     let bsp = Bsp::read(bytes).map_err(|error| BspError::Parse(error.to_string()))?;
     let records = leaves::read_all(bytes)
         .ok_or_else(|| BspError::Parse("unreadable leaf lump".to_owned()))?;
+    let materials: Vec<String> = (0..bsp.textures_info.len())
+        .map(|index| {
+            bsp.texture_info(index)
+                .map(|texture| texture.name().to_owned())
+                .unwrap_or_default()
+        })
+        .collect();
 
-    let (mut brushes, sides) = brushes(&bsp);
+    let (mut brushes, sides) = brushes(&bsp, materials.len());
     for brush in displacement_source_brushes(&bsp, &brushes, &sides) {
         brushes[brush].contents = 0;
     }
@@ -242,7 +259,7 @@ fn load_inner(bytes: &[u8]) -> Result<MapCollision, BspError> {
 
     Ok(MapCollision {
         brush_entities: brush_entities(&bsp, models.len()),
-        displacements: displacements(&bsp),
+        displacements: displacements(&bsp, materials.len()),
         ladders: ladders(&bsp),
         ladder_dismounts: entity_origins(&bsp, "info_ladder_dismount"),
         nodes,
@@ -250,6 +267,7 @@ fn load_inner(bytes: &[u8]) -> Result<MapCollision, BspError> {
         leaf_brushes,
         brushes,
         sides,
+        materials,
         models,
     })
 }
@@ -257,7 +275,13 @@ fn load_inner(bytes: &[u8]) -> Result<MapCollision, BspError> {
 /// Every brush with its sides. A brush whose sides reference missing planes
 /// keeps its place (leaf brush indices refer to it) but loses its contents,
 /// so it collides with nothing.
-fn brushes(bsp: &Bsp) -> (Vec<CollisionBrush>, Vec<CollisionSide>) {
+fn brushes(bsp: &Bsp, material_count: usize) -> (Vec<CollisionBrush>, Vec<CollisionSide>) {
+    let material = |texture_info: i16| {
+        usize::try_from(texture_info)
+            .ok()
+            .filter(|&index| index < material_count)
+            .and_then(|index| u16::try_from(index).ok())
+    };
     let mut sides = Vec::with_capacity(bsp.brush_sides.len());
     let brushes = bsp
         .brushes
@@ -280,6 +304,7 @@ fn brushes(bsp: &Bsp) -> (Vec<CollisionBrush>, Vec<CollisionSide>) {
                             // Newer compilers pack a `thin` flag into the
                             // high byte; only the low byte means "bevel".
                             bevel: side.bevel & 0xff != 0,
+                            material: material(side.texture_info),
                         })
                     })
                     .collect::<Option<Vec<_>>>()
@@ -412,11 +437,17 @@ fn nodes(bsp: &Bsp, leaf_count: usize) -> Vec<CollisionNode> {
         .collect()
 }
 
-/// Each displacement's triangles and bounds.
-fn displacements(bsp: &Bsp) -> Vec<DisplacementMesh> {
+/// Each displacement's triangles, material and bounds.
+fn displacements(bsp: &Bsp, material_count: usize) -> Vec<DisplacementMesh> {
     (0..bsp.displacements.len())
         .filter_map(|index| {
             let displacement = bsp.displacement(index)?;
+            let material = bsp
+                .faces
+                .get(usize::from(displacement.map_face))
+                .and_then(|face| usize::try_from(face.texture_info).ok())
+                .filter(|&texture| texture < material_count)
+                .and_then(|texture| u16::try_from(texture).ok());
             let vertices: Vec<[f32; 3]> = displacement
                 .triangulated_displaced_vertices()
                 .map(|vertex| [vertex.x, vertex.y, vertex.z])
@@ -435,6 +466,7 @@ fn displacements(bsp: &Bsp) -> Vec<DisplacementMesh> {
             }
             Some(DisplacementMesh {
                 contents: displacement.contents as u32,
+                material,
                 mins,
                 maxs,
                 triangles,
@@ -546,6 +578,8 @@ mod tests {
         assert!(solid > 0, "a real map has solid brushes");
         assert!(bevels > 0, "compiled brushes carry bevel sides");
         assert!(!collision.models.is_empty());
+        assert!(!collision.materials.is_empty(), "a real map names textures");
+        assert!(collision.sides.iter().any(|side| side.material.is_some()));
         for side in &collision.sides {
             let [x, y, z] = side.plane.normal;
             assert!(((x * x + y * y + z * z).sqrt() - 1.0).abs() < 1e-3);
