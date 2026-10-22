@@ -682,6 +682,12 @@ impl Server {
             }
             client.credits -= run as u32;
         }
+        // Training dummies stand still, but still get a command each tick so
+        // their movement settles, their feet stay on the floor and their
+        // idle animation plays.
+        for index in 0..self.dummies {
+            commands.push((PlayerId::from_index(index), UserCmd::default()));
+        }
         let events = self.sim.tick(&commands);
         match events.match_event {
             Some(MatchEvent::Ended(_)) => self.open_vote(),

@@ -22,6 +22,6 @@ Weapon(
         "drop": "Weapon_PhysCannon.Drop",
         "dryfire": "Weapon_PhysCannon.DryFire",
     },
-    // Players hold it with the physgun sequences of HL2DM's player models (run_physgun, ...).
-    hold: Some("physgun"),
+    // Players hold it with the gravgun sequences of HL2DM's player models (run_gravgun, ...).
+    hold: Some("gravgun"),
 )
