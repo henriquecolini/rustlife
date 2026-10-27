@@ -137,12 +137,17 @@ Props act on players back in two ways.
   props), and a player inside a prop cannot move at all, since every trace
   starts in solid. So the first thing movement does each tick is to find
   the way out. Each prop piece's clip planes, grown by the player's box,
-  bound the volume the player's centre must stay out of; inside it the
-  shortest way out is along the plane the centre is nearest to
-  (`PhysicsWorld::penetration`). The player is moved that way by at most
-  `movement.unstick_speed` per second, and only as far as the map allows,
-  so they are never pushed into a wall. Movement runs on clients too, so
-  prediction does the same.
+  bound the volume the player's centre must stay out of; inside it, leaving
+  along any of the planes works, and the shortest is not always possible (a
+  slab resting on a player's head leaves "down", through the floor, the
+  shortest). So every plane is a candidate exit (as is every face of another
+  player's box), shortest first, and the player takes the first that the
+  map leaves open and that ends in the clear (`PhysicsWorld::penetrations`,
+  `Scene::penetration`). Exits that lift the player more than 24 units are
+  skipped: a player under a prop leaves sideways, not over the top. If none
+  qualifies, the one that gets farthest is taken. Movement is at most
+  `movement.unstick_speed` per second, so nobody is flung through a wall.
+  Movement runs on clients too, so prediction does the same.
 
 ## Impact damage
 

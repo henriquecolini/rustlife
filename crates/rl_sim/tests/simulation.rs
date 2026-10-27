@@ -211,3 +211,31 @@ fn a_dead_player_does_not_block() {
     let walker = sim.player(walker).expect("player").state.origin;
     assert!(walker.x > 100.0, "walked past the dead player: {walker}");
 }
+
+#[test]
+fn a_player_with_a_prop_dropped_on_their_head_can_still_walk_away() {
+    let mut sim = room();
+    sim.tick(&[]);
+    let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+    sim.tick(&[]);
+    // A wide, heavy slab that settles on their head.
+    let mut slab = crate_at(Vec3::new(0.0, 0.0, 120.0), Motion::Dynamic);
+    slab.pieces = vec![ConvexHull::from_box(
+        Vec3::new(-64.0, -64.0, 0.0),
+        Vec3::new(64.0, 64.0, 12.0),
+    )];
+    slab.mass = 200.0;
+    sim.add_prop(&slab);
+    for _ in 0..132 {
+        sim.tick(&[(player, UserCmd::default())]);
+    }
+    let walk = UserCmd {
+        forward: 1.0,
+        ..UserCmd::default()
+    };
+    for _ in 0..198 {
+        sim.tick(&[(player, walk)]);
+    }
+    let origin = sim.player(player).expect("player").state.origin;
+    assert!(origin.x > 100.0, "walked away from under it: {origin}");
+}

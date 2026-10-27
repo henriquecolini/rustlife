@@ -58,33 +58,37 @@ impl PlayerBox {
         Trace::from_hit(start, end, hit)
     }
 
-    /// The shortest move taking `hull`, standing at `origin`, out of the
-    /// box, if it is inside it.
-    fn penetration(&self, origin: Vec3, hull: &Hull) -> Option<Vec3> {
+    /// The moves taking `hull`, standing at `origin`, out of the box, one
+    /// per face, if it is inside it.
+    fn penetrations(&self, origin: Vec3, hull: &Hull) -> Vec<Vec3> {
         let center = origin + hull.center();
-        let extents = hull.extents();
         let box_center = (self.mins + self.maxs) * 0.5;
-        let reach = (self.maxs - self.mins) * 0.5 + extents;
+        let reach = (self.maxs - self.mins) * 0.5 + hull.extents();
         let delta = center - box_center;
         let depth = reach - delta.abs();
         if depth.min_element() <= 0.0 {
-            return None;
+            return Vec::new();
         }
-        let axis = if depth.x <= depth.y && depth.x <= depth.z {
-            0
-        } else if depth.y <= depth.z {
-            1
-        } else {
-            2
-        };
-        let side = if delta[axis] == 0.0 {
-            self.tie_break[axis]
-        } else {
-            delta[axis].signum()
-        };
-        let mut out = Vec3::ZERO;
-        out[axis] = side * (depth[axis] + 2.0 * DIST_EPSILON);
-        Some(out)
+        let mut exits = Vec::with_capacity(6);
+        for axis in 0..3 {
+            // Where the centre is off the box's own, it leaves that side
+            // first; exactly central, the tie-break chooses.
+            let near = if delta[axis] == 0.0 {
+                self.tie_break[axis]
+            } else {
+                delta[axis].signum()
+            };
+            // Out of the near face, or all the way across to the far one.
+            for (side, distance) in [
+                (near, depth[axis]),
+                (-near, 2.0 * reach[axis] - depth[axis]),
+            ] {
+                let mut out = Vec3::ZERO;
+                out[axis] = side * (distance + 2.0 * DIST_EPSILON);
+                exits.push(out);
+            }
+        }
+        exits
     }
 }
 
@@ -101,7 +105,18 @@ pub struct Scene<'a> {
     pub others: &'a [PlayerBox],
 }
 
+/// How far up a player is pushed out of a prop at most; farther means they
+/// are under it, and should leave sideways.
+const MAX_LIFT: f32 = 24.0;
+
 impl Scene<'_> {
+    /// Whether `hull` at `origin` is clear of everything.
+    fn is_clear(&self, origin: Vec3, hull: &Hull) -> bool {
+        !self
+            .trace_hull(origin, origin, hull, MASK_PLAYER_SOLID)
+            .start_solid
+    }
+
     /// `ahead`, the trace against the map and props, cut short by the
     /// other players in its way.
     fn trace_others(&self, start: Vec3, ahead: Trace, hull: &Hull, mask: u32) -> Trace {
@@ -162,26 +177,33 @@ impl MovementWorld for Scene<'_> {
     }
 
     fn penetration(&self, origin: Vec3, hull: &Hull, max_distance: f32) -> Option<Vec3> {
-        let from_props = self.physics.penetration(origin, hull, self.ignore);
-        let from_players = self
-            .others
-            .iter()
-            .filter_map(|other| other.penetration(origin, hull))
-            .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()));
-        let out = match (from_props, from_players) {
-            (Some(a), Some(b)) => {
-                if a.length_squared() >= b.length_squared() {
-                    a
-                } else {
-                    b
-                }
+        let mut exits = self.physics.penetrations(origin, hull, self.ignore);
+        for other in self.others {
+            exits.extend(other.penetrations(origin, hull));
+        }
+        exits.sort_by(|a, b| a.length_squared().total_cmp(&b.length_squared()));
+        // The shortest way out that ends in the clear and that the map
+        // leaves open; failing that, the one that gets farthest.
+        let mut best: Option<Vec3> = None;
+        for exit in exits {
+            let step = exit.clamp_length_max(max_distance);
+            let map = self
+                .world
+                .trace_hull(origin, origin + step, hull, MASK_PLAYER_SOLID);
+            if map.all_solid {
+                continue;
             }
-            (a, b) => a.or(b)?,
-        };
-        let step = out.clamp_length_max(max_distance);
-        let map = self
-            .world
-            .trace_hull(origin, origin + step, hull, MASK_PLAYER_SOLID);
-        (!map.all_solid).then(|| map.end - origin)
+            let moved = map.end - origin;
+            // Out of a prop's far side is no way out for something stood
+            // on the floor: only lift players a little.
+            let lifts_too_far = exit.z > MAX_LIFT;
+            if map.fraction >= 1.0 && !lifts_too_far && self.is_clear(origin + exit, hull) {
+                return Some(moved);
+            }
+            if best.is_none_or(|b| moved.length_squared() > b.length_squared()) {
+                best = Some(moved);
+            }
+        }
+        best.filter(|moved| *moved != Vec3::ZERO)
     }
 }

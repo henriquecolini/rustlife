@@ -895,3 +895,72 @@ fn a_resting_prop_shoves_nobody() {
         }
     }
 }
+
+#[test]
+fn a_player_under_a_wide_prop_resting_on_their_head_gets_out() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let config = movement_config();
+    let hull = Hull::from(&config.hulls.standing);
+    // A wide slab whose underside is 6 units inside the top of the player's
+    // box: the shortest way out is down, through the floor.
+    let slab = PropDesc {
+        pieces: vec![ConvexHull::from_box(
+            Vec3::new(-80.0, -80.0, 0.0),
+            Vec3::new(80.0, 80.0, 16.0),
+        )],
+        ..crate_at(
+            Vec3::new(0.0, 0.0, hull.maxs.z - 6.0),
+            8.0,
+            50.0,
+            Motion::Fixed,
+        )
+    };
+    physics.add_prop(&slab);
+    physics.step();
+    let scene = Scene {
+        world: &world,
+        physics: &physics,
+        ignore: None,
+        others: &[],
+    };
+    let mut state = PlayerState::at(Vec3::new(0.0, 0.0, 0.1));
+    for _ in 0..132 {
+        state = simulate(&state, &UserCmd::default(), &config, DT, &scene).0;
+    }
+    let free = !rl_sim::collision::CollisionQuery::trace_hull(
+        &scene,
+        state.origin,
+        state.origin,
+        &hull,
+        contents::MASK_PLAYER_SOLID,
+    )
+    .start_solid;
+    assert!(free, "out from under the slab: {state:?}");
+    assert!(state.origin.z >= 0.0, "not pushed through the floor");
+}
+
+#[test]
+fn a_player_wholly_inside_a_prop_leaves_sideways_not_through_the_top() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let config = movement_config();
+    let hull = Hull::from(&config.hulls.standing);
+    // A prop that landed around them (a released prop ignores its holder
+    // while it falls past): it stands on the floor, taller than they are.
+    physics.add_prop(&crate_at(Vec3::ZERO, 60.0, 50.0, Motion::Fixed));
+    physics.step();
+    let scene = Scene {
+        world: &world,
+        physics: &physics,
+        ignore: None,
+        others: &[],
+    };
+    let mut state = PlayerState::at(Vec3::new(10.0, 5.0, 0.1));
+    for _ in 0..132 {
+        state = simulate(&state, &UserCmd::default(), &config, DT, &scene).0;
+    }
+    let outside = state.origin.x.abs().max(state.origin.y.abs()) >= 60.0 + hull.maxs.x;
+    assert!(outside, "out to the side: {state:?}");
+    assert!(state.origin.z < 1.0, "not lifted over the top: {state:?}");
+}

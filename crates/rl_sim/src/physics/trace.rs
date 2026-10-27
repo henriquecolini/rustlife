@@ -10,7 +10,7 @@ use box3d_rust as b3;
 use glam::Vec3;
 
 use super::{BodyId, BodyKind, GROUP_DEBRIS, GROUP_PROP, PhysicsWorld, query_filter, to_b3};
-use crate::collision::clip::{DIST_EPSILON, Hit, Sweep, clip_convex};
+use crate::collision::clip::{ClipPlane, DIST_EPSILON, Hit, Sweep, clip_convex};
 use crate::collision::contents::SOLID;
 use crate::collision::{Hull, Trace};
 
@@ -43,20 +43,21 @@ impl PhysicsWorld {
         candidates
     }
 
-    /// The shortest move that takes `hull`, standing at `origin`, out of the
-    /// props it overlaps (all but debris, and `ignore`), or `None` if it
+    /// The moves that take `hull`, standing at `origin`, out of the props it
+    /// overlaps (all but debris, and `ignore`), shortest first; empty if it
     /// overlaps none.
     ///
     /// A prop piece's clip planes, grown by the box, bound the volume the
-    /// box's centre must stay out of; inside it, the nearest way out is
-    /// along the plane the centre is closest to. With several props
-    /// overlapped, the deepest overlap is undone first.
+    /// box's centre must stay out of. Inside it, leaving along any one of
+    /// the planes works, the nearest being the shortest way out. The others
+    /// are offered too, because the shortest may be blocked (a prop resting
+    /// on a player's head leaves "down", through the floor, the shortest).
     #[must_use]
-    pub fn penetration(&self, origin: Vec3, hull: &Hull, ignore: Option<BodyId>) -> Option<Vec3> {
+    pub fn penetrations(&self, origin: Vec3, hull: &Hull, ignore: Option<BodyId>) -> Vec<Vec3> {
         let center = origin + hull.center();
         let sweep = Sweep::new(center, center, hull.extents(), SOLID);
         let (mins, maxs) = sweep.bounds(CULL_MARGIN);
-        let mut deepest: Option<(f32, Vec3)> = None;
+        let mut exits = Vec::new();
         for id in self.candidates(mins, maxs, GROUP_PROP) {
             if Some(id) == ignore {
                 continue;
@@ -69,25 +70,23 @@ impl PhysicsWorld {
                 if !(mins.cmple(piece.maxs).all() && piece.mins.cmple(maxs).all()) {
                     continue;
                 }
-                // The centre's signed distance past each grown plane; the
-                // centre is inside only if every one is behind.
-                let mut exit: Option<(f32, Vec3)> = None;
-                let inside = piece.planes.iter().all(|plane| {
-                    let past = plane.normal.dot(center) - plane.dist - sweep.support(plane.normal);
-                    if exit.is_none_or(|(best, _)| past > best) {
-                        exit = Some((past, plane.normal));
-                    }
-                    past <= 0.0
-                });
-                if let (true, Some((past, normal))) = (inside, exit) {
-                    let depth = -past;
-                    if deepest.is_none_or(|(best, _)| depth > best) {
-                        deepest = Some((depth, normal));
-                    }
+                // How far past each grown plane the centre is; it is inside
+                // only if every one is behind.
+                let past = |plane: &ClipPlane| {
+                    plane.normal.dot(center) - plane.dist - sweep.support(plane.normal)
+                };
+                if piece.planes.iter().all(|plane| past(plane) <= 0.0) {
+                    exits.extend(
+                        piece
+                            .planes
+                            .iter()
+                            .map(|plane| plane.normal * (-past(plane) + 2.0 * DIST_EPSILON)),
+                    );
                 }
             }
         }
-        deepest.map(|(depth, normal)| normal * (depth + 2.0 * DIST_EPSILON))
+        exits.sort_by(|a, b| a.length_squared().total_cmp(&b.length_squared()));
+        exits
     }
 
     /// Sweeps `hull` from `start` to `end` against every prop players
