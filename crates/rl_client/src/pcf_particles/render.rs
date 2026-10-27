@@ -443,11 +443,11 @@ fn sprite_quads(
         .filter(|p| p.alpha > 0.0 && p.radius > 0.0)
         .filter_map(|p| {
             let center = world_position(p);
-            let (radius, fade) = draw::limit_size(
-                p.radius * scale,
-                center.distance(view.position),
-                sprite.size_limits,
-            );
+            let distance = center.distance(view.position);
+            if draw::too_near(p.radius * scale, distance) {
+                return None;
+            }
+            let (radius, fade) = draw::limit_size(p.radius * scale, distance, sprite.size_limits);
             if fade <= 0.0 {
                 return None;
             }
