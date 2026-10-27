@@ -483,6 +483,7 @@ fn spawn_blasts(
     mut shake: ResMut<Shake>,
     mut flash: ResMut<ScreenFlash>,
     mut explosions: MessageWriter<Explosion>,
+    field: Option<Res<crate::props::MapLightField>>,
 ) {
     let Some(sim) = game.sim() else {
         blasts.clear();
@@ -502,6 +503,7 @@ fn spawn_blasts(
             explosions.write(Explosion {
                 at: blast.at,
                 normal: crate::explosion::open_side(sim.world(), blast.at),
+                light: crate::explosion::light_at(field.as_deref(), blast.at),
             });
         }
     }

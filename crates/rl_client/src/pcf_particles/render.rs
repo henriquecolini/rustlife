@@ -138,10 +138,12 @@ fn load_library(vfs: Res<GameVfs>, mut pcf: ResMut<Pcf>) {
     info!("{} particle systems", pcf.library.len());
 }
 
-/// How long into a map a scripted capture waits before playing its system,
-/// seconds, and how far in front of the eye it plays, Source units.
-const SCRIPT_DELAY: f32 = 1.5;
-const SCRIPT_DISTANCE: f32 = 300.0;
+/// When a scripted capture plays its system, seconds since the app started:
+/// the script's load time (`LOAD_SECS` in `bins/rustlife`), so that `--wait`
+/// is the time since it began.
+const SCRIPT_AT: f32 = 3.0;
+/// How far along the view a scripted system is looked for, Source units.
+const SCRIPT_DISTANCE: f32 = 600.0;
 
 /// Plays the system a capture script (`--pcf`) asks for, once, where the view
 /// points.
@@ -151,7 +153,6 @@ fn play_scripted(
     camera: Query<&GlobalTransform, With<FlyCam>>,
     time: Res<Time>,
     mut spawns: MessageWriter<PcfSpawn>,
-    mut started: Local<Option<f32>>,
     mut done: Local<bool>,
 ) {
     let Some(name) = script.as_deref().and_then(|s| s.pcf.clone()) else {
@@ -160,8 +161,7 @@ fn play_scripted(
     let (Some(_), Ok(camera)) = (game.sim(), camera.single()) else {
         return;
     };
-    let since = *started.get_or_insert(time.elapsed_secs());
-    if *done || time.elapsed_secs() - since < SCRIPT_DELAY {
+    if *done || time.elapsed_secs() < SCRIPT_AT {
         return;
     }
     *done = true;

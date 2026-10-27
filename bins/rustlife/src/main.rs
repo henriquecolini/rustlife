@@ -64,6 +64,10 @@ struct Cli {
     /// in front of the view once the map has loaded.
     #[arg(long, value_name = "NAME", hide = true)]
     pcf: Option<String>,
+    /// Set off the game's explosion where the view hits the map once it has
+    /// loaded.
+    #[arg(long, hide = true)]
+    explode: bool,
 
     /// Open this menu screen at startup (`main`, `play`, `join`, `games`,
     /// `settings`, `settings-audio`, `settings-controls`, `settings-player`),
@@ -214,6 +218,7 @@ fn main() -> Result<()> {
         || use_mover.is_some()
         || cli.teleport.is_some()
         || cli.pcf.is_some()
+        || cli.explode
         || cli.weapon.is_some()
         || cli.all_weapons;
     let script = scripted.then(|| {
@@ -226,6 +231,7 @@ fn main() -> Result<()> {
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
             .with_pcf(cli.pcf)
+            .with_explosion(cli.explode)
     });
     let shot_secs = match (fire_at, grab_at, shoot) {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,

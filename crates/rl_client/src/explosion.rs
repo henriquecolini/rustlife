@@ -1,8 +1,9 @@
 //! HL2DM's explosion, rebuilt from the game's own code.
 //!
 //! The client draws a blast with `C_BaseExplosionEffect` (`fx_explosion`),
-//! not with a particle system: a handful of sprite puffs of the game's
-//! `effects/fire_cloud` and `fire_embers` materials, launched hard and
+//! not with a particle system: a handful of sprite puffs: dark smoke
+//! (`particle_noisesphere`), a fireball of `effects/fire_cloud2` and
+//! `fire_embers` sparks, launched hard and
 //! braked at once. The numbers here (counts, lifetimes, sizes, speeds) and
 //! the per-frame rules are read from `client.so`; where something is an
 //! approximation it is said so.
@@ -32,6 +33,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::props::MapLightField;
 use crate::world::MapScoped;
 
 /// How fast a puff's speed decays, per second (`exp(-18.42 dt)`).
@@ -50,16 +52,23 @@ const NEAR_FADE_END: f32 = 128.0;
 const MIN_ROLL_SPEED: f32 = 0.5;
 /// How fast a puff's roll slows, per second.
 const ROLL_DRAG: f32 = 8.0;
+/// How far toward the camera the additive sprites are sorted.
+const FIRE_DEPTH_BIAS: f32 = 4.0;
+/// How much brighter the additive layers (fire, embers) are drawn than their
+/// colour says. The engine adds them in HDR, where overlapping puffs blow out
+/// to white; this stands in for that.
+const GLOW_GAIN: f32 = 3.0;
 /// Most puffs alive at once.
 const MAX_PUFFS: usize = 400;
 
 /// Which of the game's materials a puff is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Sprite {
-    /// `effects/fire_cloud1`.
-    Cloud1,
-    /// `effects/fire_cloud2`.
-    Cloud2,
+    /// `particle/particle_noisesphere`: the dark smoke, blended over what is
+    /// behind it.
+    Smoke,
+    /// `effects/fire_cloud2`: the fireball, added to what is behind it.
+    Fire,
     /// `effects/fire_embers1`.
     Embers1,
     /// `effects/fire_embers2`.
@@ -68,15 +77,55 @@ pub(crate) enum Sprite {
 
 impl Sprite {
     /// Every sprite, to load.
-    const ALL: [Self; 4] = [Self::Cloud1, Self::Cloud2, Self::Embers1, Self::Embers2];
+    const ALL: [Self; 4] = [Self::Smoke, Self::Fire, Self::Embers1, Self::Embers2];
 
     fn material(self) -> &'static str {
         match self {
-            Self::Cloud1 => "effects/fire_cloud1",
-            Self::Cloud2 => "effects/fire_cloud2",
+            Self::Smoke => "particle/particle_noisesphere",
+            Self::Fire => "effects/fire_cloud2",
             Self::Embers1 => "effects/fire_embers1",
             Self::Embers2 => "effects/fire_embers2",
         }
+    }
+}
+
+/// The light where a blast happens, as the engine samples it from the map:
+/// its colour and how bright it is, `0..=1`. The smoke is tinted by it, so
+/// a blast in a dark room makes dark smoke.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Light {
+    /// Colour of the light, linear RGB.
+    pub color: [f32; 3],
+    /// Its brightness.
+    pub level: f32,
+}
+
+impl Light {
+    /// Full daylight: what a blast with no lighting data gets.
+    pub(crate) const BRIGHT: Self = Self {
+        color: [1.0; 3],
+        level: 1.0,
+    };
+
+    /// The light of an ambient cube: the mean of its six faces.
+    pub(crate) fn of_cube(cube: &[[f32; 3]; 6]) -> Self {
+        let mut mean = [0.0; 3];
+        for face in cube {
+            for (sum, value) in mean.iter_mut().zip(face) {
+                *sum += value / 6.0;
+            }
+        }
+        let level = (mean[0] + mean[1] + mean[2]) / 3.0;
+        Self {
+            color: mean.map(|c| (c / level.max(1e-4)).clamp(0.0, 1.0)),
+            level: level.clamp(0.0, 1.0),
+        }
+    }
+
+    /// The engine's smoke tint for a light: its colour pulled a quarter of
+    /// the way from white.
+    fn tint(self) -> [f32; 3] {
+        self.color.map(|c| c * 0.25 + 0.75)
     }
 }
 
@@ -93,8 +142,9 @@ pub(crate) struct Puff {
     pub life: f32,
     /// Half-size at birth and at death.
     pub size: (f32, f32),
-    /// Brightness of its grey tint, `0..=1`.
-    pub shade: f32,
+    /// Its colour (linear RGB, before it fades): a grey, tinted by the light
+    /// for the smoke.
+    pub color: [f32; 3],
     /// Starting roll, radians.
     pub roll: f32,
     /// Starting roll speed, radians/s.
@@ -139,49 +189,59 @@ fn plane_axes(normal: Vec3) -> (Vec3, Vec3) {
 }
 
 /// The puffs of one blast whose open side faces `normal` (a unit vector;
-/// see [`wall_normal`]): four big fire clouds, eight smaller, sixteen
-/// embers, thirty-two quick flashes and a ring of thirty-two flung flat.
-pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3) -> Vec<Puff> {
+/// see [`wall_normal`]): four big smoke clouds, eight smaller, sixteen
+/// embers, thirty-two quick fire puffs (the fireball) and a ring of smoke
+/// thirty-two flung flat.
+pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puff> {
     let mut puffs = Vec::with_capacity(92);
-    // A grey tint, `low..1` of full.
-    let shade = |rng: &mut Rng, low: f32| between(rng, low, 1.0);
+    // A grey of `low..1` of full; the smoke's is of the light's `level`.
+    let grey = |rng: &mut Rng, low: f32, scale: f32| {
+        let g = between(rng, low, 1.0) * scale;
+        [g; 3]
+    };
+    let lit = light.tint();
+    let smoke = |rng: &mut Rng| {
+        let g = between(rng, 0.5, 1.0) * light.level;
+        [g * lit[0], g * lit[1], g * lit[2]]
+    };
 
-    // Four huge clouds that fill the middle: 72 growing to 144.
+    // Four huge smoke clouds that fill the middle: 72 growing to 144.
     for _ in 0..4 {
         let direction =
             (random_vector(rng, 0.7) + normal * between(rng, 1.0, 6.0)).normalize_or_zero();
         let speed = 2.0 * between(rng, 1.0, 750.0) * thrust(direction, normal);
         puffs.push(Puff {
-            sprite: Sprite::Cloud2,
+            sprite: Sprite::Smoke,
             offset: Vec3::ZERO,
             velocity: direction * speed,
             life: between(rng, 2.0, 3.0),
             size: (72.0, 144.0),
-            shade: shade(rng, 0.5),
+            color: smoke(rng),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -2.0, 2.0),
         });
     }
-    // Eight smaller, quicker clouds around the centre: 32-64 doubling.
+    // Eight smaller, quicker smoke clouds around the centre: 32-64 doubling.
     for _ in 0..8 {
         let direction =
             (random_vector(rng, 0.7) + normal * between(rng, 1.0, 6.0)).normalize_or_zero();
         let speed = 2.0 * between(rng, 1.0, 2000.0) * thrust(direction, normal);
         let start = between(rng, 32.0, 64.0).floor();
         puffs.push(Puff {
-            sprite: Sprite::Cloud2,
+            sprite: Sprite::Smoke,
             offset: random_vector(rng, 16.0),
             velocity: direction * speed,
             life: between(rng, 0.5, 1.0),
             size: (start, 2.0 * start),
-            shade: shade(rng, 0.5),
+            color: smoke(rng),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
         });
     }
-    // Sixteen embers thrown every way: constant size 4-32.
+    // Sixteen embers thrown all about, leaning along the open side: constant
+    // size 4-32.
     for _ in 0..16 {
-        let direction = random_vector(rng, 1.4).normalize_or_zero();
+        let direction = (random_vector(rng, 1.4) + normal).normalize_or_zero();
         let weight = thrust(direction, normal);
         let speed = between(rng, 1.0, 400.0) * weight * 8.0 * weight;
         let size = (between(rng, 8.0, 16.0).floor() * weight).clamp(4.0, 32.0);
@@ -195,24 +255,24 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3) -> Vec<Puff> {
             velocity: direction * speed,
             life: between(rng, 2.0, 3.0),
             size: (size, size),
-            shade: shade(rng, 0.75),
+            color: grey(rng, 0.75, 1.0),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
         });
     }
-    // Thirty-two brief flashes, 0.2-0.4 s, scattered over 96 units.
+    // The fireball: thirty-two fire puffs of 0.2-0.4 s scattered over 96 units.
     for _ in 0..32 {
-        let direction = random_vector(rng, 0.525).normalize_or_zero();
+        let direction = (random_vector(rng, 0.525) + normal).normalize_or_zero();
         let weight = thrust(direction, normal);
         let speed = between(rng, 400.0, 800.0) * weight * 8.0 * weight;
         let start = (between(rng, 32.0, 85.0).floor() * weight).max(1.0);
         puffs.push(Puff {
-            sprite: Sprite::Cloud1,
+            sprite: Sprite::Fire,
             offset: random_vector(rng, 48.0),
             velocity: direction * speed,
             life: between(rng, 0.2, 0.4),
             size: (start, (1.5 * start).min(255.0)),
-            shade: shade(rng, 0.5),
+            color: grey(rng, 0.5, 1.0),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -16.0, 16.0),
         });
@@ -224,12 +284,12 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3) -> Vec<Puff> {
         let direction = right * angle.cos() + up * angle.sin();
         let size = between(rng, 16.0, 32.0).floor();
         puffs.push(Puff {
-            sprite: Sprite::Cloud2,
+            sprite: Sprite::Smoke,
             offset: random_vector(rng, 4.0),
             velocity: direction * between(rng, 500.0, 2000.0),
             life: between(rng, 0.5, 1.5),
             size: (size, size),
-            shade: shade(rng, 0.5),
+            color: grey(rng, 0.5, light.level),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
         });
@@ -302,7 +362,7 @@ impl Plugin for ExplosionPlugin {
             .add_systems(Startup, load_sprites)
             .add_systems(
                 Update,
-                (spawn_puffs, move_puffs)
+                (play_scripted, spawn_puffs, move_puffs)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -315,6 +375,15 @@ impl Plugin for ExplosionPlugin {
 pub(crate) struct Explosion {
     pub at: Vec3,
     pub normal: Vec3,
+    /// The map's light there.
+    pub light: Light,
+}
+
+/// The map's light at `at` (Bevy space), if it has any lighting data.
+pub(crate) fn light_at(field: Option<&MapLightField>, at: Vec3) -> Light {
+    field
+        .and_then(|field| field.0.cube_at(coords::to_source_position(at)))
+        .map_or(Light::BRIGHT, |cube| Light::of_cube(&cube))
 }
 
 /// Where a blast at `at` (Bevy space) is open, looking at `world`.
@@ -324,6 +393,49 @@ pub(crate) fn open_side(world: &CollisionWorld, at: Vec3) -> Vec3 {
         let trace = world.trace_ray(from, to, SOLID);
         (trace.hit() && !trace.start_solid).then_some(trace.fraction)
     })
+}
+
+/// When a scripted capture (`--explode`) sets its blast off, seconds since
+/// the app started: the script's load time, so that `--wait` is the time
+/// since the blast.
+const SCRIPT_AT: f32 = 3.0;
+/// How far along the view the scripted blast is looked for, Source units.
+const SCRIPT_REACH: f32 = 600.0;
+
+/// Sets off the blast a capture script asks for, once, where the view hits
+/// the map.
+fn play_scripted(
+    script: Option<Res<crate::script::InputScript>>,
+    game: crate::net::Game,
+    camera: Query<&GlobalTransform, With<FlyCam>>,
+    time: Res<Time>,
+    mut explosions: MessageWriter<Explosion>,
+    field: Option<Res<MapLightField>>,
+    mut done: Local<bool>,
+) {
+    if *done || !script.is_some_and(|script| script.explode) || time.elapsed_secs() < SCRIPT_AT {
+        return;
+    }
+    let (Some(sim), Ok(camera)) = (game.sim(), camera.single()) else {
+        return;
+    };
+    *done = true;
+    let eye = Vec3::from(coords::to_source_position(camera.translation()));
+    let forward = Vec3::from(coords::to_source_direction(camera.forward().into()));
+    let trace = sim
+        .world()
+        .trace_ray(eye, eye + forward * SCRIPT_REACH, SOLID);
+    let at = if trace.hit() {
+        trace.end + trace.normal * 4.0
+    } else {
+        eye + forward * SCRIPT_REACH
+    };
+    let at = coords::position(at.to_array());
+    explosions.write(Explosion {
+        at,
+        normal: open_side(sim.world(), at),
+        light: light_at(field.as_deref(), at),
+    });
 }
 
 /// The game's sprites for the puffs.
@@ -348,7 +460,9 @@ struct Alive {
     age: f32,
     life: f32,
     size: (f32, f32),
-    shade: f32,
+    color: [f32; 3],
+    /// Whether it is added to what is behind it, and so given [`GLOW_GAIN`].
+    glows: bool,
     roll: f32,
     roll_speed: f32,
     material: Handle<StandardMaterial>,
@@ -372,13 +486,14 @@ fn spawn_puffs(
     let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x0065_7870_6c6f]));
     let mut room = MAX_PUFFS.saturating_sub(live.iter().count());
     for blast in blasts.read() {
-        for puff in engine_puffs(rng, blast.normal) {
+        for puff in engine_puffs(rng, blast.normal, blast.light) {
             let Some(sprite) = sprites
                 .0
                 .iter()
                 .find(|(which, _)| *which == puff.sprite)
                 .and_then(|(_, handle)| assets.get(handle))
             else {
+                warn_once!("explosion sprite {} is not loaded", puff.sprite.material());
                 continue;
             };
             if room == 0 {
@@ -391,7 +506,17 @@ fn spawn_puffs(
                 unlit: true,
                 double_sided: true,
                 cull_mode: None,
-                alpha_mode: AlphaMode::Add,
+                // The fire and sparks are drawn over the smoke, not under it.
+                depth_bias: if sprite.additive {
+                    FIRE_DEPTH_BIAS
+                } else {
+                    0.0
+                },
+                alpha_mode: if sprite.additive {
+                    AlphaMode::Add
+                } else {
+                    AlphaMode::Blend
+                },
                 ..default()
             });
             let offset = coords::direction(puff.offset.to_array()) * coords::METERS_PER_UNIT;
@@ -401,7 +526,8 @@ fn spawn_puffs(
                     age: 0.0,
                     life: puff.life,
                     size: puff.size,
-                    shade: puff.shade,
+                    color: puff.color,
+                    glows: sprite.additive,
                     roll: puff.roll,
                     roll_speed: puff.roll_speed,
                     material: material.clone(),
@@ -449,8 +575,9 @@ fn move_puffs(
         let brightness = fade(t);
         let alpha = brightness * near_fade(depth);
         if let Some(mut material) = materials.get_mut(&puff.material) {
-            let tint = puff.shade * brightness;
-            material.base_color = Color::linear_rgba(tint, tint, tint, alpha);
+            let gain = if puff.glows { GLOW_GAIN } else { 1.0 };
+            let [r, g, b] = puff.color.map(|c| c * brightness * gain);
+            material.base_color = Color::linear_rgba(r, g, b, alpha);
         }
     }
 }
@@ -460,7 +587,7 @@ mod tests {
     use super::*;
 
     fn puffs(normal: Vec3) -> Vec<Puff> {
-        engine_puffs(&mut Rng::seeded(&[9]), normal)
+        engine_puffs(&mut Rng::seeded(&[9]), normal, Light::BRIGHT)
     }
 
     fn of(puffs: &[Puff], sprite: Sprite) -> Vec<Puff> {
@@ -475,11 +602,11 @@ mod tests {
     fn a_blast_is_ninety_two_puffs_in_five_groups() {
         let all = puffs(Vec3::Z);
         assert_eq!(all.len(), 92);
-        assert_eq!(of(&all, Sprite::Cloud1).len(), 32, "flashes");
+        assert_eq!(of(&all, Sprite::Fire).len(), 32, "the fireball");
         assert_eq!(
-            of(&all, Sprite::Cloud2).len(),
+            of(&all, Sprite::Smoke).len(),
             4 + 8 + 32,
-            "clouds and ring"
+            "smoke and its ring"
         );
         let embers = of(&all, Sprite::Embers1).len() + of(&all, Sprite::Embers2).len();
         assert_eq!(embers, 16);
@@ -501,10 +628,10 @@ mod tests {
     #[test]
     fn every_puff_stays_within_the_engines_ranges() {
         for seed in 0..20 {
-            for p in engine_puffs(&mut Rng::seeded(&[seed]), Vec3::Z) {
+            for p in engine_puffs(&mut Rng::seeded(&[seed]), Vec3::Z, Light::BRIGHT) {
                 assert!(p.life >= 0.2 && p.life <= 3.0, "{p:?}");
                 assert!(p.size.0 >= 1.0 && p.size.1 >= p.size.0 && p.size.1 <= 256.0);
-                assert!((0.5..=1.0).contains(&p.shade));
+                assert!(p.color.iter().all(|c| (0.0..=1.0).contains(c)), "{p:?}");
                 assert!(p.velocity.length() <= 4000.0, "{p:?}");
                 assert!(p.velocity.is_finite() && p.offset.is_finite());
                 assert!(p.offset.abs().max_element() <= 48.0);
@@ -517,7 +644,7 @@ mod tests {
         let normal = Vec3::Z;
         let ring: Vec<Puff> = puffs(normal)
             .into_iter()
-            .filter(|p| p.sprite == Sprite::Cloud2 && (p.size.0 - p.size.1).abs() < f32::EPSILON)
+            .filter(|p| p.sprite == Sprite::Smoke && (p.size.0 - p.size.1).abs() < f32::EPSILON)
             .collect();
         assert_eq!(ring.len(), 32);
         for p in &ring {
@@ -534,7 +661,7 @@ mod tests {
         let mut up = 0.0;
         let mut down = 0.0;
         for seed in 0..50 {
-            for p in engine_puffs(&mut Rng::seeded(&[seed]), normal) {
+            for p in engine_puffs(&mut Rng::seeded(&[seed]), normal, Light::BRIGHT) {
                 if p.size == (72.0, 144.0) {
                     up += p.velocity.z.max(0.0);
                     down += (-p.velocity.z).max(0.0);

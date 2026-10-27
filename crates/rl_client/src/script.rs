@@ -83,6 +83,9 @@ pub struct InputScript {
     /// Play this particle system (by name) a short way in front of the view
     /// once the map has loaded.
     pub pcf: Option<String>,
+    /// Set off the game's explosion where the view hits the map once it has
+    /// loaded.
+    pub explode: bool,
     progress: Progress,
 }
 
@@ -131,6 +134,13 @@ impl InputScript {
     #[must_use]
     pub fn with_teleport(mut self, teleport: Option<([f32; 3], (f32, f32))>) -> Self {
         self.teleport = teleport;
+        self
+    }
+
+    /// This script, also setting off an explosion where the view points.
+    #[must_use]
+    pub fn with_explosion(mut self, explode: bool) -> Self {
+        self.explode = explode;
         self
     }
 
