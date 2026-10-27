@@ -242,6 +242,10 @@ pub enum FireAmmo {
 /// What a shot is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a plain description read once from a data file: boxing would only clutter its patterns"
+)]
 pub enum Shot {
     /// Instant bullets along the view.
     Hitscan(HitscanConfig),

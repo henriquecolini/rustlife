@@ -77,8 +77,9 @@ Shot by shot:
 - **Pump.** After a shot's own interval, a weapon with a `pump` is held for
   that long again (the shotgun: 0.333 s + 0.533 s per shot).
 - **Zoom.** The alternate button of a weapon with a `zoom` toggles its scope
-  (the crossbow's 20 degrees); the client eases the field of view and
-  scales the mouse by it. Putting the weapon away ends it.
+  (the crossbow's 20 degrees); the client eases the field of view, scales the
+  mouse by it and, once half way in, puts the view model away and shows a
+  ring-and-cross reticle. Putting the weapon away ends it.
 - **Laser and launcher.** The alternate button of the RPG toggles its laser;
   a launcher fires one rocket at a time (`reload_after_projectile`).
 - **Accuracy.** A weapon with an `accuracy` (the pistol) has a cone that
@@ -152,6 +153,14 @@ includes grates) and players' boxes:
   an explosion.
 - A `fuse` bursts it that many seconds after launch, wherever it is.
 - Past its `lifetime` it is gone, without a burst.
+
+A projectile with a `ricochet` that meets the map at less than `max_dot` of the
+way into it (HL2's 0.5) and faster than `min_speed` glances off at
+`speed_scale` of its speed and falls under `gravity` from then on; any other
+hit on the map embeds it (`stick`: the crossbow's bolt stays two seconds) and
+either way the impact is reported as a late `ShotEvent` so the client draws
+sparks, a mark and the sound there. A projectile that strikes a prop shoves
+it with `impact_force`.
 
 A **missile** (the RPG's rocket) leaves the launcher's muzzle (offset from
 the eyes) at `launch_forward` and `launch_up`, falling under gravity until its

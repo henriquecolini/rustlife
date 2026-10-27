@@ -162,10 +162,10 @@ impl Projectile {
         }
         self.position = map.end + map.normal * SURFACE_GAP;
         let struck = crate::combat::hitscan::struck_by(&map);
-        if matches!(struck, Struck::World | Struck::Brush(_)) {
-            if let Some(flight) = self.glance_or_embed(config, &map) {
-                return flight;
-            }
+        if matches!(struck, Struck::World | Struck::Brush(_))
+            && let Some(flight) = self.glance_or_embed(config, &map)
+        {
+            return flight;
         }
         let Some(bounce) = config.bounce else {
             return Flight::Struck {
