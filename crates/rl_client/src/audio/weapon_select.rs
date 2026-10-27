@@ -23,6 +23,7 @@ fn play(mut selector: ResMut<WeaponSelector>, gameplay: Res<Gameplay>, mut playe
             Cue::Step => &sounds.step,
             Cue::Pick => &sounds.pick,
             Cue::Close => &sounds.close,
+            Cue::Deny => &sounds.deny,
         };
         player.play(name, None, 1.0);
     }

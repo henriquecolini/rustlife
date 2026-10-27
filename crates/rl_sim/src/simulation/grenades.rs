@@ -298,7 +298,10 @@ impl Simulation {
                 .physics
                 .center_of_mass(grenade.body)
                 .unwrap_or(Vec3::ZERO);
-            let mut burst = config.fuse.is_some_and(|fuse| grenade.age >= fuse);
+            let mut burst = config.fuse.is_some_and(|fuse| {
+                let blip = config.body.as_ref().and_then(|body| body.blip);
+                grenade.age >= blip.map_or(fuse, |blip| blip.burst_time(fuse))
+            });
             if let Some(body) = &config.body {
                 burst |= body.remote && detonations.contains(&grenade.owner);
                 if let Some(beam) = &body.beam

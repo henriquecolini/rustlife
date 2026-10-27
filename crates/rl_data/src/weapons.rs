@@ -448,39 +448,76 @@ pub struct BeamConfig {
 
 /// A fuse's ticking: the sound and the red flash of a grenade, in step.
 ///
-/// It blips as it leaves the hand, then every `interval` seconds, and every
-/// `fast_interval` once no more than `warn_time` seconds of the fuse are
-/// left. The schedule is a function of the grenade's age alone, so the sound
-/// and the flash agree on every machine ([`BlipConfig::last`]).
+/// HL2's frag grenade thinks every `think` seconds (0.1 s rounded to the
+/// 66.67 Hz server's whole ticks: 7 of them, 0.105 s) and at each think:
+///
+/// 1. it blows up if the fuse is over (so a 2.5 s fuse bursts at the first
+///    think after that, 2.52 s);
+/// 2. it starts to be *warned* once no more than `warn_time` seconds are
+///    left, and stays so;
+/// 3. it blips if the think comes after the time the next blip was due;
+///    that time is then `interval` later, or `fast_interval` if warned.
+///
+/// The first blip is due `first` seconds after the throw. The schedule is a
+/// function of the grenade's age alone, so the sound and the flash agree on
+/// every machine ([`BlipConfig::schedule`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlipConfig {
     /// Seconds between blips at first.
     pub interval: f32,
-    /// Seconds between blips once the end is near.
+    /// Seconds between blips once warned.
     pub fast_interval: f32,
     /// How many seconds before the fuse runs out the blips quicken.
     pub warn_time: f32,
+    /// When the first blip is due, seconds after the throw.
+    pub first: f32,
+    /// Seconds between the grenade's thinks.
+    pub think: f32,
 }
 
 impl BlipConfig {
-    /// The latest blip of a grenade `age` seconds old with a `fuse` seconds
-    /// long: its number (the first is 0) and when it happened.
+    /// When a grenade with a `fuse` seconds long blips, and when it bursts.
     #[must_use]
-    pub fn last(&self, age: f32, fuse: f32) -> (u32, f32) {
-        let (mut number, mut at) = (0, 0.0);
-        loop {
-            let step = if fuse - at <= self.warn_time {
-                self.fast_interval
-            } else {
-                self.interval
-            };
-            if step <= 0.0 || at + step > age {
-                return (number, at);
+    pub fn schedule(&self, fuse: f32) -> (Vec<f32>, f32) {
+        let think = self.think.max(f32::EPSILON);
+        let (mut blips, mut due, mut warned) = (Vec::new(), self.first, false);
+        for step in 0_u32..100_000 {
+            let now = think * step as f32;
+            if now > fuse {
+                return (blips, now);
             }
-            number += 1;
-            at += step;
+            warned |= now >= fuse - self.warn_time;
+            if now > due {
+                blips.push(now);
+                due = now
+                    + if warned {
+                        self.fast_interval
+                    } else {
+                        self.interval
+                    };
+            }
         }
+        (blips, fuse)
+    }
+
+    /// When a grenade with a `fuse` seconds long bursts: the first think
+    /// after the fuse is over.
+    #[must_use]
+    pub fn burst_time(&self, fuse: f32) -> f32 {
+        self.schedule(fuse).1
+    }
+
+    /// The latest blip of a grenade `age` seconds old with a `fuse` seconds
+    /// long: its number (the first is 0) and when it happened; `None`
+    /// before the first.
+    #[must_use]
+    pub fn last(&self, age: f32, fuse: f32) -> Option<(u32, f32)> {
+        let (blips, _) = self.schedule(fuse);
+        let passed = blips.iter().take_while(|&&at| at <= age).count();
+        passed
+            .checked_sub(1)
+            .map(|index| (index as u32, blips[index]))
     }
 }
 
@@ -905,22 +942,27 @@ mod tests {
     }
 
     #[test]
-    fn fuses_tick_slowly_then_quicken_near_the_end() {
+    fn a_frags_fuse_ticks_as_hl2s_thinks_do() {
         let blip = BlipConfig {
             interval: 1.0,
             fast_interval: 0.3,
             warn_time: 1.5,
+            first: 0.3,
+            think: 0.105,
         };
-        // A 2.5 s fuse: at 0 and 1 s, then every 0.3 s.
-        assert_eq!(blip.last(0.0, 2.5), (0, 0.0));
-        assert_eq!(blip.last(0.99, 2.5), (0, 0.0));
-        assert_eq!(blip.last(1.0, 2.5), (1, 1.0));
-        assert_eq!(blip.last(1.29, 2.5), (1, 1.0));
-        let (number, at) = blip.last(1.65, 2.5);
-        assert_eq!(number, 3);
-        assert!((at - 1.6).abs() < 1e-5, "{at}");
-        let (number, _) = blip.last(2.5, 2.5);
-        assert_eq!(number, 6);
+        let (blips, burst) = blip.schedule(2.5);
+        // Thinks every 0.105 s: the first after 0.3 s is the third (0.315);
+        // a second later the next think past that is 1.365; warned from
+        // 1.05, the rest follow every third think (0.315 s).
+        let expected = [0.315, 1.365, 1.68, 1.995, 2.31];
+        assert_eq!(blips.len(), expected.len(), "{blips:?}");
+        for (got, want) in blips.iter().zip(expected) {
+            assert!((got - want).abs() < 1e-3, "{blips:?}");
+        }
+        assert!((burst - 2.52).abs() < 1e-3, "{burst}");
+        assert_eq!(blip.last(0.2, 2.5), None);
+        assert_eq!(blip.last(0.315, 2.5).map(|(number, _)| number), Some(0));
+        assert_eq!(blip.last(2.5, 2.5).map(|(number, _)| number), Some(4));
     }
 
     #[test]

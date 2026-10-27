@@ -25,6 +25,8 @@ pub(crate) enum Cue {
     Pick,
     /// The hold ran out with no pick.
     Close,
+    /// A slot key was pressed for a slot with nothing to select.
+    Deny,
 }
 
 /// Where the player is in picking a weapon with the wheel.
@@ -59,6 +61,11 @@ impl WeaponSelector {
         if was_open && !self.is_open() {
             self.cues.push(Cue::Close);
         }
+    }
+
+    /// Records a sound for something done outside the list (a slot key).
+    pub(crate) fn cue(&mut self, cue: Cue) {
+        self.cues.push(cue);
     }
 
     /// What happened to the list since this was last called.

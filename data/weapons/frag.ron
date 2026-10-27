@@ -8,8 +8,10 @@
 //     along the floor at 700 units/s on its side.
 // Once thrown it is a physics body — a metal cylinder that tumbles and
 // bounces like any prop — that ticks (a red dot flashing in step with each
-// tick, a red trail behind it): every second, then every 0.3 s for the last
-// 1.5 s.
+// tick, a red trail behind it). The ticks are HL2's exactly: the grenade
+// thinks every 0.105 s, ticks once a think is past the time the tick was due
+// (the first 0.3 s after the throw, then a second after each, 0.3 s once
+// warned 1.5 s before the end) and bursts at the first think after 2.5 s.
 Weapon(
     name: "Grenade",
     slot: 5,
@@ -48,7 +50,7 @@ Weapon(
                 height: 9.0,
                 model_center: (0.0, 0.0, 4.5),
                 surface: "grenade",
-                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5, first: 0.3, think: 0.105)),
                 mass: 0.9,
                 friction: 0.7,
                 // Fast enough to tumble, slow enough that a hard landing's
@@ -81,7 +83,7 @@ Weapon(
                 height: 9.0,
                 model_center: (0.0, 0.0, 4.5),
                 surface: "grenade",
-                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5, first: 0.3, think: 0.105)),
                 mass: 0.9,
                 friction: 0.7,
                 spin: 6.0,
@@ -105,7 +107,7 @@ Weapon(
                     model_center: (0.0, 0.0, 4.5),
                     surface: "grenade",
                     rolled: true,
-                    blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                    blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5, first: 0.3, think: 0.105)),
                     mass: 0.9,
                     friction: 0.7,
                     spin: 0.0,

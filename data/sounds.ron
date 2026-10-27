@@ -61,5 +61,7 @@ Sounds(
         step: "Player.WeaponSelectionMoveSlot",
         pick: "Player.WeaponSelected",
         close: "Player.WeaponSelectionClose",
+        // A slot key for a slot with nothing in it.
+        deny: "Player.DenyWeaponSelection",
     ),
 )

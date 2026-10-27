@@ -12,7 +12,7 @@
 //! - the **tick** itself, the weapon's `blip` sound, played where it is.
 //!
 //! The ticks follow from the grenade's age alone (see
-//! [`rl_data::BlipConfig::last`]), so the dot and the sound agree. The age
+//! [`rl_data::BlipConfig::schedule`]), so the dot and the sound agree. The age
 //! comes with each snapshot; between snapshots it is carried on by the
 //! local clock, so the flashes do not stutter at the snapshot rate.
 
@@ -324,7 +324,9 @@ fn tick_fuses(
         let (Some(blip), Some(fuse_time)) = (&body.blip, projectile.fuse) else {
             continue;
         };
-        let (number, _) = blip.last(fuse.age_at(now), fuse_time);
+        let Some((number, _)) = blip.last(fuse.age_at(now), fuse_time) else {
+            continue;
+        };
         if fuse.blip == Some(number) {
             continue;
         }
@@ -367,7 +369,9 @@ fn flash_dots(
         };
         let age = fuse.age_at(now);
         let since = match (&body.blip, projectile.fuse) {
-            (Some(blip), Some(fuse_time)) => age - blip.last(age, fuse_time).1,
+            (Some(blip), Some(fuse_time)) => blip
+                .last(age, fuse_time)
+                .map_or(f32::MAX, |(_, at)| age - at),
             _ => age,
         };
         let brightness = dot_brightness(effects, since);

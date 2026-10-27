@@ -55,6 +55,8 @@ pub struct WeaponSelectSounds {
     pub pick: String,
     /// The list closing with no pick.
     pub close: String,
+    /// A slot key pressed for a slot with no weapon.
+    pub deny: String,
 }
 
 /// How props sound as they strike things and slide about. The sounds
@@ -142,6 +144,7 @@ impl SoundsConfig {
         named(check, "weapon_select.step", &select.step);
         named(check, "weapon_select.pick", &select.pick);
         named(check, "weapon_select.close", &select.close);
+        named(check, "weapon_select.deny", &select.deny);
         if !self.button.contains("{}") {
             check.fail("button", "must contain {} for the button's sound number");
         }
@@ -203,6 +206,7 @@ mod tests {
                 step: "Player.WeaponSelectionMoveSlot".to_owned(),
                 pick: "Player.WeaponSelected".to_owned(),
                 close: "Player.WeaponSelectionClose".to_owned(),
+                deny: "Player.DenyWeaponSelection".to_owned(),
             },
         }
     }
