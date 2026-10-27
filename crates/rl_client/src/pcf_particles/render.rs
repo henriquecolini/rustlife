@@ -57,6 +57,9 @@ pub struct PcfSpawn {
     pub position: Vec3,
     /// Which way the system's up points (a surface normal), Source space.
     pub normal: Vec3,
+    /// Seconds after which it stops emitting (what is alive plays out), for
+    /// a looping system such as a fire; `None` lets it run its course.
+    pub lifetime: Option<f32>,
 }
 
 /// The loaded systems and the materials they draw with.
@@ -76,6 +79,27 @@ impl Pcf {
         self.library.get(name).is_some()
     }
 
+    /// Plays the looping system `name` at `position` (Source units), facing
+    /// up, for `lifetime` seconds, if there is one; says whether it did.
+    pub(crate) fn play_for(
+        &self,
+        name: Option<&str>,
+        spawns: &mut MessageWriter<PcfSpawn>,
+        position: Vec3,
+        lifetime: f32,
+    ) -> bool {
+        let Some(name) = name.filter(|name| self.has(name)) else {
+            return false;
+        };
+        spawns.write(PcfSpawn {
+            name: name.to_owned(),
+            position,
+            normal: Vec3::Z,
+            lifetime: Some(lifetime),
+        });
+        true
+    }
+
     /// Plays the system `name` at `position` (Source units) with its up along
     /// `normal`, if there is one, and says whether it did: when it did not,
     /// the caller draws its own effect.
@@ -93,6 +117,7 @@ impl Pcf {
             name: name.to_owned(),
             position,
             normal,
+            lifetime: None,
         });
         true
     }
@@ -110,6 +135,8 @@ impl Pcf {
 #[derive(Component)]
 struct PcfEffect {
     instance: Instance,
+    /// When to stop emitting, in the instance's age.
+    stop_after: Option<f32>,
     /// One drawing entity per `material|kind`.
     layers: HashMap<String, (Entity, Handle<Mesh>)>,
 }
@@ -179,6 +206,7 @@ fn play_scripted(
         name,
         position,
         normal,
+        lifetime: None,
     });
 }
 
@@ -236,6 +264,7 @@ fn start_effects(
         commands.spawn((
             PcfEffect {
                 instance,
+                stop_after: request.lifetime,
                 layers: HashMap::new(),
             },
             Transform::IDENTITY,
@@ -293,8 +322,13 @@ fn play_effects(
     for (entity, mut effect) in &mut effects {
         let PcfEffect {
             instance,
+            stop_after,
             layers: layer_entities,
         } = &mut *effect;
+        if stop_after.is_some_and(|after| instance.age() >= after) {
+            instance.stop();
+            *stop_after = None;
+        }
         instance.update(&pcf.library, time.delta_secs(), collider.as_ref());
         if instance.finished() {
             commands.entity(entity).try_despawn();

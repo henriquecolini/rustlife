@@ -25,6 +25,7 @@ use crate::AppState;
 use crate::camera::FlyCam;
 use crate::explosion::Explosion;
 use crate::net::Game;
+use crate::pcf_particles::{Pcf, PcfSpawn};
 use crate::player::Ticked;
 use crate::world::MapScoped;
 
@@ -553,11 +554,15 @@ fn spawn_particle(
     ));
 }
 
-/// The props that are on fire: when each caught and when its fuse is spent
-/// (seconds since startup).
+/// The props that are on fire: when each caught, when its fuse is spent
+/// (seconds since startup), and whether the game's own fire system is
+/// playing on it (so the flames made here are not).
 #[derive(Resource, Debug, Default)]
-struct Burning(HashMap<BodyId, (f32, f32)>);
+struct Burning(HashMap<BodyId, (f32, f32, bool)>);
 
+/// The game's particle system for a prop on fire (the size HL2DM's
+/// `env_fire` entities use for a barrel).
+const FIRE_SYSTEM: &str = "env_fire_medium";
 /// How often a burning prop gives off a puff of flame, seconds.
 const FLAME_INTERVAL: f32 = 0.03;
 
@@ -572,19 +577,32 @@ fn note_fires(
     time: Res<Time>,
     game: Game,
     mut burning: ResMut<Burning>,
+    pcf: Res<Pcf>,
+    mut fires: MessageWriter<PcfSpawn>,
 ) {
     let now = time.elapsed_secs();
     for Ticked(events) in ticks.read() {
         for ignition in &events.prop_ignitions {
-            burning
-                .0
-                .insert(ignition.body, (now, now + ignition.fuse + 0.5));
+            let lasts = ignition.fuse + 0.5;
+            let at = game
+                .sim()
+                .and_then(|sim| sim.physics().center_of_mass(ignition.body));
+            // The game's own fire where it has one, standing on the prop.
+            let played = at.is_some_and(|at| {
+                pcf.play_for(
+                    Some(FIRE_SYSTEM),
+                    &mut fires,
+                    Vec3::from(at.to_array()),
+                    lasts,
+                )
+            });
+            burning.0.insert(ignition.body, (now, now + lasts, played));
         }
     }
     if let Some(sim) = game.sim() {
         burning
             .0
-            .retain(|&body, &mut (_, until)| until > now && !sim.physics().is_broken(body));
+            .retain(|&body, &mut (_, until, _)| until > now && !sim.physics().is_broken(body));
     }
 }
 
@@ -612,7 +630,10 @@ fn burn_props(
     let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x0066_6c61_6d65]));
     let now = time.elapsed_secs();
     let mut room = MAX_PARTICLES.saturating_sub(live.iter().count());
-    for (&body, &(since_lit, until)) in &burning.0 {
+    for (&body, &(since_lit, until, own_fire)) in &burning.0 {
+        if own_fire {
+            continue;
+        }
         let Some(center) = sim.physics().center_of_mass(body) else {
             continue;
         };
