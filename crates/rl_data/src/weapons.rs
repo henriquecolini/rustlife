@@ -329,6 +329,20 @@ pub struct MeleeConfig {
     pub force: f32,
 }
 
+/// A projectile drawn as two additive sprites: a halo and a hot core.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GlowConfig {
+    /// The wide soft halo's sprite.
+    pub halo: String,
+    /// Its half-size, units.
+    pub halo_size: f32,
+    /// The bright core's sprite.
+    pub core: String,
+    /// Its half-size, units.
+    pub core_size: f32,
+}
+
 /// A projectile: a small box flying from the eyes along the view.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -363,6 +377,10 @@ pub struct ProjectileConfig {
     /// if it embeds rather than bursts or bounces.
     #[serde(default)]
     pub stick: Option<f32>,
+    /// Drawn as additive glow sprites instead of its model (the energy
+    /// ball, whose own model needs materials the game does not ship).
+    #[serde(default)]
+    pub glow: Option<GlowConfig>,
     /// Impulse it gives a prop it strikes, kg·units/s, along its flight.
     #[serde(default)]
     pub impact_force: f32,

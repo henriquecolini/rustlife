@@ -47,6 +47,13 @@ Weapon(
             dissolves: true,
             explosion: None,
             lifetime: 5.0,
+            // The game draws the ball with these additive sprites.
+            glow: Some((
+                halo: "effects/ar2_altfire1b",
+                halo_size: 22.0,
+                core: "effects/ar2_altfire1",
+                core_size: 12.0,
+            )),
         )),
     )),
     deploy_time: 0.833,

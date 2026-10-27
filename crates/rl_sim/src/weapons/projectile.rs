@@ -261,6 +261,7 @@ mod tests {
             dissolves: false,
             ricochet: None,
             stick: None,
+            glow: None,
             impact_force: 0.0,
             missile: None,
             crouched: None,

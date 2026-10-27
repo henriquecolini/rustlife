@@ -85,8 +85,8 @@ pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig, WeaponSelectSo
 pub use validate::Problem;
 pub use weapons::{
     AccuracyConfig, BeamConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig,
-    HitscanConfig, MeleeConfig, MissileConfig, ProjectileBodyConfig, ProjectileConfig, Reload,
-    Shot, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
+    GlowConfig, HitscanConfig, MeleeConfig, MissileConfig, ProjectileBodyConfig, ProjectileConfig,
+    Reload, Shot, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
 };
 
 /// File name of the movement data.

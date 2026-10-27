@@ -18,6 +18,8 @@
 //! interpolated between two of the server's snapshots, a little in the
 //! past, every frame.
 
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use rl_assets::coords;
 use rl_data::PlayerAnimationConfig;
@@ -48,6 +50,7 @@ impl Plugin for ActorsPlugin {
                     hold_weapons,
                     grip_weapons,
                     draw_projectiles,
+                    glow_projectiles,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
@@ -520,6 +523,10 @@ fn draw_projectiles(
         else {
             continue;
         };
+        if config.glow.is_some() {
+            // Drawn by `glow_projectiles`, not as a model.
+            continue;
+        }
         let entity = spawn_model(
             &mut commands,
             &mut models,
@@ -530,6 +537,109 @@ fn draw_projectiles(
         commands
             .entity(entity)
             .insert((ProjectileView(projectile.id), Moving));
+    }
+}
+
+/// One of a glowing projectile's two sprites.
+#[derive(Component)]
+struct GlowQuad {
+    projectile: u32,
+    /// Half-size, metres.
+    size: f32,
+    /// How fast it pulses, if it does.
+    pulse: bool,
+}
+
+/// Draws projectiles that glow (the energy ball) as a halo and a core,
+/// turned to face the camera and following the projectile.
+fn glow_projectiles(
+    mut commands: Commands,
+    time: Res<Time>,
+    drawn: Res<Drawn>,
+    game: Game,
+    asset_server: Res<AssetServer>,
+    sprites: Res<Assets<rl_assets::SpriteAsset>>,
+    camera: Query<&GlobalTransform, With<crate::camera::FlyCam>>,
+    mut quads: Query<(Entity, &GlowQuad, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut loaded: Local<HashMap<String, Handle<rl_assets::SpriteAsset>>>,
+    mut quad_mesh: Local<Option<Handle<Mesh>>>,
+) {
+    let (Some(world), Some(sim), Ok(camera)) = (&drawn.0, game.sim(), camera.single()) else {
+        return;
+    };
+    let facing = camera.rotation();
+    let pulse = 1.0 + 0.08 * (time.elapsed_secs() * 30.0).sin();
+    let mut seen = Vec::new();
+    for (entity, quad, mut transform) in &mut quads {
+        let Some(projectile) = world.projectiles.iter().find(|p| p.id == quad.projectile) else {
+            commands.entity(entity).try_despawn();
+            continue;
+        };
+        seen.push((quad.projectile, quad.size.to_bits()));
+        transform.translation = coords::position(projectile.position.to_array());
+        transform.rotation = facing;
+        let size = if quad.pulse {
+            quad.size * pulse
+        } else {
+            quad.size
+        };
+        transform.scale = Vec3::splat(2.0 * size);
+    }
+    let mesh = quad_mesh
+        .get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0)))
+        .clone();
+    for projectile in &world.projectiles {
+        let Some(rl_data::Shot::Projectile(config)) = sim
+            .arsenal()
+            .fire(projectile.weapon, projectile.mode)
+            .map(|fire| &fire.shot)
+        else {
+            continue;
+        };
+        let Some(glow) = &config.glow else {
+            continue;
+        };
+        for (name, size, pulses) in [
+            (&glow.halo, glow.halo_size, false),
+            (&glow.core, glow.core_size, true),
+        ] {
+            let size = size * coords::METERS_PER_UNIT;
+            if seen.contains(&(projectile.id, size.to_bits())) {
+                continue;
+            }
+            let handle = loaded
+                .entry(name.clone())
+                .or_insert_with(|| {
+                    asset_server.load(format!("{}://materials/{name}.vmt", rl_assets::SOURCE))
+                })
+                .clone();
+            let Some(sprite) = sprites.get(&handle) else {
+                continue;
+            };
+            let material = materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: Some(sprite.image.clone()),
+                unlit: true,
+                double_sided: true,
+                cull_mode: None,
+                alpha_mode: AlphaMode::Add,
+                ..default()
+            });
+            commands.spawn((
+                GlowQuad {
+                    projectile: projectile.id,
+                    size,
+                    pulse: pulses,
+                },
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material),
+                Transform::from_translation(coords::position(projectile.position.to_array()))
+                    .with_scale(Vec3::ZERO),
+                crate::world::MapScoped,
+            ));
+        }
     }
 }
 

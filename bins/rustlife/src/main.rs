@@ -60,6 +60,9 @@ struct Cli {
     /// (wherever the view points).
     #[arg(long, value_name = "SECS", hide = true)]
     fire_for: Option<f32>,
+    /// Hold secondary fire for this many seconds after the map has loaded.
+    #[arg(long, value_name = "SECS", hide = true)]
+    alt_fire_for: Option<f32>,
     /// Play the particle system of this name (from the game's `.pcf` files)
     /// in front of the view once the map has loaded.
     #[arg(long, value_name = "NAME", hide = true)]
@@ -208,12 +211,14 @@ fn main() -> Result<()> {
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
     let shoot = cli.shoot_for.map(|secs| (LOAD_SECS, secs));
     let held_fire = cli.fire_for.map(|secs| (LOAD_SECS, secs));
+    let held_alt = cli.alt_fire_for.map(|secs| (LOAD_SECS, secs));
     let visit = cli.visit_pickup.then_some(LOAD_SECS);
     let use_mover = cli.use_mover.map(|class| (LOAD_SECS, class));
     let scripted = walk.is_some()
         || grab_at.is_some()
         || shoot.is_some()
         || held_fire.is_some()
+        || held_alt.is_some()
         || visit.is_some()
         || use_mover.is_some()
         || cli.teleport.is_some()
@@ -227,6 +232,7 @@ fn main() -> Result<()> {
             .with_all_weapons(cli.all_weapons)
             .with_shooting(shoot)
             .with_fire_held(held_fire)
+            .with_alt_fire_held(held_alt)
             .with_visit(visit)
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
