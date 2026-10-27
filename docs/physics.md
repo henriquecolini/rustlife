@@ -140,8 +140,11 @@ tick runs and are applied at its end, each scaled by what the prop is made
 of: a crate takes more from a club than a bullet. Model health is
 multiplied by `breakables.health_scale` — Source's `prop_data` values are
 tuned for a lighter damage model — so bottles, boxes and sinks take a few
-solid hits rather than one. A prop whose health runs
-out *breaks*: it leaves the physics world (its body id stays), everyone is
+solid hits rather than one. A new prop's first contacts while it settles
+into the map — pushing itself out of a floor or a neighbouring prop — do not
+damage it, so a tightly placed crate does not break at map load. A prop
+whose health runs out *breaks*: it leaves the physics world (its body id
+stays), everyone is
 told (`PropBreak`, and the replicated `broken` set for those who join
 later), the client scatters its gibs as small Box3D bodies (the chunk's
 `.phy` convex pieces, or its bounds) that collide with the map and nothing

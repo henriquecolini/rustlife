@@ -1,7 +1,7 @@
 //! Props striking props and the map: the impacts that make noise and break
 //! things.
 //!
-//! Box3D reports a contact hit event when two shapes touch faster than the
+//! `Box3D` reports a contact hit event when two shapes touch faster than the
 //! world's hit-event threshold. The event carries the point and the
 //! approach speed measured by the solver, without having to reconstruct the
 //! velocities before the step. Contacts with players are not counted here:
@@ -96,7 +96,7 @@ impl PhysicsWorld {
     /// the step just taken. Slower than `floor` units/s are left out.
     pub(super) fn contact_impacts(
         &self,
-        _before: &[(BodyId, Vec3)],
+        before: &[(BodyId, Vec3)],
         floor: f32,
     ) -> Vec<ContactImpact> {
         let world = self.b3_world();
@@ -109,17 +109,38 @@ impl PhysicsWorld {
                 let second = self.contact_party(&world, event.shape_id_b)?;
                 let (body, other) = match (first, second) {
                     (Party::Prop(body), Party::Prop(other)) => (body, Some(other)),
-                    (Party::Prop(body), Party::Map | Party::Player) => (body, None),
-                    (Party::Map | Party::Player, Party::Prop(body)) => (body, None),
+                    (Party::Prop(body), Party::Map | Party::Player)
+                    | (Party::Map | Party::Player, Party::Prop(body)) => (body, None),
                     _ => return None,
                 };
                 if matches!(first, Party::Player) || matches!(second, Party::Player) {
                     return None;
                 }
-                (event.approach_speed > floor).then_some(ContactImpact {
+                // The solver's approach speed includes the bias it applies to
+                // push overlapping shapes apart. At map load every prop that
+                // is a little inside the floor or another prop would then
+                // "hit" it at correction speed and break. Judge the hit by
+                // how fast the shapes were actually moving before the step;
+                // props use their pre-step velocity, while a moving brush
+                // (a door or lift) contributes its kinematic velocity.
+                let velocity = |party: Party, shape: b3::ShapeId| match party {
+                    Party::Prop(id) => before
+                        .iter()
+                        .find(|(other, _)| *other == id)
+                        .map_or(Vec3::ZERO, |&(_, velocity)| velocity),
+                    Party::Map | Party::Player => {
+                        let handle = b3::shape::shape_get_body(&world, shape);
+                        from_b3(b3::body::body_get_linear_velocity(&world, handle))
+                    }
+                };
+                let closing = (velocity(first, event.shape_id_a)
+                    - velocity(second, event.shape_id_b))
+                .dot(from_b3(event.normal));
+                let speed = event.approach_speed.min(closing.max(0.0));
+                (speed > floor).then_some(ContactImpact {
                     body,
                     other,
-                    speed: event.approach_speed,
+                    speed,
                     position: from_b3(event.point),
                 })
             })

@@ -83,6 +83,9 @@ pub(super) struct PropHealth {
     broken: bool,
     /// Seconds until a broken prop that respawns comes back.
     respawn_in: Option<f32>,
+    /// The tick it was added, so the contacts it makes while it settles
+    /// into the map do not hurt it.
+    born: u64,
     /// How near an explosive prop is to going off.
     fuse: Fuse,
     /// Who set it burning, for the credit.
@@ -148,6 +151,11 @@ pub struct PropScrapeEvent {
 /// Ticks between reports of props that keep sliding.
 pub(super) const SCRAPE_INTERVAL: u64 = 5;
 
+/// Ticks a new prop may push itself out of the map or another prop without
+/// those contacts counting as impacts. Props placed a little inside a floor
+/// or each other would otherwise break before the match starts.
+const IMPACT_SETTLE_TICKS: u64 = 45;
+
 /// The breakable props of a simulation, by body.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Breakables {
@@ -156,7 +164,7 @@ pub(super) struct Breakables {
 }
 
 impl Breakables {
-    pub(super) fn register(&mut self, body: BodyId, spec: &Breakable) {
+    pub(super) fn register(&mut self, body: BodyId, spec: &Breakable, tick: u64) {
         self.props.insert(
             body,
             PropHealth {
@@ -164,6 +172,7 @@ impl Breakables {
                 spec: spec.clone(),
                 broken: false,
                 respawn_in: None,
+                born: tick,
                 fuse: Fuse::Idle,
                 igniter: None,
                 launched: 0.0,
@@ -179,6 +188,14 @@ impl Breakables {
         {
             state.launched = seconds;
         }
+    }
+
+    /// Whether `body` was added so recently that its settling contacts
+    /// should not count as impacts.
+    pub(super) fn settling(&self, body: BodyId, tick: u64) -> bool {
+        self.props
+            .get(&body)
+            .is_some_and(|state| tick.saturating_sub(state.born) < IMPACT_SETTLE_TICKS)
     }
 
     /// Whether `body` can break and has not yet.
@@ -241,6 +258,13 @@ impl Simulation {
             let Some(mass) = self.physics.mass(impact.body) else {
                 continue;
             };
+            if self.breakables.settling(impact.body, self.tick)
+                || impact
+                    .other
+                    .is_some_and(|other| self.breakables.settling(other, self.tick))
+            {
+                continue;
+            }
             self.prop_impacts_pending.push(PropImpactEvent {
                 body: impact.body,
                 position: impact.position,

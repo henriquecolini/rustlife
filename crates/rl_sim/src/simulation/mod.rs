@@ -433,7 +433,7 @@ impl Simulation {
     pub fn add_prop(&mut self, desc: &PropDesc) -> BodyId {
         let body = self.physics.add_prop(desc);
         if let Some(breakable) = &desc.breakable {
-            self.breakables.register(body, breakable);
+            self.breakables.register(body, breakable, self.tick);
         }
         body
     }

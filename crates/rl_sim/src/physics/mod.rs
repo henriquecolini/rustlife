@@ -26,7 +26,7 @@
 //!
 //! Physics runs only on the server (clients interpolate what it sends), so
 //! unlike movement it need not be bit-identical across machines. Given the
-//! same inputs on the same build it still is: Box3D is deterministic, and
+//! same inputs on the same build it still is: `Box3D` is deterministic, and
 //! bodies are only ever visited in insertion order.
 
 use std::sync::Once;
@@ -68,8 +68,8 @@ pub use props::{Breakable, GibPiece, Motion, PropDesc, prop_desc};
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-/// Source units per metre. Both Box3D and the rest of the simulation work in
-/// Source units, so this is also Box3D's global unit scale.
+/// Source units per metre. Both `Box3D` and the rest of the simulation work in
+/// Source units, so this is also `Box3D`'s global unit scale.
 pub const UNITS_PER_METRE: f32 = 1.0 / 0.0254;
 
 /// The map's static geometry.
@@ -88,9 +88,9 @@ const MAP_BODY: u64 = u64::MAX;
 /// were last built.
 const MOVED_EPSILON: f32 = 1e-8;
 
-/// Set Box3D's unit scale once, before any world is created.
+/// Set `Box3D`'s unit scale once, before any world is created.
 ///
-/// Box3D's tolerances and defaults are all scaled by this global value. It
+/// `Box3D`'s tolerances and defaults are all scaled by this global value. It
 /// has to be the same for every world in the process because the library
 /// stores it in a global, so the client's ragdoll world uses Source units
 /// too.
@@ -137,7 +137,7 @@ struct Piece {
     maxs: Vec3,
 }
 
-/// What the world knows about a prop beyond Box3D's body.
+/// What the world knows about a prop beyond `Box3D`'s body.
 #[derive(Debug, Clone)]
 struct PropBody {
     pieces: Vec<Piece>,
@@ -399,7 +399,7 @@ impl PhysicsWorld {
         }
         let handle = body.handle;
         if changed {
-            let old: Vec<_> = self.bodies[player.index()].shapes.drain(..).collect();
+            let old: Vec<_> = std::mem::take(&mut self.bodies[player.index()].shapes);
             for shape in old {
                 b3::shape::destroy_shape(self.b3_world_mut(), shape, false);
             }
@@ -843,12 +843,12 @@ impl PhysicsWorld {
         self.apply_impulse(prop, -normal * change * mass, center);
     }
 
-    /// The Box3D world, for reads.
+    /// The `Box3D` world, for reads.
     fn b3_world(&self) -> MutexGuard<'_, World> {
         self.world.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The Box3D world, for writes. `&mut self` already guarantees exclusive
+    /// The `Box3D` world, for writes. `&mut self` already guarantees exclusive
     /// access, so no runtime lock is needed.
     fn b3_world_mut(&mut self) -> &mut World {
         self.world.get_mut().unwrap_or_else(PoisonError::into_inner)
@@ -918,7 +918,7 @@ impl PhysicsWorld {
     }
 
     /// Makes the props moving faster than `ccd_min_speed` bullets for this
-    /// step: Box3D sweeps those against the other props in their way, which
+    /// step: `Box3D` sweeps those against the other props in their way, which
     /// stops a hard throw from passing through a crate, while slow props
     /// (almost all of them, almost all of the time) cost nothing extra.
     fn sweep_fast_props(&mut self, velocities: &[(BodyId, Vec3)]) {
@@ -992,7 +992,7 @@ fn add_player_shape(world: &mut World, handle: b3::BodyId, hull: &Hull) -> b3::S
     create_hull_shape(world, handle, &shape_def, &box_hull.base)
 }
 
-/// Converts a piece of our collision hull to Box3D's hull, falling back to a
+/// Converts a piece of our collision hull to `Box3D`'s hull, falling back to a
 /// box if the point set is degenerate. Returns the hulls and their total
 /// volume in cubic Source units.
 fn prepared_hulls(pieces: &[ConvexHull]) -> (Vec<HullData>, f32) {

@@ -874,6 +874,22 @@ fn a_gentle_drop_leaves_a_crate_whole() {
 }
 
 #[test]
+fn a_crate_spawned_inside_the_floor_does_not_break_while_settling() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let crate_ = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(-200.0, 400.0, -24.0),
+        (8.0, 32.0),
+        20.0,
+        None,
+    ));
+    let events = arena.idle(20);
+    assert!(breaks(&events).is_empty(), "{:?}", breaks(&events));
+    assert!(!arena.sim.physics().is_broken(crate_));
+}
+
+#[test]
 fn a_respawnable_barrel_comes_back_where_it_was_unless_someone_stands_there() {
     let data = data();
     let mut arena = Arena::new(&data, 2000.0);

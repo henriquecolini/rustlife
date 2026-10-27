@@ -1,4 +1,4 @@
-//! The map's static geometry as Box3D colliders.
+//! The map's static geometry as `Box3D` colliders.
 //!
 //! Props collide with the same brushes players do, minus the clip brushes
 //! meant for players only: every brush that is solid, glass, a grate or a
@@ -46,10 +46,7 @@ pub(super) fn add_map(world: &mut b3::world::World, map: &CollisionWorld) -> usi
     let shape = static_shape(GROUP_WORLD);
     let mut count = 0;
     for corners in map.convex_solids(PROP_SOLID | FULL_CLIP) {
-        let points: Vec<B3Vec3> = corners
-            .iter()
-            .map(|&corner| to_b3(Vec3::from(corner)))
-            .collect();
+        let points: Vec<B3Vec3> = corners.iter().map(|&corner| to_b3(corner)).collect();
         let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES) else {
             continue;
         };
@@ -108,10 +105,7 @@ pub(super) fn add_movers(world: &mut b3::world::World, map: &CollisionWorld) -> 
             let shape_def = static_shape(GROUP_WORLD);
             let mut any = false;
             for corners in map.model_solids(model, PROP_SOLID | FULL_CLIP) {
-                let points: Vec<B3Vec3> = corners
-                    .iter()
-                    .map(|&corner| to_b3(Vec3::from(corner)))
-                    .collect();
+                let points: Vec<B3Vec3> = corners.iter().map(|&corner| to_b3(corner)).collect();
                 let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES)
                 else {
                     continue;

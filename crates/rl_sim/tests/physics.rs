@@ -388,6 +388,24 @@ fn a_dropped_crate_reports_hitting_the_floor_once() {
 }
 
 #[test]
+fn a_prop_starting_inside_the_floor_reports_no_hit() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let body = physics.add_prop(&crate_at(
+        Vec3::new(0.0, 0.0, -24.0),
+        8.0,
+        20.0,
+        Motion::Dynamic,
+    ));
+    physics.step();
+    let hits = physics.take_contacts();
+    assert!(
+        hits.iter().all(|hit| hit.body != body),
+        "settling out of the floor was reported as a hit: {hits:?}"
+    );
+}
+
+#[test]
 fn a_prop_striking_a_prop_reports_both_and_not_the_map() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);

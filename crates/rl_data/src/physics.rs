@@ -21,7 +21,7 @@ pub struct PhysicsConfig {
     pub max_speed: f32,
     /// Fastest a prop may spin, degrees/s.
     pub max_angular_speed: f32,
-    /// Box3D solver sub-steps per tick: more keeps fast hits and stacks
+    /// `Box3D` solver sub-steps per tick: more keeps fast hits and stacks
     /// from sinking props into each other, at a higher cost.
     pub ccd_substeps: u32,
     /// A prop moving faster than this, units/s, is swept against the other

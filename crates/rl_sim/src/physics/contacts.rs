@@ -3,7 +3,7 @@
 //!
 //! A prop held by a player does not collide with that player (or it would
 //! push them around while they carry it), nor, once let go, until the two
-//! have come apart: a Box3D *filter joint* disables contacts between that
+//! have come apart: a `Box3D` *filter joint* disables contacts between that
 //! specific pair before the solver sees them.
 //!
 //! A prop that *starts* touching a player during a step may have hit them.

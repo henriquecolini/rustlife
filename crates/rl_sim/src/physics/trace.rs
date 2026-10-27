@@ -3,7 +3,7 @@
 //! Movement sweeps the player's box against props exactly as against
 //! brushes: each convex piece of a prop is a set of clip planes (built when
 //! the prop moves, see `PhysicsWorld::refresh_planes`), and the box is
-//! clipped against the pieces near its path. Box3D's broad phase finds the
+//! clipped against the pieces near its path. `Box3D`'s broad phase finds the
 //! candidate props.
 
 use box3d_rust as b3;
