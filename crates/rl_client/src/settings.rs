@@ -25,6 +25,10 @@ const SAVE_DELAY_SECS: f32 = 0.75;
 /// Radians a pixel of mouse motion turns the view at sensitivity 1.
 pub const RADIANS_PER_PIXEL: f32 = 0.003;
 
+/// The key that switches between windowed and fullscreen. It is reserved: no
+/// action can be bound to it.
+pub const FULLSCREEN_KEY: KeyCode = KeyCode::F11;
+
 /// The player's settings.
 #[derive(Resource, Debug, Clone, PartialEq, Deref, DerefMut)]
 pub struct Settings(pub rl_config::Settings);
@@ -85,7 +89,6 @@ const KEYS: &[(KeyCode, &str, &str)] = &[
     (KeyCode::F8, "F8", "F8"),
     (KeyCode::F9, "F9", "F9"),
     (KeyCode::F10, "F10", "F10"),
-    (KeyCode::F11, "F11", "F11"),
     (KeyCode::F12, "F12", "F12"),
     (KeyCode::Space, "Space", "Space"),
     (KeyCode::Tab, "Tab", "Tab"),
@@ -282,6 +285,24 @@ pub fn window_mode(video: &VideoSettings) -> WindowMode {
     }
 }
 
+/// The window mode [`FULLSCREEN_KEY`] switches to from `current`: a window
+/// goes to the fullscreen mode it last left (borderless the first time),
+/// and either fullscreen mode goes back to the window.
+#[must_use]
+pub fn toggled_window_mode(
+    current: rl_config::WindowMode,
+    last_fullscreen: Option<rl_config::WindowMode>,
+) -> rl_config::WindowMode {
+    match current {
+        rl_config::WindowMode::Windowed => {
+            last_fullscreen.unwrap_or(rl_config::WindowMode::Borderless)
+        }
+        rl_config::WindowMode::Borderless | rl_config::WindowMode::Fullscreen => {
+            rl_config::WindowMode::Windowed
+        }
+    }
+}
+
 /// The present mode for the vsync setting.
 #[must_use]
 pub fn present_mode(video: &VideoSettings) -> PresentMode {
@@ -312,6 +333,7 @@ impl Plugin for SettingsPlugin {
             Update,
             (
                 rebuild_bindings,
+                toggle_fullscreen,
                 apply_window,
                 apply_camera,
                 apply_texture_detail,
@@ -326,6 +348,24 @@ fn rebuild_bindings(settings: Res<Settings>, mut bindings: ResMut<Bindings>) {
     if settings.is_changed() {
         *bindings = Bindings::from_controls(&settings.controls);
     }
+}
+
+/// Flips the window mode setting on [`FULLSCREEN_KEY`], in the menus and in
+/// play alike; [`apply_window`] then changes the window and the settings are
+/// saved, so the next start opens the way the player left it.
+fn toggle_fullscreen(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<Settings>,
+    mut last_fullscreen: Local<Option<rl_config::WindowMode>>,
+) {
+    if !keys.just_pressed(FULLSCREEN_KEY) {
+        return;
+    }
+    let current = settings.video.window_mode;
+    if current != rl_config::WindowMode::Windowed {
+        *last_fullscreen = Some(current);
+    }
+    settings.video.window_mode = toggled_window_mode(current, *last_fullscreen);
 }
 
 fn apply_window(settings: Res<Settings>, mut windows: Query<&mut Window, With<PrimaryWindow>>) {
@@ -429,6 +469,8 @@ fn save_later(
 
 #[cfg(test)]
 mod tests {
+    use rl_config::WindowMode as Mode;
+
     use super::*;
 
     #[test]
@@ -509,6 +551,93 @@ mod tests {
             WindowMode::BorderlessFullscreen(_)
         ));
         assert_eq!(msaa(&video), Msaa::Off);
+    }
+
+    /// An app that runs only [`toggle_fullscreen`], with `mode` configured.
+    fn app_with_window_mode(mode: Mode) -> App {
+        let mut settings = rl_config::Settings::default();
+        settings.video.window_mode = mode;
+        let mut app = App::new();
+        app.insert_resource(Settings(settings))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, toggle_fullscreen);
+        app
+    }
+
+    /// One frame in which F11 goes down.
+    fn tap_f11(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(FULLSCREEN_KEY);
+        keys.clear();
+        keys.press(FULLSCREEN_KEY);
+        app.update();
+    }
+
+    /// One frame with F11 up.
+    fn idle_frame(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(FULLSCREEN_KEY);
+        keys.clear();
+        app.update();
+    }
+
+    fn window_mode_of(app: &App) -> Mode {
+        app.world().resource::<Settings>().video.window_mode
+    }
+
+    #[test]
+    fn toggling_goes_between_the_window_and_the_fullscreen_it_left() {
+        assert_eq!(toggled_window_mode(Mode::Windowed, None), Mode::Borderless);
+        assert_eq!(
+            toggled_window_mode(Mode::Windowed, Some(Mode::Fullscreen)),
+            Mode::Fullscreen
+        );
+        assert_eq!(
+            toggled_window_mode(Mode::Borderless, Some(Mode::Fullscreen)),
+            Mode::Windowed
+        );
+        assert_eq!(toggled_window_mode(Mode::Fullscreen, None), Mode::Windowed);
+    }
+
+    #[test]
+    fn f11_toggles_a_window_and_borderless_fullscreen() {
+        let mut app = app_with_window_mode(Mode::Windowed);
+        idle_frame(&mut app);
+        assert_eq!(window_mode_of(&app), Mode::Windowed, "nothing pressed");
+        tap_f11(&mut app);
+        assert_eq!(window_mode_of(&app), Mode::Borderless);
+        tap_f11(&mut app);
+        assert_eq!(window_mode_of(&app), Mode::Windowed);
+    }
+
+    #[test]
+    fn f11_returns_to_the_exclusive_fullscreen_the_player_chose() {
+        let mut app = app_with_window_mode(Mode::Fullscreen);
+        tap_f11(&mut app);
+        assert_eq!(window_mode_of(&app), Mode::Windowed);
+        tap_f11(&mut app);
+        assert_eq!(window_mode_of(&app), Mode::Fullscreen);
+    }
+
+    #[test]
+    fn holding_f11_toggles_once() {
+        let mut app = app_with_window_mode(Mode::Windowed);
+        tap_f11(&mut app);
+        for _ in 0..3 {
+            // Still held: the key is down but did not just go down.
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .clear();
+            app.update();
+        }
+        assert_eq!(window_mode_of(&app), Mode::Borderless);
+    }
+
+    #[test]
+    fn f11_is_reserved_and_cannot_be_bound() {
+        assert_eq!(Binding::parse("F11"), None);
+        assert_eq!(Binding::Key(FULLSCREEN_KEY).name(), None);
+        assert!(Binding::parse("F12").is_some(), "its neighbours still can");
     }
 }
 

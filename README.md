@@ -103,9 +103,12 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Left mouse (Gravity Gun) | Throw the held prop, or punt the one under the crosshair |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Pause menu: resume, settings, leave the match |
+| F11 | Switch between a window and fullscreen (anywhere, menus included) |
 | 1 – 4 | Vote for the next map while the scoreboard is up |
 
-Keys are the defaults; rebind them in Settings.
+Keys are the defaults; rebind them in Settings. F11 is reserved and cannot be
+rebound; it changes the same Window mode setting Settings does, so the game
+opens the way you left it.
 
 Every game runs on a server. Playing a map from the menu or with
 `--map` hosts it in-process; to play with others:
