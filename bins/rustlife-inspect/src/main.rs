@@ -64,6 +64,14 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
+    /// Decode a texture's frames to PAM images (RGBA) in a directory.
+    Texture {
+        /// Virtual path of the `.vtf`.
+        path: String,
+        /// Directory to write `frameN.pam` into.
+        #[arg(long, short)]
+        out: PathBuf,
+    },
     /// List a model's sequences: label, activity, frame rate, length and events.
     Sequences {
         /// Virtual path of the model, e.g. `models/weapons/v_pistol.mdl`.
@@ -160,6 +168,27 @@ fn run(command: &Command, game: &MountedGame) -> Result<()> {
                 "wrote {} bytes to {}",
                 data.len(),
                 destination.display()
+            )?;
+        }
+        Command::Texture { path, out: dir } => {
+            let data = read(game, path)?;
+            let frames = source_formats::vtf::decode_frames(&data, 64)?;
+            std::fs::create_dir_all(dir)?;
+            for (index, frame) in frames.iter().enumerate() {
+                let mut pam = format!(
+                    "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n",
+                    frame.width, frame.height
+                )
+                .into_bytes();
+                pam.extend_from_slice(&frame.rgba8);
+                std::fs::write(dir.join(format!("frame{index}.pam")), pam)?;
+            }
+            writeln!(
+                out,
+                "{} frames, {}x{}",
+                frames.len(),
+                frames[0].width,
+                frames[0].height
             )?;
         }
         Command::Sequences { model } => sequences(game, model, &mut out)?,
