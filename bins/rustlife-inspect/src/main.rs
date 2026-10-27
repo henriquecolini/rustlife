@@ -167,11 +167,15 @@ fn run(command: &Command, game: &MountedGame) -> Result<()> {
     Ok(())
 }
 
-/// Prints each sequence of `model` with its length in seconds.
+/// Prints each sequence of `model` with its length in seconds, and the
+/// pose parameters its blends follow.
 fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()> {
     let mdl = read(game, model)?;
     let ani = read(game, &model.replace(".mdl", ".ani")).ok();
     let animation = source_formats::anim::read(&mdl, ani.as_deref())?;
+    for (index, parameter) in animation.pose_parameters.iter().enumerate() {
+        writeln!(out, "pose parameter {index}: {parameter:?}")?;
+    }
     for sequence in &animation.sequences {
         let clip = sequence
             .blends
@@ -195,6 +199,13 @@ fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()
             sequence.activity,
             if sequence.looping { "loop" } else { "" }
         )?;
+        if sequence.blends.len() > 1 {
+            writeln!(
+                out,
+                "    blends {:?} grid {:?} parameters {:?} ranges {:?}",
+                sequence.blends, sequence.group, sequence.parameters, sequence.ranges
+            )?;
+        }
         for event in &sequence.events {
             writeln!(
                 out,
