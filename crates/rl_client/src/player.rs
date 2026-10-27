@@ -319,7 +319,7 @@ fn toggle_noclip(
 fn look(
     mouse: Res<AccumulatedMouseMotion>,
     settings: Res<Settings>,
-    zoom: Res<Zoom>,
+    zoom: Option<Res<Zoom>>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut angles: ResMut<ViewAngles>,
 ) {
@@ -329,8 +329,8 @@ fn look(
     if !grabbed || mouse.delta == Vec2::ZERO {
         return;
     }
-    let degrees_per_pixel =
-        (RADIANS_PER_PIXEL * settings.controls.sensitivity).to_degrees() * zoom.sensitivity;
+    let degrees_per_pixel = (RADIANS_PER_PIXEL * settings.controls.sensitivity).to_degrees()
+        * zoom.map_or(1.0, |zoom| zoom.sensitivity);
     let invert = if settings.controls.invert_y {
         -1.0
     } else {
@@ -467,7 +467,7 @@ fn place_camera(
     game: Game,
     angles: Res<ViewAngles>,
     movement: Res<Movement>,
-    shake: Res<crate::particles::Shake>,
+    shake: Option<Res<crate::particles::Shake>>,
     clock: Res<Time>,
     mut camera: Query<&mut Transform, With<FlyCam>>,
 ) {
@@ -493,7 +493,8 @@ fn place_camera(
     };
     let position = eye(&player.previous).lerp(eye(&player.current), alpha) + error;
     transform.translation = coords::position(position.to_array());
-    transform.rotation = view_rotation(*angles) * shake.rotation(clock.elapsed_secs());
+    transform.rotation = view_rotation(*angles)
+        * shake.map_or(Quat::IDENTITY, |shake| shake.rotation(clock.elapsed_secs()));
 }
 
 /// The camera rotation for Source view angles.

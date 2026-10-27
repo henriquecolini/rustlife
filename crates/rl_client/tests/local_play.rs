@@ -238,3 +238,95 @@ fn the_map_is_stocked_and_weapons_answer_their_keys() {
     run_for(&mut app, 0.1);
     assert_eq!(weapon(&app).as_deref(), Some("manipulator"));
 }
+
+/// Every spawn point of `dm_lockdown` puts the player somewhere free, and a
+/// player left standing there stays put: no overlap with the map, no
+/// jitter.
+#[test]
+#[ignore = "requires an HL2DM install; set RUSTLIFE_TEST_GAME_DIR"]
+fn spawns_are_free_and_steady() {
+    let Some(mut probe) = client(0, 0) else {
+        return;
+    };
+    wait_for_player(&mut probe);
+    let spawns = sim(&probe).expect("game").spawns().len();
+    drop(probe);
+    let mut bad = Vec::new();
+    for index in 0..spawns {
+        let Some(mut app) = client(index, 0) else {
+            return;
+        };
+        wait_for_player(&mut app);
+        // The player is made where the server put it, then moved to the
+        // chosen spawn and left to land: let that finish first.
+        run_for(&mut app, 0.6);
+        let first = player(&app).expect("player").current.origin;
+        // Then stand still for a second, watching for overlap and wander.
+        let mut overlap_ticks = 0;
+        let mut travelled = 0.0_f32;
+        let mut last = first;
+        for _ in 0..200 {
+            app.update();
+            std::thread::sleep(Duration::from_millis(5));
+            let now = player(&app).expect("player").current.origin;
+            travelled += (now - last).length();
+            last = now;
+            let sim = sim(&app).expect("game");
+            let hull = rl_sim::collision::Hull::from(&sim.data().movement.hulls.standing);
+            let trace = sim.world().trace_hull(
+                now,
+                now,
+                &hull,
+                rl_sim::collision::contents::MASK_PLAYER_SOLID,
+            );
+            overlap_ticks += usize::from(trace.start_solid);
+        }
+        let overlap = overlap_ticks > 0;
+        eprintln!(
+            "spawn {index}: at {first:?} overlap ticks {overlap_ticks} travelled {travelled:.2}"
+        );
+        if overlap || travelled > 2.0 {
+            bad.push(index);
+        }
+    }
+    assert!(bad.is_empty(), "bad spawns: {bad:?}");
+}
+
+/// A scripted teleport into solid map settles on a free spot and stays
+/// there: the capture tools used to be left jittering inside a wall.
+#[test]
+#[ignore = "requires an HL2DM install; set RUSTLIFE_TEST_GAME_DIR"]
+fn a_scripted_teleport_into_a_wall_settles_free() {
+    let Some(mut app) = client(0, 0) else {
+        return;
+    };
+    app.insert_resource(
+        rl_client::script::InputScript::default()
+            .with_teleport(Some(([-2843.0, 1928.0, 60.0], (0.0, 0.0)))),
+    );
+    wait_for_player(&mut app);
+    run_for(&mut app, 0.6);
+    let settled = player(&app).expect("player").current.origin;
+    let mut travelled = 0.0_f32;
+    let mut last = settled;
+    for _ in 0..200 {
+        app.update();
+        std::thread::sleep(Duration::from_millis(5));
+        let now = player(&app).expect("player").current.origin;
+        travelled += (now - last).length();
+        last = now;
+        let sim = sim(&app).expect("game");
+        let hull = rl_sim::collision::Hull::from(&sim.data().movement.hulls.standing);
+        let trace = sim.world().trace_hull(
+            now,
+            now,
+            &hull,
+            rl_sim::collision::contents::MASK_PLAYER_SOLID,
+        );
+        assert!(!trace.start_solid, "inside the map at {now:?}");
+    }
+    assert!(
+        travelled < 1.0,
+        "wandered {travelled} units from {settled:?}"
+    );
+}

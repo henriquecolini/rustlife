@@ -51,6 +51,10 @@ const SCRIPT_AMMO: u32 = 1000;
 const STAND_DIRECTIONS: usize = 16;
 /// A place to stand needs a floor at most this far below the feet, units.
 const FLOOR_REACH: f32 = 64.0;
+/// How far below a teleport target the floor is looked for, units.
+const DROP_REACH: f32 = 4096.0;
+/// How far a teleported player may drift before being put back, units.
+const STAND_DRIFT: f32 = 1.0;
 
 /// Scripted actions by app time, in seconds.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
@@ -175,6 +179,9 @@ struct Progress {
     lever: Search<(f32, f32)>,
     /// Whether use was pressed.
     used: bool,
+    /// Once the teleport has been made: the free spot it ended up at, or
+    /// `None` if there was no room anywhere near.
+    stand: Search<Vec3>,
 }
 
 /// A one-time search for something a step acts on.
@@ -240,9 +247,37 @@ pub(crate) fn apply(
         }
     }
     if let Some((at, look)) = script.teleport {
-        // Held there every tick, so nothing (gravity, water) moves the view.
-        sim.teleport_player(player, Vec3::from(at));
-        (cmd.pitch, cmd.yaw) = look;
+        // A point inside the map is moved to the nearest free one, and one in
+        // the air is dropped to the floor below it. Find that spot once: a
+        // player held in mid-air fights the prediction's gravity every tick,
+        // and the view jitters.
+        let stand = script.progress.stand.find_once(|| {
+            sim.teleport_player(player, Vec3::from(at));
+            let origin = sim.player(player)?.state.origin;
+            let hull = rl_sim::collision::Hull::from(&sim.data().movement.hulls.standing);
+            let floor = sim.world().trace_hull(
+                origin,
+                origin - Vec3::Z * DROP_REACH,
+                &hull,
+                MASK_PLAYER_SOLID,
+            );
+            let origin = if floor.start_solid { origin } else { floor.end };
+            sim.teleport_player(player, origin);
+            if origin.distance(Vec3::from(at)) > 0.5 {
+                warn!("teleport target {at:?} is not on free floor; standing at {origin:?}");
+            }
+            Some(origin)
+        });
+        if let Some(origin) = stand {
+            // Put back only if something (a push, a respawn) moved the player.
+            if sim
+                .player(player)
+                .is_some_and(|p| p.state.origin.distance(origin) > STAND_DRIFT)
+            {
+                sim.teleport_player(player, origin);
+            }
+            (cmd.pitch, cmd.yaw) = look;
+        }
     }
     if script.grab_at.is_some_and(|at| now >= at) {
         grab(script, player, sim, cmd);
