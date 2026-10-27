@@ -242,7 +242,9 @@ rustlife --map dm_lockdown --dummies 3
 ```
 
 adds three training dummies: players who stand at their spawn points and
-respawn when killed. For scripted captures, `--weapon <id>` puts a weapon
+respawn when killed. From the menus, the Play screen's **Bots** field (type 0
+to 15, limited by the server's player count) adds the same bots to a hosted
+match, and remembers the number for the next one. For scripted captures, `--weapon <id>` puts a weapon
 in hand with plenty of ammo, `--shoot-for <secs>` goes to the nearest dummy
 and fires at it, and `--visit-pickup` goes to look at the nearest pickup:
 

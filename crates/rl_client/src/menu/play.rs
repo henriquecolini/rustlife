@@ -4,16 +4,29 @@ use bevy::prelude::*;
 
 use super::{Ctx, Menu, Scrollable, heading, start_hosted};
 use crate::content::Content;
+use crate::ui::widgets::TextField;
 use crate::ui::{
-    Activate, ButtonStyle, Disabled, Reveal, Toggle, ValueChanged, button, theme, toggle,
+    Activate, ButtonStyle, Disabled, Reveal, Toggle, ValueChanged, button, text_field, theme,
+    toggle,
 };
+
+/// Most bots that can be asked for. The server's player limit applies on top.
+const MAX_BOTS: usize = 15;
+/// Characters the bots field takes.
+const BOTS_DIGITS: usize = 2;
 
 /// What the player has picked so far.
 #[derive(Resource, Debug, Default)]
 pub(super) struct PlayDraft {
     map: Option<String>,
     listen: bool,
+    /// Training bots to add to the match.
+    bots: usize,
 }
+
+/// The field where the number of bots that join the match is typed.
+#[derive(Component)]
+struct BotsField;
 
 /// A map card, and the map it stands for.
 #[derive(Component)]
@@ -24,7 +37,7 @@ pub(super) struct PlayPlugin;
 impl Plugin for PlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayDraft>()
-            .add_systems(Update, show_selection);
+            .add_systems(Update, (show_selection, show_bots));
     }
 }
 
@@ -103,6 +116,18 @@ pub(super) fn spawn(layer: &mut ChildSpawnerCommands, ctx: &Ctx) {
             });
 
             page.spawn(Node {
+                max_width: Val::Px(420.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((
+                    BotsField,
+                    text_field(ctx.fonts, "Bots", "", "0", BOTS_DIGITS),
+                ))
+                .observe(on_bots_changed);
+            });
+
+            page.spawn(Node {
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(24.0),
@@ -172,6 +197,34 @@ fn spawn_card(grid: &mut ChildSpawnerCommands, ctx: &Ctx, name: &str, origin: &s
     });
 }
 
+fn on_bots_changed(
+    changed: On<ValueChanged>,
+    fields: Query<&TextField>,
+    mut draft: ResMut<PlayDraft>,
+) {
+    if let Ok(field) = fields.get(changed.entity) {
+        draft.bots = bots_from(&field.value);
+    }
+}
+
+/// What was typed as a number of bots: its digits, as far as they go, and
+/// nothing when there are none.
+fn bots_from(typed: &str) -> usize {
+    let digits: String = typed.chars().filter(char::is_ascii_digit).collect();
+    digits.parse::<usize>().unwrap_or(0).min(MAX_BOTS)
+}
+
+/// A freshly opened Play screen starts with the number picked last time.
+fn show_bots(draft: Res<PlayDraft>, mut fields: Query<&mut TextField, Added<BotsField>>) {
+    for mut field in &mut fields {
+        field.value = if draft.bots == 0 {
+            String::new()
+        } else {
+            draft.bots.to_string()
+        };
+    }
+}
+
 fn on_listen_changed(
     changed: On<ValueChanged>,
     toggles: Query<&Toggle>,
@@ -201,7 +254,14 @@ fn start_game_now(world: &mut World) {
     let settings = world.resource::<crate::settings::Settings>().clone();
     let port = world.resource::<crate::player::Gameplay>().0.net.port;
     let listen = world.resource::<PlayDraft>().listen;
-    start_hosted(&map, listen, &settings, port, world);
+    let room = world
+        .resource::<crate::player::Gameplay>()
+        .0
+        .net
+        .max_players
+        .saturating_sub(1) as usize;
+    let bots = world.resource::<PlayDraft>().bots.min(room);
+    start_hosted(&map, listen, bots, &settings, port, world);
 }
 
 /// The chosen map, or the first deathmatch map when none was picked.
@@ -238,5 +298,44 @@ fn show_selection(draft: Res<PlayDraft>, mut cards: Query<(&MapCard, &mut Border
         if *border != wanted {
             *border = wanted;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_text_becomes_a_bot_count_within_range() {
+        assert_eq!(bots_from(""), 0);
+        assert_eq!(bots_from("7"), 7);
+        assert_eq!(bots_from(" 12 "), 12);
+        assert_eq!(bots_from("abc"), 0);
+        assert_eq!(bots_from("4x"), 4);
+        assert_eq!(bots_from("99"), MAX_BOTS);
+        assert_eq!(bots_from("-3"), 3);
+    }
+
+    #[test]
+    fn a_new_play_screen_shows_the_last_number_picked() {
+        let mut app = App::new();
+        app.insert_resource(PlayDraft {
+            bots: 6,
+            ..PlayDraft::default()
+        });
+        app.add_systems(Update, show_bots);
+        let field = app
+            .world_mut()
+            .spawn((
+                BotsField,
+                TextField {
+                    value: String::new(),
+                    placeholder: "0".into(),
+                    max_chars: BOTS_DIGITS,
+                },
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<TextField>(field).unwrap().value, "6");
     }
 }

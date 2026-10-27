@@ -392,6 +392,7 @@ pub(crate) fn heading(parent: &mut ChildSpawnerCommands, ctx: &Ctx, title: &str,
 pub(crate) fn start_hosted(
     map: &str,
     listen: bool,
+    bots: usize,
     settings: &crate::settings::Settings,
     data_port: u16,
     world: &mut World,
@@ -402,6 +403,7 @@ pub(crate) fn start_hosted(
         port: listen.then_some(data_port),
     };
     net.name.clone_from(&settings.player.name);
+    net.dummies = bots;
     world
         .resource_mut::<NetStatus>()
         .clone_from(&NetStatus::Idle);
