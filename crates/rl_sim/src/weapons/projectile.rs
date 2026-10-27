@@ -248,6 +248,7 @@ mod tests {
 
     fn config() -> ProjectileConfig {
         ProjectileConfig {
+            skin: 0,
             model: "m.mdl".to_owned(),
             speed: 1000.0,
             lift: 0.0,

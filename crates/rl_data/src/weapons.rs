@@ -107,6 +107,10 @@ pub struct WeaponConfig {
     /// How a SLAM goes from one mode to the other.
     #[serde(default)]
     pub slam_switch: Option<SlamSwitchConfig>,
+    /// A skin of the view model shown while a round is loaded (the
+    /// Crossbow's glowing bolt), if the weapon has one.
+    #[serde(default)]
+    pub loaded_skin: Option<LoadedSkinConfig>,
     /// How HL2 ranks the weapon when one has to be chosen for the player:
     /// the heaviest weapon that has ammo is brought up when the weapon in
     /// hand has none left.
@@ -354,6 +358,10 @@ pub struct GlowConfig {
 pub struct ProjectileConfig {
     /// Model drawn for it.
     pub model: String,
+    /// Which of the model's skins it is drawn with (the Crossbow's bolt has
+    /// a glowing one).
+    #[serde(default)]
+    pub skin: usize,
     /// Launch speed, units/s.
     pub speed: f32,
     /// Extra launch speed upwards, units/s, for lobbed throws.
@@ -456,6 +464,17 @@ pub struct SlamSwitchConfig {
     pub to_stick: f32,
     /// Seconds the change to the throwing mode takes.
     pub to_throw: f32,
+}
+
+/// The view model skin of a weapon with a round in it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadedSkinConfig {
+    /// The model's skin while a round is loaded; skin 0 is shown otherwise.
+    pub skin: usize,
+    /// Seconds into a reload at which the round shows (the animation's
+    /// `EVENT_WEAPON_RELOAD`); a weapon that has a round is already showing it.
+    pub shows_at: f32,
 }
 
 /// A projectile that is a physics body.
@@ -927,6 +946,7 @@ mod tests {
             weight: 0,
             slam: false,
             slam_switch: None,
+            loaded_skin: None,
             auto_switch_to: true,
             auto_switch_from: true,
             zoom: None,

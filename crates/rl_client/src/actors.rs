@@ -531,6 +531,7 @@ fn draw_projectiles(
             &config.model,
             projectile_transform(projectile.position, flight_direction(projectile)),
         );
+        crate::props::set_skin(&mut commands, entity, config.skin);
         commands
             .entity(entity)
             .insert((ProjectileView(projectile.id), Moving));

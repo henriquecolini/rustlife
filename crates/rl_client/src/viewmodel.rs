@@ -38,7 +38,8 @@ use crate::camera::FlyCam;
 use crate::laser::LaserPlugin;
 use crate::net::Game;
 use crate::player::{LocalPlayer, Ticked, ViewMode};
-use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
+use crate::props::{LightAt, ModelHandles, Moving, Prop, spawn_model};
+use crate::world::{MaterialMaps, PartSlot, Surface};
 use crate::zoom::ZoomPlugin;
 
 /// The render layer only the view model camera sees.
@@ -85,6 +86,7 @@ impl Plugin for ViewModelPlugin {
                 swap_view_model,
                 layer_meshes,
                 animate_view_model,
+                show_loaded_skin,
                 follow_camera,
                 light_view_model,
             )
@@ -248,6 +250,75 @@ fn swap_view_model(
         ),
         RenderLayers::layer(VIEW_LAYER),
     ));
+}
+
+/// The skin of a view model whose weapon shows a loaded round (the
+/// Crossbow's glowing bolt): that skin while a round is in it, or once a
+/// reload has put one in, and the first otherwise.
+fn loaded_skin(
+    loaded: rl_data::LoadedSkinConfig,
+    reload: Option<rl_data::Reload>,
+    phase: Phase,
+    clip: Option<u32>,
+) -> usize {
+    let reloaded = match (phase, reload) {
+        (Phase::Reloading(left), Some(rl_data::Reload::Whole { time })) => {
+            time - left >= loaded.shows_at
+        }
+        _ => false,
+    };
+    if clip.is_some_and(|clip| clip > 0) || reloaded {
+        loaded.skin
+    } else {
+        0
+    }
+}
+
+/// Gives the view model the skin its weapon shows now, where it has more
+/// than one for a loaded round.
+fn show_loaded_skin(
+    game: Game,
+    local: Option<Res<LocalPlayer>>,
+    models: Res<Assets<rl_assets::ModelAsset>>,
+    asset_server: Res<AssetServer>,
+    mut material_maps: ResMut<MaterialMaps>,
+    mut views: Query<(&ViewModel, &mut Prop, Option<&Children>)>,
+    mut parts: Query<(&PartSlot, &mut Surface)>,
+) {
+    let (Some(sim), Some(local)) = (game.sim(), local) else {
+        return;
+    };
+    let Some(inventory) = sim.player(local.id).map(|player| &player.inventory) else {
+        return;
+    };
+    for (view, mut prop, children) in &mut views {
+        let Some(config) = sim.arsenal().weapon(view.weapon) else {
+            continue;
+        };
+        let skin = config.loaded_skin.map_or(0, |loaded| {
+            loaded_skin(
+                loaded,
+                config.clip.as_ref().map(|clip| clip.reload),
+                inventory.phase(),
+                inventory.clip(view.weapon),
+            )
+        });
+        let (true, Some(model), Some(children)) =
+            (prop.skin != skin, models.get(&prop.model), children)
+        else {
+            continue;
+        };
+        prop.skin = skin;
+        for child in children {
+            let Ok((slot, mut surface)) = parts.get_mut(*child) else {
+                continue;
+            };
+            if let Some(material) = model.material(skin, slot.0) {
+                material_maps.request(material, &asset_server);
+                material.clone_into(&mut surface.0);
+            }
+        }
+    }
 }
 
 /// Keeps the view model at the eyes, turned with the view. It is a root
@@ -671,5 +742,24 @@ mod tests {
             fire_activity(roll, Mode::Secondary, None, false),
             "ACT_VM_HAULBACK"
         );
+    }
+
+    #[test]
+    fn a_loaded_crossbow_shows_its_glowing_skin() {
+        let loaded = rl_data::LoadedSkinConfig {
+            skin: 1,
+            shows_at: 0.933,
+        };
+        let reload = Some(rl_data::Reload::Whole { time: 1.833 });
+        let skin = |phase, clip| loaded_skin(loaded, reload, phase, clip);
+        assert_eq!(skin(Phase::Ready, Some(1)), 1, "a bolt in it");
+        assert_eq!(skin(Phase::Ready, Some(0)), 0, "nothing in it");
+        // Reloading: dark until the animation puts the bolt in.
+        assert_eq!(skin(Phase::Reloading(1.8), Some(0)), 0);
+        assert_eq!(skin(Phase::Reloading(1.833 - 0.9), Some(0)), 0);
+        assert_eq!(skin(Phase::Reloading(1.833 - 0.95), Some(0)), 1);
+        assert_eq!(skin(Phase::Reloading(0.1), Some(0)), 1);
+        // A weapon not carried shows nothing.
+        assert_eq!(skin(Phase::Ready, None), 0);
     }
 }

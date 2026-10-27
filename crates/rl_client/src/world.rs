@@ -24,10 +24,11 @@ use bevy::math::Affine2;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
-use rl_assets::{MapAsset, MapMesh, SOURCE, SourceMaterial};
+use rl_assets::{MapAsset, MapMesh, SOURCE, SinePulse, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
 
 use crate::camera::FlyCam;
+use crate::viewmodel::ViewModel;
 use crate::{AppState, CurrentMap, GameVfs};
 
 /// The render layer of the 3D skybox, which only the sky camera sees.
@@ -59,6 +60,9 @@ pub(crate) struct MaterialMaps {
     /// Materials whose texture slides (`TextureScroll`): the Bevy materials
     /// built for them, and the proxy's rate and angle.
     scrolling: Vec<(Vec<Handle<StandardMaterial>>, f32, f32)>,
+    /// Glow layers that pulse (a `Sine` proxy on `$selfillumtint`): the
+    /// material, how bright it is when the pulse is at its full, and the pulse.
+    pulsing: Vec<(Handle<StandardMaterial>, LinearRgba, SinePulse)>,
 }
 
 impl MaterialMaps {
@@ -85,6 +89,8 @@ struct Resolved {
     /// For `$selfillum`: the surface's own colour, over it where its alpha
     /// says so, whatever the light.
     glow: Option<Handle<StandardMaterial>>,
+    /// The same for the view model, brighter, which its bloom feeds on.
+    view_glow: Option<Handle<StandardMaterial>>,
 }
 
 /// The root of a brush entity (door, breakable, ...).
@@ -110,9 +116,14 @@ struct BlendLayered;
 #[derive(Component, Debug, Clone)]
 pub(crate) struct UnlitMesh(pub(crate) Handle<Mesh>);
 
-/// Marks a surface whose glow layer has already been spawned.
+/// Marks a surface whose glow layer has been spawned, and holds the layer.
 #[derive(Component)]
-struct GlowLayered;
+struct GlowLayered(Entity);
+
+/// Which of its model's material slots a part of a model is drawn with, for
+/// changing its skin.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct PartSlot(pub(crate) usize);
 
 /// The neutral material a surface shows until its real material is ready.
 #[derive(Resource)]
@@ -148,7 +159,14 @@ impl Plugin for WorldPlugin {
             .add_systems(
                 Update,
                 (
-                    (spawn_when_loaded, resolve_materials, scroll_textures).chain(),
+                    (
+                        spawn_when_loaded,
+                        drop_stale_glow,
+                        resolve_materials,
+                        scroll_textures,
+                        pulse_glows,
+                    )
+                        .chain(),
                     cull_by_visibility,
                     inherit_render_layers,
                 )
@@ -492,6 +510,7 @@ type SurfaceItems = (
 fn resolve_materials(
     mut commands: Commands,
     mut surfaces: Query<SurfaceItems>,
+    views: Query<(), With<ViewModel>>,
     mut material_maps: ResMut<MaterialMaps>,
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
@@ -521,26 +540,7 @@ fn resolve_materials(
             let Some(source) = source_materials.get(&source_handle) else {
                 continue;
             };
-            let base = standard_from(source);
-            let resolved = Resolved {
-                vertex_lit: standard_materials.add(StandardMaterial {
-                    unlit: true,
-                    ..base.clone()
-                }),
-                base: standard_materials.add(base),
-                blend: source
-                    .base_color2
-                    .clone()
-                    .map(|texture| standard_materials.add(blend_layer(texture))),
-                glow: self_lit(source).map(|texture| standard_materials.add(glow_layer(texture))),
-            };
-            if let Some((rate, angle)) = source.scroll {
-                material_maps.scrolling.push((
-                    vec![resolved.base.clone(), resolved.vertex_lit.clone()],
-                    rate,
-                    angle,
-                ));
-            }
+            let resolved = build_materials(source, &mut standard_materials, &mut material_maps);
             material_maps
                 .resolved
                 .insert(name.clone(), resolved.clone());
@@ -567,7 +567,13 @@ fn resolve_materials(
                 .insert(BlendLayered)
                 .add_child(layer);
         }
-        if let (Some(glow), false) = (resolved.glow, glowing) {
+        let in_view = parent.is_some_and(|parent| views.contains(parent.parent()));
+        let glow = if in_view {
+            resolved.view_glow
+        } else {
+            resolved.glow
+        };
+        if let (Some(glow), false) = (glow, glowing) {
             // The same mesh, skin included, drawn again in its own colour
             // where it shines. Beside the surface rather than under it, where
             // it is a part of its model like the surface.
@@ -578,12 +584,54 @@ fn resolve_materials(
                 layer.insert(skin.clone());
             }
             let layer = layer.id();
-            commands.entity(entity).insert(GlowLayered);
+            commands.entity(entity).insert(GlowLayered(layer));
             commands
                 .entity(parent.map_or(entity, ChildOf::parent))
                 .add_child(layer);
         }
     }
+}
+
+/// The Bevy materials of a loaded `source` material, and the registrations
+/// for those that move (a scrolling texture, a pulsing glow).
+fn build_materials(
+    source: &SourceMaterial,
+    standard_materials: &mut Assets<StandardMaterial>,
+    material_maps: &mut MaterialMaps,
+) -> Resolved {
+    let base = standard_from(source);
+    let resolved = Resolved {
+        vertex_lit: standard_materials.add(StandardMaterial {
+            unlit: true,
+            ..base.clone()
+        }),
+        base: standard_materials.add(base),
+        blend: source
+            .base_color2
+            .clone()
+            .map(|texture| standard_materials.add(blend_layer(texture))),
+        glow: self_lit(source)
+            .map(|texture| standard_materials.add(glow_layer(texture, source, 1.0))),
+        view_glow: self_lit(source)
+            .map(|texture| standard_materials.add(glow_layer(texture, source, VIEW_GLOW_GAIN))),
+    };
+    if let Some(pulse) = source.self_illum_pulse {
+        let tint = source.self_illum_tint.unwrap_or([1.0; 3]);
+        for (handle, gain) in [(&resolved.glow, 1.0), (&resolved.view_glow, VIEW_GLOW_GAIN)] {
+            if let Some(handle) = handle {
+                let full = LinearRgba::rgb(tint[0] * gain, tint[1] * gain, tint[2] * gain);
+                material_maps.pulsing.push((handle.clone(), full, pulse));
+            }
+        }
+    }
+    if let Some((rate, angle)) = source.scroll {
+        material_maps.scrolling.push((
+            vec![resolved.base.clone(), resolved.vertex_lit.clone()],
+            rate,
+            angle,
+        ));
+    }
+    resolved
 }
 
 /// Slides the textures of materials with a `TextureScroll` proxy.
@@ -603,14 +651,40 @@ fn scroll_textures(
     }
 }
 
+/// Removes the glow layer of a surface that has been given another material
+/// (a new skin); the next pass makes the new one's, if it has one.
+fn drop_stale_glow(mut commands: Commands, stale: Query<(Entity, &GlowLayered), Changed<Surface>>) {
+    for (surface, layer) in &stale {
+        commands.entity(layer.0).try_despawn();
+        commands.entity(surface).remove::<GlowLayered>();
+    }
+}
+
+/// Pulses the glow layers that blink, as a SLAM's light does.
+fn pulse_glows(
+    time: Res<Time>,
+    maps: Res<MaterialMaps>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let seconds = time.elapsed_secs();
+    for (handle, full, pulse) in &maps.pulsing {
+        if let Some(mut material) = materials.get_mut(handle) {
+            let level = pulse.at(seconds);
+            material.base_color =
+                Color::linear_rgb(full.red * level, full.green * level, full.blue * level);
+        }
+    }
+}
+
 /// How opaque a water surface is drawn: what lies below shows through
 /// faintly, tinted by the water's fog.
 const WATER_OPACITY: f32 = 0.75;
 
-/// How bright a `$selfillum` surface shines, over the 1.0 of its colour:
+/// How bright a `$selfillum` view model shines, over the 1.0 of its colour:
 /// Source's HDR lets it exceed what the lit surface can, which is what the
-/// bloom of a view model feeds on.
-const SELF_ILLUM_GAIN: f32 = 2.0;
+/// bloom of a view model feeds on. (Elsewhere it shines as bright as its
+/// colour, there being no bloom.)
+const VIEW_GLOW_GAIN: f32 = 2.0;
 
 /// The base texture of a `$selfillum` material, whose alpha says how much of
 /// the surface shines (an alpha-tested or translucent one uses it for that).
@@ -624,9 +698,10 @@ fn self_lit(source: &SourceMaterial) -> Option<Handle<Image>> {
 /// Source's `$selfillum`: a surface's lit colour is mixed with its own, lit
 /// by nothing, by the texture's alpha. Drawn over the lit surface, it is the
 /// own colour blended in by that alpha.
-fn glow_layer(texture: Handle<Image>) -> StandardMaterial {
+fn glow_layer(texture: Handle<Image>, source: &SourceMaterial, gain: f32) -> StandardMaterial {
+    let tint = source.self_illum_tint.unwrap_or([1.0; 3]);
     StandardMaterial {
-        base_color: Color::linear_rgb(SELF_ILLUM_GAIN, SELF_ILLUM_GAIN, SELF_ILLUM_GAIN),
+        base_color: Color::linear_rgb(tint[0] * gain, tint[1] * gain, tint[2] * gain),
         base_color_texture: Some(texture),
         unlit: true,
         cull_mode: None,
@@ -750,7 +825,7 @@ mod tests {
 
     #[test]
     fn the_glow_layer_blends_the_unlit_colour_by_the_alpha() {
-        let layer = glow_layer(Handle::default());
+        let layer = glow_layer(Handle::default(), &SourceMaterial::default(), 1.0);
         assert!(layer.unlit);
         assert_eq!(layer.alpha_mode, AlphaMode::Blend);
         assert_eq!(layer.emissive, LinearRgba::BLACK);

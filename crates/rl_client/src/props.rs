@@ -51,7 +51,8 @@ use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::player::{LocalPlayer, Movement, ViewAngles};
 use crate::world::{
-    MapHandle, MapScoped, MaterialMaps, Placeholder, SKY_LAYER, Surface, UnlitMesh, VertexLit,
+    MapHandle, MapScoped, MaterialMaps, PartSlot, Placeholder, SKY_LAYER, Surface, UnlitMesh,
+    VertexLit,
 };
 
 /// A moving prop is relit once it has moved this far since it was last
@@ -87,6 +88,17 @@ impl Plugin for PropsPlugin {
                     .run_if(in_state(AppState::InGame)),
             );
     }
+}
+
+/// Draws the model of `entity` (made by [`spawn_model`]) with its `skin`.
+pub(crate) fn set_skin(commands: &mut Commands, entity: Entity, skin: usize) {
+    commands
+        .entity(entity)
+        .queue(move |mut entity: EntityWorldMut| {
+            if let Some(mut prop) = entity.get_mut::<Prop>() {
+                prop.skin = skin;
+            }
+        });
 }
 
 /// A placed model: the root entity of a static prop or prop entity.
@@ -370,7 +382,7 @@ fn attach_models(
                 }
                 if let Some(material) = model.material(prop.skin, part.material) {
                     material_maps.request(material, &asset_server);
-                    child.insert(Surface(material.to_owned()));
+                    child.insert((Surface(material.to_owned()), PartSlot(part.material)));
                 }
             }
         });

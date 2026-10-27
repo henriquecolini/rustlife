@@ -15,6 +15,10 @@ Weapon(
     world_model: "models/weapons/w_crossbow.mdl",
     clip: Some((ammo: "bolt", size: 1, reload: Whole(time: 1.833))),
     auto_reload: Some(0.667),
+    // The view model's second skin has the bolt glowing (`crossbow
+    // dirtmap_glow`, which the game shows while a bolt is loaded). The reload
+    // puts it in 0.933 s in (the animation's event 3005).
+    loaded_skin: Some((skin: 1, shows_at: 0.933)),
     zoom: Some((fov: 20.0, in_time: 0.1, out_time: 0.2)),
     primary: Some((
         interval: 0.75,
@@ -23,6 +27,8 @@ Weapon(
         ammo: Clip(1),
         shot: Projectile((
             model: "models/crossbow_bolt.mdl",
+            // The bolt's glowing skin (`rebar_glow`, red-hot).
+            skin: 1,
             speed: 3500.0,
             lift: 0.0,
             // HL2's SetGravity(0.05).
