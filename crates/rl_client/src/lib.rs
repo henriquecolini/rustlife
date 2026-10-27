@@ -59,6 +59,7 @@ pub mod menu;
 pub mod movers;
 pub mod net;
 pub mod particles;
+pub mod pcf_particles;
 pub mod player;
 pub mod props;
 pub mod ragdolls;

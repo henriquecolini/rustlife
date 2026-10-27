@@ -1,6 +1,6 @@
 # Plan: HL2DM visual effects, Gravity Gun and physics fidelity
 
-Status: not started. Everything in `docs/combat.md` (weapon numbers, timings,
+Status: in progress — 1.1 (PCF parser) and the 1.2 simulation core (`rl_client::pcf_particles::sim`) are done; rendering and spawning remain. Everything in `docs/combat.md` (weapon numbers, timings,
 mechanics) is done; this plan covers what is left of "make it identical to
 HL2DM". Work in small commits; run `cargo run -q -p xtask -- ci` before each.
 
