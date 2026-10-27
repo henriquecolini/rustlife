@@ -152,6 +152,11 @@ impl Simulation {
         player.state = state;
         player.look = (cmd.pitch, cmd.yaw);
         prediction.moved = moved;
+        // A SLAM in hand takes the mode the aim calls for.
+        self.aim_slam(id, cmd.pitch, cmd.yaw, false);
+        let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
+            return prediction;
+        };
         prediction.weapon = player.inventory.tick(&arsenal, cmd, self.dt);
 
         let Some((weapon, mode)) = prediction.weapon.fired else {

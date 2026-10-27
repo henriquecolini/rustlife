@@ -342,44 +342,98 @@ fn slams(arena: &Arena) -> u32 {
         .ammo(slam)
 }
 
-#[test]
-fn a_tripmine_is_set_on_a_wall_in_reach_and_only_there() {
-    let data = data();
-    let wall = WorldBuilder::new().solid_box(
+/// A wall across the arena, 100 units ahead of the shooter at the origin.
+fn wall() -> WorldBuilder {
+    WorldBuilder::new().solid_box(
         Vec3::new(100.0, -500.0, 0.0),
         Vec3::new(120.0, 500.0, 300.0),
-    );
-    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    )
+}
+
+fn sticking(arena: &Arena) -> bool {
+    arena
+        .sim
+        .player(arena.shooter)
+        .expect("shooter")
+        .inventory
+        .slam_sticking()
+}
+
+fn explosions(events: &[TickEvents]) -> usize {
+    events.iter().flat_map(|e| &e.explosions).count()
+}
+
+#[test]
+fn a_slam_picks_its_mode_from_what_is_in_reach() {
+    let data = data();
+    let mut arena = Arena::with_world(&data, 2000.0, wall());
     arena.arm("slam");
-    assert_eq!(slams(&arena), 5);
-    // Far from the wall there is nothing to set it on: no shot.
+    assert!(sticking(&arena), "a wall 100 units ahead: sticking");
+    // Walk back out of reach: the aim holds for a moment, then it throws.
     arena
         .sim
         .teleport_player(arena.shooter, Vec3::new(-2000.0, 0.0, 1.0));
-    arena.idle(5);
-    arena.hold(Buttons::ATTACK, 0.0, 1);
-    assert!(arena.sim.grenades().is_empty());
-    assert_eq!(slams(&arena), 5, "the charge is given back");
-    // Next to the wall it is set (once the SLAM is ready again), and spends
-    // one.
-    arena.idle(120);
+    arena.idle(3);
+    assert!(sticking(&arena), "not at once");
+    arena.idle(20);
+    assert!(!sticking(&arena), "nothing in reach: throwing");
+    // And back to the wall.
     arena
         .sim
         .teleport_player(arena.shooter, Vec3::new(0.0, 0.0, 1.0));
-    arena.idle(5);
+    // (The change to throwing was still playing: it waits for it.)
+    arena.idle(100);
+    assert!(sticking(&arena));
+}
+
+#[test]
+fn a_change_of_mode_cannot_fire_until_its_transition_is_over() {
+    let data = data();
+    let mut arena = Arena::with_world(&data, 2000.0, wall());
+    arena.arm("slam");
+    arena
+        .sim
+        .teleport_player(arena.shooter, Vec3::new(-2000.0, 0.0, 1.0));
+    arena.idle(20);
+    assert!(!sticking(&arena));
+    // The change to throwing (1 s) is still playing.
+    arena.hold(Buttons::ATTACK, 0.0, 20);
+    assert!(arena.sim.grenades().is_empty(), "too soon to throw");
+    arena.hold(Buttons::ATTACK, 0.0, 80);
+    assert_eq!(arena.sim.grenades().len(), 1, "then it throws");
+}
+
+#[test]
+fn near_a_wall_a_slam_sets_a_tripmine_on_it_and_the_alternate_button_does_nothing() {
+    let data = data();
+    let mut arena = Arena::with_world(&data, 2000.0, wall());
+    arena.arm("slam");
+    let before = slams(&arena);
+    // The alternate button neither throws, detonates nor switches.
+    arena.hold(Buttons::ATTACK2, 0.0, 10);
+    assert!(arena.sim.grenades().is_empty());
+    assert!(sticking(&arena));
+    // The primary button sticks one on the wall.
     arena.hold(Buttons::ATTACK, 0.0, 1);
     assert_eq!(arena.sim.grenades().len(), 1);
-    assert_eq!(slams(&arena), 4);
+    let mine = arena.sim.grenades()[0];
+    assert!(
+        (mine.position.x - 100.0).abs() < 8.0,
+        "on the wall: {mine:?}"
+    );
+    assert_eq!(slams(&arena), before - 1);
+    // It cannot be detonated by hand (before its beam is armed and sets it
+    // off on the one who set it).
+    arena.idle(30);
+    let events = arena.hold(Buttons::ATTACK2, 0.0, 10);
+    assert_eq!(explosions(&events), 0);
+    assert_eq!(arena.sim.grenades().len(), 1);
 }
 
 #[test]
 fn a_tripmine_goes_off_when_something_crosses_its_beam_once_armed() {
     let data = data();
-    let wall = WorldBuilder::new().solid_box(
-        Vec3::new(100.0, -500.0, 0.0),
-        Vec3::new(120.0, 500.0, 300.0),
-    );
-    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    let mut arena = Arena::with_world(&data, 2000.0, wall());
     arena.arm("slam");
     arena.hold(Buttons::ATTACK, 0.0, 1);
     // The mine's beam runs back along the shooter's line: step aside.
@@ -391,73 +445,20 @@ fn a_tripmine_goes_off_when_something_crosses_its_beam_once_armed() {
         .teleport_player(arena.target, Vec3::new(40.0, 0.0, 1.0));
     // Unarmed for the first two seconds: even someone in the beam is safe.
     let early = arena.idle(100);
-    assert_eq!(early.iter().flat_map(|e| &e.explosions).count(), 0);
+    assert_eq!(explosions(&early), 0);
     assert_eq!(arena.health(arena.target), 100.0);
     let later = arena.idle(60);
-    assert_eq!(later.iter().flat_map(|e| &e.explosions).count(), 1);
+    assert_eq!(explosions(&later), 1);
     assert!(arena.health(arena.target) < 60.0, "it hurt");
 }
 
 #[test]
-fn satchels_lie_until_their_thrower_detonates_them() {
+fn a_tripmine_set_on_a_player_goes_where_they_go() {
     let data = data();
-    let mut arena = Arena::new(&data, 2000.0);
+    let mut arena = Arena::new(&data, 80.0);
     arena.arm("slam");
-    // The alternate button first switches from tripmines to satchels.
-    arena.hold(Buttons::ATTACK2, 0.0, 1);
-    arena.idle(5);
-    arena.hold(Buttons::ATTACK, 0.0, 1);
-    arena.idle(5);
-    assert_eq!(arena.sim.grenades().len(), 1);
-    let quiet = arena.idle(300);
-    assert_eq!(quiet.iter().flat_map(|e| &e.explosions).count(), 0);
-    // Now it detonates the satchel instead of switching.
-    let mut events = arena.hold(Buttons::ATTACK2, 0.0, 1);
-    events.extend(arena.idle(3));
-    assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 1);
-    assert!(arena.sim.grenades().is_empty());
-}
-
-/// A player with the SLAM in satchel mode, standing at the origin looking
-/// along +X, with `wall` as the world.
-fn satchel_arena(data: &GameData, wall: WorldBuilder) -> Arena {
-    let mut arena = Arena::with_world(data, 2000.0, wall);
-    arena.arm("slam");
-    // The alternate button switches from tripmines to satchels.
-    arena.hold(Buttons::ATTACK2, 0.0, 1);
-    arena.idle(5);
-    arena
-}
-
-#[test]
-fn a_satchel_sticks_to_a_wall_within_reach_instead_of_being_thrown() {
-    let data = data();
-    let wall = WorldBuilder::new().solid_box(
-        Vec3::new(100.0, -500.0, 0.0),
-        Vec3::new(120.0, 500.0, 300.0),
-    );
-    let mut arena = satchel_arena(&data, wall);
-    arena.hold(Buttons::ATTACK, 0.0, 1);
-    arena.idle(60);
-    assert_eq!(arena.sim.grenades().len(), 1);
-    let satchel = arena.sim.grenades()[0];
-    assert!(
-        (satchel.position.x - 100.0).abs() < 8.0,
-        "on the wall's face, not fallen: {satchel:?}"
-    );
-    // It stays through the seconds a thrown one would roll in.
-    arena.idle(200);
-    assert!((arena.sim.grenades()[0].position - satchel.position).length() < 0.5);
-}
-
-#[test]
-fn a_satchel_stuck_to_a_player_goes_where_they_go() {
-    let data = data();
-    let mut arena = satchel_arena(&data, WorldBuilder::new());
-    arena
-        .sim
-        .teleport_player(arena.target, Vec3::new(80.0, 0.0, 1.0));
-    arena.idle(5);
+    // The player ahead is the surface in reach.
+    assert!(sticking(&arena));
     arena.hold(Buttons::ATTACK, 0.0, 1);
     arena.idle(5);
     let stuck = arena.sim.grenades()[0].position;
@@ -468,6 +469,36 @@ fn a_satchel_stuck_to_a_player_goes_where_they_go() {
     arena.idle(5);
     let moved = arena.sim.grenades()[0].position;
     assert!(moved.y > 250.0, "went with them: {moved}");
+}
+
+#[test]
+fn in_the_open_a_slam_throws_satchels_that_lie_until_their_thrower_detonates_them() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    arena.arm("slam");
+    assert!(!sticking(&arena), "nothing in reach: throwing");
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.idle(5);
+    assert_eq!(arena.sim.grenades().len(), 1);
+    let quiet = arena.idle(300);
+    assert_eq!(explosions(&quiet), 0);
+    // The alternate button detonates it.
+    let mut events = arena.hold(Buttons::ATTACK2, 0.0, 1);
+    events.extend(arena.idle(3));
+    assert_eq!(explosions(&events), 1);
+    assert!(arena.sim.grenades().is_empty());
+}
+
+#[test]
+fn the_alternate_button_with_no_satchels_out_does_nothing() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    arena.arm("slam");
+    arena.hold(Buttons::ATTACK2, 0.0, 10);
+    assert!(!sticking(&arena), "it does not switch modes");
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.idle(5);
+    assert_eq!(arena.sim.grenades().len(), 1, "still throws satchels");
 }
 
 #[test]

@@ -95,13 +95,18 @@ pub struct WeaponConfig {
     /// shotgun's pump).
     #[serde(default)]
     pub pump: Option<f32>,
-    /// An HL2 SLAM: the primary fire uses the mode it is in (the primary
-    /// fire mode's projectile for satchels, the secondary's for tripmines),
-    /// and the alternate button detonates the thrower's satchels or, with
-    /// none out, switches between the modes. Tripmines are set on walls
-    /// within 128 units.
+    /// An HL2 SLAM, which is in one of two modes by itself: with a surface
+    /// (the map, a prop, a player) within 128 units along the view it is in
+    /// its *sticking* mode, where the primary button sets the secondary fire
+    /// mode's tripmine on it and the alternate button does nothing; otherwise
+    /// in its *throwing* mode, where the primary button throws the primary
+    /// fire mode's satchel and the alternate button detonates the thrower's
+    /// satchels.
     #[serde(default)]
     pub slam: bool,
+    /// How a SLAM goes from one mode to the other.
+    #[serde(default)]
+    pub slam_switch: Option<SlamSwitchConfig>,
     /// How HL2 ranks the weapon when one has to be chosen for the player:
     /// the heaviest weapon that has ammo is brought up when the weapon in
     /// hand has none left.
@@ -440,6 +445,19 @@ pub struct MissileConfig {
     pub muzzle: [f32; 3],
 }
 
+/// How a SLAM changes mode: it must keep aiming at (or away from) a surface
+/// for a moment, then plays a transition during which it cannot fire.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlamSwitchConfig {
+    /// Seconds the aim must stay where it is before the mode changes.
+    pub delay: f32,
+    /// Seconds the change to the sticking mode takes.
+    pub to_stick: f32,
+    /// Seconds the change to the throwing mode takes.
+    pub to_throw: f32,
+}
+
 /// A projectile that is a physics body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -472,11 +490,6 @@ pub struct ProjectileBodyConfig {
     /// on a fuse.
     #[serde(default)]
     pub remote: bool,
-    /// With a surface (the map, a prop or a player) within this distance of
-    /// the eyes along the view, it is stuck there and goes along with what
-    /// it is stuck to, instead of being thrown (a satchel).
-    #[serde(default)]
-    pub stick_reach: Option<f32>,
     /// The fuse's ticking, if it ticks.
     #[serde(default)]
     pub blip: Option<BlipConfig>,
@@ -913,6 +926,7 @@ mod tests {
             laser: false,
             weight: 0,
             slam: false,
+            slam_switch: None,
             auto_switch_to: true,
             auto_switch_from: true,
             zoom: None,

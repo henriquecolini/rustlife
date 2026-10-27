@@ -88,6 +88,12 @@ pub(crate) struct ViewModel {
     reloads: u8,
     dries: u8,
     pumps: u8,
+    /// The same for a SLAM's changes of mode and detonations.
+    slam_switches: u8,
+    slam_detonations: u8,
+    /// Activities to play, in turn, as the one playing ends (a SLAM's
+    /// second half of attaching a mine).
+    queue: Vec<&'static str>,
     /// A shot charging (or a grenade being let go) has started its
     /// animation.
     charging: bool,
@@ -183,6 +189,9 @@ fn swap_view_model(
             reloads: 0,
             dries: 0,
             pumps: 0,
+            slam_switches: 0,
+            slam_detonations: 0,
+            queue: Vec::new(),
             charging: false,
         },
         Moving,
@@ -264,17 +273,56 @@ fn fire_activity(
     }
 }
 
-/// A SLAM's own names for the activities every weapon has: it draws, idles
-/// and acts differently in its tripmine and satchel modes.
-fn slam_activity(activity: &'static str, tripmine: bool) -> &'static str {
-    match (activity, tripmine) {
-        ("ACT_VM_DRAW", true) => "ACT_SLAM_TRIPMINE_DRAW",
-        ("ACT_VM_DRAW", false) => "ACT_SLAM_THROW_DRAW",
-        ("ACT_VM_IDLE", true) => "ACT_SLAM_TRIPMINE_IDLE",
-        ("ACT_VM_IDLE", false) => "ACT_SLAM_THROW_IDLE",
-        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", true) => "ACT_SLAM_TRIPMINE_ATTACH",
-        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", false) => "ACT_SLAM_THROW_THROW",
+/// A SLAM's own names for the activities every weapon has. It is in one of
+/// two modes: *throwing* (a satchel in hand, with the detonator in the other
+/// when satchels are out, `detonator`) and *sticking*, held up to a surface
+/// to set a mine. `ACT_VM_DRAW_NEXT` is the draw of the next charge after
+/// one was thrown, which has the detonator in hand.
+fn slam_activity(activity: &'static str, sticking: bool, detonator: bool) -> &'static str {
+    match (activity, sticking) {
+        ("ACT_VM_DRAW" | "ACT_VM_DRAW_NEXT", true) => "ACT_SLAM_TRIPMINE_DRAW",
+        ("ACT_VM_DRAW", false) if detonator => "ACT_SLAM_THROW_DRAW",
+        ("ACT_VM_DRAW", false) => "ACT_SLAM_THROW_ND_DRAW",
+        ("ACT_VM_DRAW_NEXT", false) => "ACT_SLAM_DETONATOR_THROW_DRAW",
+        ("ACT_VM_IDLE", true) if detonator => "ACT_SLAM_STICKWALL_IDLE",
+        ("ACT_VM_IDLE", true) => "ACT_SLAM_STICKWALL_ND_IDLE",
+        ("ACT_VM_IDLE", false) if detonator => "ACT_SLAM_THROW_IDLE",
+        ("ACT_VM_IDLE", false) => "ACT_SLAM_THROW_ND_IDLE",
+        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", true) => "ACT_SLAM_STICKWALL_ATTACH",
+        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", false) if detonator => {
+            "ACT_SLAM_THROW_THROW"
+        }
+        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", false) => "ACT_SLAM_THROW_THROW_ND",
         _ => activity,
+    }
+}
+
+/// The activity of a SLAM that changed mode or detonated its satchels since
+/// last looked at.
+fn slam_event_activity(view: &mut ViewModel, inventory: &Inventory) -> Option<&'static str> {
+    let mut wanted = None;
+    if inventory.slam_switch_count() != view.slam_switches {
+        view.slam_switches = inventory.slam_switch_count();
+        view.queue.clear();
+        wanted = Some(slam_switch_activity(
+            inventory.slam_sticking(),
+            inventory.slam_detonator(),
+        ));
+    }
+    if inventory.slam_detonate_count() != view.slam_detonations {
+        view.slam_detonations = inventory.slam_detonate_count();
+        wanted = Some("ACT_SLAM_THROW_DETONATE");
+    }
+    wanted
+}
+
+/// The activity of a SLAM changing to `sticking` mode (or back to throwing).
+fn slam_switch_activity(sticking: bool, detonator: bool) -> &'static str {
+    match (sticking, detonator) {
+        (true, true) => "ACT_SLAM_THROW_TO_STICKWALL",
+        (true, false) => "ACT_SLAM_THROW_TO_STICKWALL_ND",
+        (false, true) => "ACT_SLAM_STICKWALL_TO_THROW",
+        (false, false) => "ACT_SLAM_STICKWALL_TO_THROW_ND",
     }
 }
 
@@ -327,6 +375,41 @@ fn inventory_activity(
     wanted
 }
 
+/// What the view model does once the sequence playing ends: the next of
+/// those queued, the next charge being brought up after a throw, or the
+/// idle, faded in over the end of the last (a weapon drawn back stays so).
+fn follow_up(
+    view: &mut ViewModel,
+    animated: &Animated,
+    player: &mut SequencePlayer,
+    act: &impl Fn(&'static str) -> &'static str,
+    slam: bool,
+) {
+    let sequences = &animated.animation.sequences;
+    let idle = player.current().is_none() || player.ends_within(sequences, player.fade);
+    if !idle || view.primed.is_some() {
+        return;
+    }
+    if !view.queue.is_empty() {
+        let activity = view.queue.remove(0);
+        if let Some(sequence) = animated.activity(activity) {
+            player.restart(sequence, 1.0);
+        }
+    } else if view.thrown {
+        view.thrown = false;
+        let next = if slam {
+            "ACT_VM_DRAW_NEXT"
+        } else {
+            "ACT_VM_DRAW"
+        };
+        if let Some(sequence) = animated.activity(act(next)) {
+            player.restart(sequence, 1.0);
+        }
+    } else if let Some(sequence) = animated.activity(act("ACT_VM_IDLE")) {
+        player.play(sequence, 0.0, 1.0);
+    }
+}
+
 /// Plays the view model's activities as the local player acts.
 fn animate_view_model(
     mut ticks: MessageReader<Ticked>,
@@ -349,8 +432,12 @@ fn animate_view_model(
     let slam = inventory
         .zip(sim.arsenal().weapon(view.weapon))
         .filter(|(_, config)| config.slam)
-        .map(|(inventory, _)| inventory.slam_tripmine());
-    let act = |name: &'static str| slam.map_or(name, |tripmine| slam_activity(name, tripmine));
+        .map(|(inventory, _)| (inventory.slam_sticking(), inventory.slam_detonator()));
+    let act = |name: &'static str| {
+        slam.map_or(name, |(sticking, detonator)| {
+            slam_activity(name, sticking, detonator)
+        })
+    };
     if !view.drawn {
         view.drawn = true;
         player.fade = VIEW_FADE_SECS;
@@ -363,6 +450,9 @@ fn animate_view_model(
     }
     if let Some(inventory) = inventory {
         wanted = inventory_activity(&mut view, inventory, sim.arsenal(), ducked).or(wanted);
+        if slam.is_some() {
+            wanted = slam_event_activity(&mut view, inventory).or(wanted);
+        }
     }
     // A weapon drawn back keeps its pose for as long as it is held.
     let primed = sim
@@ -397,12 +487,19 @@ fn animate_view_model(
                 continue;
             }
             wanted = Some(fire_activity(fire, mode, struck, ducked));
+            // A SLAM brings up its next charge when it is done (a mine goes
+            // on in two parts first).
+            if let Some((sticking, _)) = slam {
+                view.thrown = true;
+                if sticking {
+                    view.queue = vec!["ACT_SLAM_STICKWALL_ATTACH2"];
+                }
+            }
         }
         if events.tools.iter().any(|&(id, _)| mine(id)) && wanted.is_none() {
             wanted = Some("ACT_VM_PRIMARYATTACK");
         }
     }
-    let sequences = &animated.animation.sequences;
     if let Some(activity) = wanted
         && let Some(sequence) = animated.activity(act(activity))
     {
@@ -413,20 +510,7 @@ fn animate_view_model(
         }
         return;
     }
-    // The idle follows a swing or shot as it ends, faded in over it (a
-    // thrown weapon's next one is brought up instead); a weapon drawn back
-    // stays so.
-    let idle = player.current().is_none() || player.ends_within(sequences, player.fade);
-    if idle && view.primed.is_none() {
-        if view.thrown {
-            view.thrown = false;
-            if let Some(sequence) = animated.activity(act("ACT_VM_DRAW")) {
-                player.restart(sequence, 1.0);
-            }
-        } else if let Some(sequence) = animated.activity(act("ACT_VM_IDLE")) {
-            player.play(sequence, 0.0, 1.0);
-        }
-    }
+    follow_up(&mut view, animated, &mut player, &act, slam.is_some());
 }
 
 /// Keeps the view model lit where the player's eyes are.

@@ -43,6 +43,8 @@ impl Simulation {
     pub(super) fn run_weapon(&mut self, id: PlayerId, cmd: &UserCmd, events: &mut TickEvents) {
         let arsenal = Arc::clone(&self.arsenal);
         let movement_eye = self.eye_position(id);
+        // A SLAM in hand takes the mode the aim calls for.
+        self.aim_slam(id, cmd.pitch, cmd.yaw, true);
         let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };

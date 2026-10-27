@@ -1,13 +1,12 @@
 // The SLAM. HL2DM's: three charges (the weapon's `default_clip2`), five at
-// most. It is in one of two modes; the alternate button switches them, or,
-// with satchels out, detonates them.
-//   - tripmine (the secondary fire mode here): set on a wall within 128
-//     units; armed after a couple of seconds, it goes off when anything
-//     crosses its beam;
-//   - satchel (the primary fire mode here): thrown, it lies where it lands
-//     until its thrower detonates it; if a surface is within 128 units it is
-//     stuck there instead, and goes along with a prop or a player it is
-//     stuck to.
+// most. It is in one of two modes, and picks them itself, never the player:
+//   - sticking, with a surface (the map, a prop, someone) within 128 units
+//     along the view: the primary button sets a tripmine on it (the secondary
+//     fire mode here), which arms after a couple of seconds and goes off when
+//     anything crosses its beam; the alternate button does nothing;
+//   - throwing, with nothing that near: the primary button throws a satchel
+//     (the primary fire mode here), which lies where it lands until its
+//     thrower presses the alternate button.
 // Both do 150 damage (HL2's `sk_plr_dmg_satchel` and `_tripmine`, which the
 // game's server leaves at 0 for its skill files to set). The intervals add up
 // the view model's throw/attach animation and the draw of the next charge
@@ -46,10 +45,6 @@ Weapon(
                 model_center: (0.0, 0.0, 3.0),
                 surface: "weapon",
                 remote: true,
-                // With a wall (or a prop, or someone) within reach the SLAM
-                // sticks the satchel there instead (SatchelAttach: a trace
-                // of 128 units).
-                stick_reach: Some(128.0),
                 mass: 2.0,
                 friction: 0.8,
                 spin: 3.0,
@@ -87,6 +82,9 @@ Weapon(
             )),
         )),
     )),
+    // A change of mode needs the aim to hold for a moment, then plays the
+    // view model's transition (throw_to_stickwall, stickwall_to_throw).
+    slam_switch: Some((delay: 0.15, to_stick: 1.333, to_throw: 1.0)),
     deploy_time: 1.0,
     pickup: Some((ammo: 3, owned_ammo: 3, respawn: 20.0, radius: 24.0)),
     sounds: {},

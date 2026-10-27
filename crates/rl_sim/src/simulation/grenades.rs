@@ -112,11 +112,6 @@ impl Simulation {
             self.place_mine(owner, weapon, mode, projectile, body, aim);
             return;
         }
-        if let Some(reach) = body.stick_reach
-            && self.stick_to_surface(owner, weapon, mode, projectile, body, aim, reach)
-        {
-            return;
-        }
         let forward = view_direction(aim.pitch, aim.yaw);
         let Some(thrower) = self.player(owner) else {
             return;
@@ -195,9 +190,10 @@ impl Simulation {
         self.refresh_grenade_views();
     }
 
-    /// Sets a mine (a fixed body with a beam) on the wall the eyes look at,
-    /// if one is within reach; otherwise the shot is not made and its ammo
-    /// is given back.
+    /// Sets a mine (a fixed body with a beam) on the surface the eyes look at
+    /// within reach (the map, a prop or a player), upright on it; if there is
+    /// none the shot is not made and its ammo is given back. Set on a prop
+    /// or a player, it goes along with them.
     fn place_mine(
         &mut self,
         owner: PlayerId,
@@ -207,59 +203,6 @@ impl Simulation {
         body: &ProjectileBodyConfig,
         aim: &Aim,
     ) {
-        let forward = view_direction(aim.pitch, aim.yaw);
-        let scene = Scene {
-            world: &self.world,
-            physics: &self.physics,
-            ignore: None,
-            others: &[],
-        };
-        let reach = hitscan::trace(
-            &scene,
-            &[],
-            owner,
-            aim.eye,
-            aim.eye + forward * ATTACH_REACH,
-            &Hull::POINT,
-        );
-        if !matches!(reach.struck, Struck::World | Struck::Brush(_)) {
-            self.refund(owner, weapon, mode);
-            return;
-        }
-        let normal = reach.normal.try_normalize().unwrap_or(Vec3::Z);
-        let handle = self.fixed_body(
-            projectile,
-            body,
-            reach.end + normal * body.height * 0.5,
-            Quat::from_rotation_arc(Vec3::Z, normal),
-        );
-        self.grenades.push(Grenade {
-            id: self.next_projectile,
-            body: handle,
-            weapon,
-            mode,
-            owner,
-            age: 0.0,
-            beam_end: None,
-            stuck: None,
-        });
-        self.next_projectile = self.next_projectile.wrapping_add(1);
-        self.refresh_grenade_views();
-    }
-
-    /// Sticks a charge to the surface the eyes look at within `reach`, upright
-    /// on it, if there is one; `false` when there is none and it should be
-    /// thrown. Stuck to a prop or a player, it goes along with them.
-    fn stick_to_surface(
-        &mut self,
-        owner: PlayerId,
-        weapon: WeaponId,
-        mode: Mode,
-        projectile: &ProjectileConfig,
-        body: &ProjectileBodyConfig,
-        aim: &Aim,
-        reach: f32,
-    ) -> bool {
         let forward = view_direction(aim.pitch, aim.yaw);
         let targets = self.targets();
         let scene = Scene {
@@ -273,11 +216,14 @@ impl Simulation {
             &targets,
             owner,
             aim.eye,
-            aim.eye + forward * reach,
+            aim.eye + forward * ATTACH_REACH,
             &Hull::POINT,
         );
         let carrier = match hit.struck {
-            Struck::Nothing => return false,
+            Struck::Nothing => {
+                self.refund(owner, weapon, mode);
+                return;
+            }
             Struck::World | Struck::Brush(_) => None,
             Struck::Prop(prop) => Some(Carrier::Prop(prop)),
             Struck::Player(player) => Some(Carrier::Player(player)),
@@ -312,7 +258,6 @@ impl Simulation {
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
         self.refresh_grenade_views();
-        true
     }
 
     /// A fixed body for a charge set on a surface.
@@ -401,22 +346,75 @@ impl Simulation {
         }
     }
 
-    /// A SLAM's alternate button: detonates the player's satchels if any are
-    /// out, otherwise switches the SLAM between its modes.
+    /// A SLAM's alternate button while it is throwing: detonates the player's
+    /// satchels, if any are out.
     pub(super) fn slam_alt(&mut self, owner: PlayerId) {
-        let arsenal = std::sync::Arc::clone(&self.arsenal);
-        let remote = |grenade: &Grenade| {
+        if self.satchels_out(owner) {
+            self.detonations.push(owner);
+            if let Some(player) = self.player_mut(owner) {
+                player.inventory.note_slam_detonation();
+            }
+        }
+    }
+
+    /// Whether `owner` has satchels out.
+    fn satchels_out(&self, owner: PlayerId) -> bool {
+        self.grenades.iter().any(|grenade| {
             grenade.owner == owner
                 && matches!(
-                    arsenal.fire(grenade.weapon, grenade.mode).map(|fire| &fire.shot),
+                    self.arsenal.fire(grenade.weapon, grenade.mode).map(|fire| &fire.shot),
                     Some(rl_data::Shot::Projectile(config))
                         if config.body.as_ref().is_some_and(|body| body.remote)
                 )
+        })
+    }
+
+    /// Tells the SLAM `owner` holds which mode the aim calls for: sticking if
+    /// a surface (the map, a prop, a player) is within reach along the view,
+    /// throwing if not. With `known_satchels` it also records whether they
+    /// have satchels out (a client's prediction does not see them, and
+    /// leaves that as the server last said).
+    pub(super) fn aim_slam(&mut self, owner: PlayerId, pitch: f32, yaw: f32, known_satchels: bool) {
+        let arsenal = std::sync::Arc::clone(&self.arsenal);
+        if known_satchels {
+            let out = self.satchels_out(owner);
+            if let Some(player) = self.player_mut(owner) {
+                player.inventory.set_slam_detonator(out);
+            }
+        }
+        let slam = self
+            .player(owner)
+            .and_then(|player| player.inventory.active())
+            .and_then(|weapon| arsenal.weapon(weapon))
+            .is_some_and(|config| config.slam);
+        if !slam {
+            return;
+        }
+        let Some(eye) = self.eye_position(owner) else {
+            return;
         };
-        if self.grenades.iter().any(remote) {
-            self.detonations.push(owner);
-        } else if let Some(player) = self.player_mut(owner) {
-            player.inventory.toggle_slam();
+        let targets = self.targets();
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let near = !matches!(
+            hitscan::trace(
+                &scene,
+                &targets,
+                owner,
+                eye,
+                eye + view_direction(pitch, yaw) * ATTACH_REACH,
+                &Hull::POINT,
+            )
+            .struck,
+            Struck::Nothing
+        );
+        let dt = self.dt;
+        if let Some(player) = self.player_mut(owner) {
+            player.inventory.aim_slam(&arsenal, near, dt);
         }
     }
 

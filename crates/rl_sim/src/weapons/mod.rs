@@ -255,12 +255,28 @@ pub struct WeaponTick {
     pub retired: Option<WeaponId>,
     /// The scope was turned on or off: the new state.
     pub zoom: Option<bool>,
-    /// A SLAM's alternate button was pressed: the simulation detonates the
-    /// satchels out, or, with none, switches the mode
-    /// ([`Inventory::toggle_slam`]).
+    /// A SLAM's alternate button was pressed while it was throwing: the
+    /// simulation detonates the satchels out. (Sticking, the button does
+    /// nothing.)
     pub slam_alt: bool,
     /// The accuracy penalty the shot fired was subject to, seconds.
     pub penalty: f32,
+}
+
+/// Where a SLAM is in choosing its mode.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct SlamState {
+    /// It is in its sticking mode (a surface in reach) rather than its
+    /// throwing mode.
+    sticking: bool,
+    /// Seconds the aim has called for the other mode.
+    aim: f32,
+    /// Its owner has satchels out, so holds the detonator.
+    detonator: bool,
+    /// Count its changes of mode and detonations, for views to notice them:
+    /// wraps.
+    switches: u8,
+    detonations: u8,
 }
 
 /// What the weapon in hand is waiting on.
@@ -308,8 +324,8 @@ pub struct Inventory {
     zoomed: bool,
     /// The laser is on.
     laser: bool,
-    /// A SLAM is in its tripmine mode rather than its satchel mode.
-    slam_tripmine: bool,
+    /// A SLAM's modes.
+    slam: SlamState,
     /// Counts clicks and pumps, for views to notice them: wraps.
     dry_count: u8,
     pump_count: u8,
@@ -336,7 +352,7 @@ impl Inventory {
             empty_wait: 0.0,
             zoomed: false,
             laser: true,
-            slam_tripmine: true,
+            slam: SlamState::default(),
             dry_count: 0,
             pump_count: 0,
             reload_count: 0,
@@ -401,16 +417,82 @@ impl Inventory {
         self.pump_count
     }
 
-    /// Whether a SLAM is set to place tripmines (otherwise it throws
-    /// satchels).
+    /// Whether a SLAM is in its sticking mode: a surface is in reach, so
+    /// it sets tripmines and does nothing on the alternate button
+    /// (otherwise it throws satchels).
     #[must_use]
-    pub fn slam_tripmine(&self) -> bool {
-        self.slam_tripmine
+    pub fn slam_sticking(&self) -> bool {
+        self.slam.sticking
     }
 
-    /// Switches a SLAM between tripmines and satchels.
-    pub fn toggle_slam(&mut self) {
-        self.slam_tripmine = !self.slam_tripmine;
+    /// Whether the SLAM's owner has satchels out, and so holds their
+    /// detonator.
+    #[must_use]
+    pub fn slam_detonator(&self) -> bool {
+        self.slam.detonator
+    }
+
+    /// How many times the SLAM has changed mode, wrapping.
+    #[must_use]
+    pub fn slam_switch_count(&self) -> u8 {
+        self.slam.switches
+    }
+
+    /// How many times the SLAM has detonated satchels, wrapping.
+    #[must_use]
+    pub fn slam_detonate_count(&self) -> u8 {
+        self.slam.detonations
+    }
+
+    /// Tells a SLAM in hand whether a surface is within reach of the aim
+    /// (`near`), `dt` seconds on. The mode follows the aim by itself, once it
+    /// has held for the weapon's `slam_switch.delay` and nothing is in
+    /// progress; the change then keeps both fire modes busy for its
+    /// transition. A SLAM being drawn takes the mode at once.
+    pub fn aim_slam(&mut self, arsenal: &Arsenal, near: bool, dt: f32) {
+        let Some(config) = self.active.and_then(|weapon| arsenal.weapon(weapon)) else {
+            return;
+        };
+        if !config.slam {
+            return;
+        }
+        if matches!(self.phase, Phase::Deploying(_)) {
+            self.slam.sticking = near;
+            self.slam.aim = 0.0;
+            return;
+        }
+        if near == self.slam.sticking {
+            self.slam.aim = 0.0;
+            return;
+        }
+        let Some(switch) = config.slam_switch else {
+            self.slam.sticking = near;
+            return;
+        };
+        self.slam.aim += dt;
+        let busy = self.next.iter().any(|&wait| wait > 0.0) || self.phase != Phase::Ready;
+        if self.slam.aim < switch.delay || busy {
+            return;
+        }
+        self.slam.sticking = near;
+        self.slam.aim = 0.0;
+        self.slam.switches = self.slam.switches.wrapping_add(1);
+        let transition = if near {
+            switch.to_stick
+        } else {
+            switch.to_throw
+        };
+        self.next = [transition; 2];
+    }
+
+    /// Records whether the owner has satchels out.
+    pub fn set_slam_detonator(&mut self, out: bool) {
+        self.slam.detonator = out;
+    }
+
+    /// Records that the satchels were detonated.
+    pub fn note_slam_detonation(&mut self) {
+        self.slam.detonations = self.slam.detonations.wrapping_add(1);
     }
 
     /// Whether the laser is on.
@@ -563,7 +645,8 @@ impl Inventory {
         self.latch.fire_on_empty = false;
         self.zoomed = false;
         self.laser = true;
-        self.slam_tripmine = true;
+        self.slam.sticking = false;
+        self.slam.aim = 0.0;
     }
 
     /// The weapon in hand before the current one, if still carried.
@@ -786,7 +869,8 @@ impl Inventory {
 
     /// A SLAM's trigger: the primary button uses the mode it is in (satchels
     /// are the primary fire mode's, tripmines the secondary's); the alternate
-    /// button is only reported, for the simulation to act on.
+    /// button is only reported while throwing, for the simulation to detonate
+    /// the satchels.
     fn slam_tick(
         &mut self,
         arsenal: &Arsenal,
@@ -795,8 +879,8 @@ impl Inventory {
         held: Buttons,
         mut result: WeaponTick,
     ) -> WeaponTick {
-        result.slam_alt = pressed.contains(Buttons::ATTACK2);
-        let mode = if self.slam_tripmine {
+        result.slam_alt = pressed.contains(Buttons::ATTACK2) && !self.slam.sticking;
+        let mode = if self.slam.sticking {
             Mode::Secondary
         } else {
             Mode::Primary

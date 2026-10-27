@@ -119,7 +119,7 @@ modes' intervals are its rest after acting.
 | Crossbow | 4 | 1 | bolt: 100 damage, 3500 u/s, auto-reload | 20° zoom |
 | RPG | 5 | — | rocket: 150 damage over 300 units, laser-guided | laser on/off |
 | Grenade | 5 | — | overhand, 1200 u/s | lob 350 u/s; rolled when crouching |
-| S.L.A.M. | 5 | — | uses the current mode: sets a tripmine on a wall within 128 units, or throws a satchel | detonates your satchels, or switches mode |
+| S.L.A.M. | 5 | — | sets a tripmine on a surface within 128 units, or, with none, throws a satchel | detonates your thrown satchels (nothing while a surface is in reach) |
 
 ### Shots
 
@@ -205,21 +205,28 @@ sound (the weapon's `blip` sound) and the red dot's flash (`effects.ron`'s
 
 ### The SLAM
 
-A SLAM's charges are physics bodies like grenades (`GrenadeView`s). A
-**satchel** (`remote`) has no fuse: it bursts when its thrower presses the
-alternate button. Thrown, it lies where it lands; but with a surface within
-`stick_reach` (128 units, `CWeapon_SLAM::SatchelAttach`) along the view it is
-stuck there instead, upright on the surface, and goes along with a prop or a
-player it is stuck to.
-A **tripmine** (`fixed`) is set where the eyes meet a wall within 128 units
-(no wall: nothing is placed and the charge is given back), never moves, and
-two seconds after being set (`beam.arm_time`) shoots a laser along its axis;
-a player or prop crossing the beam, the owner's included, sets it off. The
-client draws the beam from the mine to where it ends. The SLAM's alternate
-button detonates the satchels you have out, or, with none, switches between
-tripmines and satchels. HL2DM's server leaves the SLAM's damage and radius to
-skill files it does not ship, so the 150 damage over 150 (satchel) and 170
-(tripmine) units are HL2's stock skill values.
+A SLAM's charges are physics bodies like grenades (`GrenadeView`s). The
+SLAM is in one of two modes and picks them itself: the player cannot switch.
+
+- **Sticking**, with a surface (the map, a prop or a player) within 128 units
+  along the view. The primary button sets a **tripmine** (`fixed`) on it:
+  upright on the surface, going along with a prop or player it is set on. Two
+  seconds later (`beam.arm_time`) it shoots a laser along its axis, and a
+  player or prop crossing the beam, the owner's included, sets it off. The
+  alternate button does nothing; a mine cannot be detonated by hand.
+- **Throwing**, with nothing that near. The primary button throws a
+  **satchel** (`remote`): no fuse, it lies where it lands and bursts when its
+  thrower presses the alternate button, which does nothing with none out.
+
+The mode follows the aim: it changes once the aim has held for
+`slam_switch.delay`, and only while nothing is in progress; the change then
+plays its transition (`to_stick`, `to_throw`) during which neither button
+fires. A SLAM being drawn takes the right mode at once. The view model plays
+the matching sequences (`ACT_SLAM_THROW_*`, `_ND_` while no satchels are out,
+`ACT_SLAM_STICKWALL_*`, the transitions and `ACT_SLAM_THROW_DETONATE`).
+HL2DM's server leaves the SLAM's damage and radius to skill files it does not
+ship, so the 150 damage over 150 (satchel) and 170 (tripmine) units are HL2's
+stock skill values.
 
 ### Explosions
 
