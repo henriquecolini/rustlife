@@ -15,6 +15,7 @@ use crate::camera::FlyCam;
 use crate::net::Game;
 use crate::player::LocalPlayer;
 use crate::settings::{Settings, apply_camera};
+use crate::viewmodel::ViewModel;
 
 /// How far the scope is in, and what that does to the view.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
@@ -44,7 +45,11 @@ pub struct ZoomPlugin;
 impl Plugin for ZoomPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Zoom>()
-            .add_systems(Update, update_zoom.after(apply_camera));
+            .add_systems(Startup, spawn_scope)
+            .add_systems(
+                Update,
+                (update_zoom.after(apply_camera), show_scope).chain(),
+            );
     }
 }
 
@@ -53,6 +58,95 @@ impl Plugin for ZoomPlugin {
 #[must_use]
 pub fn vertical_from_four_by_three(horizontal_degrees: f32) -> f32 {
     2.0 * ((horizontal_degrees.to_radians() / 2.0).tan() * 0.75).atan()
+}
+
+/// The scope overlay's colour.
+const SCOPE_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.85);
+/// How far in the zoom is when the view model goes away and the scope's
+/// reticle shows.
+const SCOPED_AT: f32 = 0.5;
+
+/// The reticle drawn over a zoomed view.
+#[derive(Component)]
+struct Scope;
+
+/// Builds the reticle: a ring with a cross through it, hidden until the
+/// scope is on.
+fn spawn_scope(mut commands: Commands) {
+    let line = |horizontal: bool| Node {
+        position_type: PositionType::Absolute,
+        left: Val::Percent(if horizontal { 30.0 } else { 50.0 }),
+        top: Val::Percent(if horizontal { 50.0 } else { 20.0 }),
+        width: if horizontal {
+            Val::Percent(40.0)
+        } else {
+            Val::Px(1.0)
+        },
+        height: if horizontal {
+            Val::Px(1.0)
+        } else {
+            Val::Percent(60.0)
+        },
+        ..default()
+    };
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            Visibility::Hidden,
+            GlobalZIndex(-1),
+            Scope,
+        ))
+        .with_children(|parent| {
+            for horizontal in [true, false] {
+                parent.spawn((line(horizontal), BackgroundColor(SCOPE_COLOR)));
+            }
+            parent.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(50.0),
+                    top: Val::Percent(50.0),
+                    width: Val::Vh(60.0),
+                    height: Val::Vh(60.0),
+                    margin: UiRect {
+                        left: Val::Vh(-30.0),
+                        top: Val::Vh(-30.0),
+                        ..default()
+                    },
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BorderColor::all(SCOPE_COLOR),
+            ));
+        });
+}
+
+/// While scoped, the weapon's view model is put away and the reticle shows.
+fn show_scope(
+    zoom: Res<Zoom>,
+    mut scope: Query<&mut Visibility, (With<Scope>, Without<ViewModel>)>,
+    mut view_models: Query<&mut Visibility, (With<ViewModel>, Without<Scope>)>,
+) {
+    let scoped = zoom.blend >= SCOPED_AT;
+    for mut visibility in &mut scope {
+        *visibility = if scoped {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for mut visibility in &mut view_models {
+        *visibility = if scoped {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+    }
 }
 
 /// The scope of the local player's weapon in hand, if it is on.
