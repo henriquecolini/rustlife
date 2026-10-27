@@ -226,8 +226,9 @@ See [docs/netcode.md](docs/netcode.md).
    its own camera. A dead player's model becomes a client-side Box3D
    ragdoll in Source space, with a compact sample-like rig (pelvis, spine,
    chest, neck, head and limbs; fingers and toes follow them) and the
-   engine's joint limits, friction and soft rest-pose spring (bones of one corpse do not collide
-   with each other), and the killing blow applied to the bone it hit.
+   engine's joint limits, friction and soft rest-pose spring (bones of one
+   corpse collide with each other, except neighbours and those overlapping at
+   death), and the killing blow applied to the bone it hit.
 3. **Sound.** `source_formats` reads WAV files, soundscripts and
    soundscapes; `rl_assets` loads sounds as Bevy audio. The client plays
    the tick's events, the map's ambient and door sounds, soundscapes and

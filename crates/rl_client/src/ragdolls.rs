@@ -85,6 +85,11 @@ const CONTACT_DAMPING: f32 = 10.0;
 /// Fastest any bone may spin, radians/s. A hit off a light bone's centre
 /// would otherwise spin it faster than the solver can follow.
 const MAX_BONE_SPIN: f32 = 14.0;
+/// How near two bones of a body may be in the pose of death, Source units,
+/// and still collide afterwards. Bones closer than this are left alone, so a
+/// pose with limbs pressed against the body does not start by shoving them
+/// apart.
+const SELF_COLLISION_MARGIN: f32 = 0.02 * UNITS_PER_METRE;
 /// Farthest a bone may stray from where its player died before the corpse
 /// is judged broken and frozen, Source units. A corpse falling down a deep
 /// shaft is fine; one that fell through the map is not.
@@ -139,11 +144,6 @@ struct RagdollPhysics {
     /// Leftover time from the last frame, so physics always advances in
     /// fixed 1/60 s steps.
     accumulator: f32,
-    /// A negative collision group unique to the last corpse. All of a
-    /// corpse's bones share it, which turns off self-collision (the usual
-    /// source of ragdolls exploding) while leaving them colliding with the
-    /// world and with other corpses.
-    next_group: i32,
 }
 
 impl RagdollPhysics {
@@ -160,15 +160,6 @@ impl RagdollPhysics {
         self.world
             .as_mut()
             .map(|world| world.get_mut().unwrap_or_else(PoisonError::into_inner))
-    }
-
-    /// A fresh negative collision group for a corpse.
-    fn corpse_group(&mut self) -> i32 {
-        self.next_group = self.next_group.saturating_sub(1);
-        if self.next_group >= 0 {
-            self.next_group = -1;
-        }
-        self.next_group
     }
 }
 
@@ -408,11 +399,6 @@ fn spawn_ragdolls(
             hits.shots.retain(|(_, _, at)| now - *at <= HIT_MEMORY);
             continue;
         }
-        let groups: Vec<i32> = events
-            .kills
-            .iter()
-            .map(|_| physics.corpse_group())
-            .collect();
         let world = physics.world(sim);
         // The oldest corpses make room for new ones.
         let mut corpses: Vec<(f32, Entity, Vec<b3::BodyId>)> = existing
@@ -430,7 +416,7 @@ fn spawn_ragdolls(
             commands.entity(entity).try_despawn();
         }
 
-        for (kill, group) in events.kills.iter().zip(groups) {
+        for kill in &events.kills {
             let Some((entity, _view, animated, root)) =
                 roots.iter().find(|(_, view, ..)| view.0 == kill.victim)
             else {
@@ -462,9 +448,7 @@ fn spawn_ragdolls(
                 tracing::warn!(victim = ?kill.victim, "ragdoll: no bones selected");
                 continue;
             };
-            let rig = build_phys_rig(
-                world, &positions, &rotations, &parents, &selection, forward, group,
-            );
+            let rig = build_phys_rig(world, &positions, &rotations, &parents, &selection, forward);
             let drivers = drivers_for(&selection, &parents);
             let Some(rests) = driver_rests(&joints, &rig, &drivers, &globals) else {
                 tracing::warn!(victim = ?kill.victim, "ragdoll: could not build driver rests");
@@ -592,7 +576,6 @@ fn build_phys_rig(
     parents: &[Option<usize>],
     selection: &[(usize, BoneKind)],
     forward: Vec3,
-    group_index: i32,
 ) -> PhysRig {
     let mut phys_of: Vec<Option<usize>> = vec![None; parents.len()];
     for (phys, &(joint, _)) in selection.iter().enumerate() {
@@ -635,7 +618,6 @@ fn build_phys_rig(
         shape_def.base_material.rolling_resistance = kind.rolling_resistance();
         shape_def.base_material.restitution = 0.02;
         shape_def.filter = filter(RAGDOLL_GROUP, WORLD_GROUP | RAGDOLL_GROUP);
-        shape_def.filter.group_index = group_index;
 
         let tail = tails[phys];
         let length = tail.distance(position);
@@ -738,6 +720,28 @@ fn build_phys_rig(
         }
     }
 
+    // Bones collide with the rest of their own body, except the ones that
+    // touch it by design: neighbours, and anything that already overlaps in
+    // the pose of death, which would otherwise be pushed apart against the
+    // joints' springs.
+    let segments: Vec<(Vec3, Vec3, f32)> = selection
+        .iter()
+        .enumerate()
+        .map(|(phys, &(joint, kind))| {
+            (
+                positions[joint],
+                tails[phys],
+                kind.radius() * UNITS_PER_METRE,
+            )
+        })
+        .collect();
+    for (a, b) in self_collision_exclusions(&segments, &phys_parents) {
+        let mut def = b3::default_filter_joint_def();
+        def.base.body_id_a = bodies[a];
+        def.base.body_id_b = bodies[b];
+        b3::joint::create_filter_joint(world, &def);
+    }
+
     let root = phys_parents.iter().position(Option::is_none).unwrap_or(0);
     PhysRig {
         joints: selection.iter().map(|&(joint, _)| joint).collect(),
@@ -748,6 +752,68 @@ fn build_phys_rig(
         bodies,
         root,
     }
+}
+
+/// The pairs of bones of one body that must not collide: a bone and its
+/// parent (a forearm may still fold against the chest), and any two bones whose capsules (`segments`: the
+/// two ends and the radius) overlap or all but touch in the pose of death.
+fn self_collision_exclusions(
+    segments: &[(Vec3, Vec3, f32)],
+    phys_parents: &[Option<usize>],
+) -> Vec<(usize, usize)> {
+    let parent = |bone: usize| phys_parents.get(bone).copied().flatten();
+    let mut excluded = Vec::new();
+    for a in 0..segments.len() {
+        for b in (a + 1)..segments.len() {
+            let related = parent(a) == Some(b) || parent(b) == Some(a);
+            let (start_a, end_a, radius_a) = segments[a];
+            let (start_b, end_b, radius_b) = segments[b];
+            let gap = segment_distance(start_a, end_a, start_b, end_b) - radius_a - radius_b;
+            if related || gap < SELF_COLLISION_MARGIN {
+                excluded.push((a, b));
+            }
+        }
+    }
+    excluded
+}
+
+/// The shortest distance between the segments `start_a`-`end_a` and
+/// `start_b`-`end_b`.
+fn segment_distance(start_a: Vec3, end_a: Vec3, start_b: Vec3, end_b: Vec3) -> f32 {
+    let along_a = end_a - start_a;
+    let along_b = end_b - start_b;
+    let offset = start_a - start_b;
+    let length_a = along_a.length_squared();
+    let length_b = along_b.length_squared();
+    let b_on_offset = along_b.dot(offset);
+    // The fractions along each segment of the closest points.
+    let (on_a, on_b) = if length_a <= f32::EPSILON && length_b <= f32::EPSILON {
+        (0.0, 0.0)
+    } else if length_a <= f32::EPSILON {
+        (0.0, (b_on_offset / length_b).clamp(0.0, 1.0))
+    } else {
+        let a_on_offset = along_a.dot(offset);
+        if length_b <= f32::EPSILON {
+            ((-a_on_offset / length_a).clamp(0.0, 1.0), 0.0)
+        } else {
+            let alignment = along_a.dot(along_b);
+            let denominator = length_a * length_b - alignment * alignment;
+            let first = if denominator > f32::EPSILON {
+                ((alignment * b_on_offset - a_on_offset * length_b) / denominator).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let second = (alignment * first + b_on_offset) / length_b;
+            if second < 0.0 {
+                ((-a_on_offset / length_a).clamp(0.0, 1.0), 0.0)
+            } else if second > 1.0 {
+                (((alignment - a_on_offset) / length_a).clamp(0.0, 1.0), 1.0)
+            } else {
+                (first, second)
+            }
+        }
+    };
+    (start_a + along_a * on_a).distance(start_b + along_b * on_b)
 }
 
 /// The nearest simulated ancestor of `joint`, if any.
@@ -1453,15 +1519,7 @@ mod tests {
         let rotation = Quat::from_rotation_z(0.7) * Quat::from_rotation_x(tilt);
         let rotations = vec![rotation; skeleton.joints.len()];
         let selection = select_bones(&skeleton).unwrap();
-        let rig = build_phys_rig(
-            world,
-            &positions,
-            &rotations,
-            &parents,
-            &selection,
-            Vec3::X,
-            -1,
-        );
+        let rig = build_phys_rig(world, &positions, &rotations, &parents, &selection, Vec3::X);
         (rig, selection)
     }
 
@@ -1573,6 +1631,89 @@ mod tests {
             "the body was torn apart: {seen:?}"
         );
         assert!(seen.lowest > -2.0, "fell through the floor: {seen:?}");
+    }
+
+    #[test]
+    fn bones_collide_with_the_body_except_where_they_touch_by_design() {
+        let (skeleton, positions) = human_skeleton();
+        let parents: Vec<Option<usize>> =
+            skeleton.joints.iter().map(|joint| joint.parent).collect();
+        let selection = select_bones(&skeleton).unwrap();
+        let mut phys_of: Vec<Option<usize>> = vec![None; parents.len()];
+        for (phys, &(joint, _)) in selection.iter().enumerate() {
+            phys_of[joint] = Some(phys);
+        }
+        let kind_at: Vec<BoneKind> = (0..parents.len())
+            .map(|index| phys_of[index].map_or(BoneKind::Other, |phys| selection[phys].1))
+            .collect();
+        let phys_parents: Vec<Option<usize>> = selection
+            .iter()
+            .map(|&(joint, _)| nearest_selected_ancestor(joint, &parents, &phys_of))
+            .collect();
+        let segments: Vec<(Vec3, Vec3, f32)> = selection
+            .iter()
+            .map(|&(joint, kind)| {
+                let tail = bone_tail(joint, kind, &kind_at, &phys_of, &positions, &parents);
+                (positions[joint], tail, kind.radius() * UNITS_PER_METRE)
+            })
+            .collect();
+        let excluded = self_collision_exclusions(&segments, &phys_parents);
+        let skip = |a: &str, b: &str| {
+            let (a, b) = (
+                phys_index(&selection, &skeleton, a),
+                phys_index(&selection, &skeleton, b),
+            );
+            excluded.contains(&(a.min(b), a.max(b)))
+        };
+        assert!(skip(
+            "ValveBiped.Bip01_L_Forearm",
+            "ValveBiped.Bip01_L_UpperArm"
+        ));
+        assert!(skip("ValveBiped.Bip01_Head1", "ValveBiped.Bip01_Neck1"));
+        assert!(
+            !skip("ValveBiped.Bip01_L_Hand", "ValveBiped.Bip01_R_Hand"),
+            "the hands may meet"
+        );
+        assert!(
+            !skip("ValveBiped.Bip01_L_Hand", "ValveBiped.Bip01_L_Thigh"),
+            "a hand may lie on the thigh"
+        );
+        assert!(
+            !skip("ValveBiped.Bip01_L_Forearm", "ValveBiped.Bip01_Spine4"),
+            "an arm may fold over the chest"
+        );
+        assert!(
+            excluded.len() < segments.len() * 3,
+            "too much of the body was exempted: {excluded:?}"
+        );
+    }
+
+    #[test]
+    fn segments_know_how_far_apart_they_are() {
+        let x = |x| Vec3::new(x, 0.0, 0.0);
+        let distance = segment_distance(x(0.0), x(1.0), x(3.0), x(4.0));
+        assert!((distance - 2.0).abs() < 1e-5);
+        let crossing = segment_distance(
+            x(0.0),
+            x(2.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(1.0, 3.0, 0.0),
+        );
+        assert!((crossing - 1.0).abs() < 1e-5, "{crossing}");
+        let point = segment_distance(
+            x(1.0),
+            x(1.0),
+            Vec3::new(1.0, 0.0, 5.0),
+            Vec3::new(1.0, 0.0, 5.0),
+        );
+        assert!((point - 5.0).abs() < 1e-5);
+        let parallel = segment_distance(
+            x(0.0),
+            x(2.0),
+            Vec3::new(0.0, 3.0, 0.0),
+            Vec3::new(2.0, 3.0, 0.0),
+        );
+        assert!((parallel - 3.0).abs() < 1e-5);
     }
 
     #[test]
@@ -1708,7 +1849,6 @@ mod tests {
             &parents,
             &selection,
             Vec3::X,
-            -1,
         );
         let mut phys_of: Vec<Option<usize>> = vec![None; parents.len()];
         for (phys, &(joint, _)) in selection.iter().enumerate() {

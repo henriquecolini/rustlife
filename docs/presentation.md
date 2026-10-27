@@ -60,8 +60,11 @@ middle spine bones follow the nearest simulated bone. The joint tuning is
 the engine's human ragdoll sample's: spherical hips, shoulders and spine
 with cone and twist limits, revolute knees and elbows, joint friction, and a
 soft spring (1 Hz, damped) toward the pose of death, so a corpse crumples
-without going limp. Bones of one corpse do not collide with each other, so
-the body never fights itself; the colliders still stop at the map.
+without going limp. The bones of a corpse collide with each other and with
+the map, so an arm lies on the chest and does not pass through it. Pairs that
+touch by design are left out: a bone and its parent, and any two bones whose
+colliders already overlap in the pose of death, which would otherwise be shoved
+apart against the springs.
 A corpse is kept stable by limits rather than luck: bones have a sensible
 mass (a hand is never a featherweight beside a pelvis), no bone moves faster
 than 16 m/s or spins faster than 14 rad/s, overlaps with the map are eased
@@ -207,6 +210,9 @@ cargo run --release -p rustlife -- --map dm_lockdown --dummies 1 --weapon launch
 
 `--teleport x,y,z,pitch,yaw` stands the player at a spot (to look at a
 skybox, or into water), and `--log-fps` logs the frame rate every second.
+Screenshots and scripted captures play no sound, so they can be run
+unattended; `--mute` does the same for any other run. The volume settings
+are not changed, so nothing muted is saved to the config.
 
 ## Tests
 
