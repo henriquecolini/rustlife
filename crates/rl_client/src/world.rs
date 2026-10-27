@@ -82,8 +82,8 @@ struct Resolved {
     vertex_lit: Handle<StandardMaterial>,
     /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
     blend: Option<Handle<StandardMaterial>>,
-    /// For `$selfillum`: the light the surface gives off, added over a
-    /// [`VertexLit`] surface (which, being unlit, has no emissive of its own).
+    /// For `$selfillum`: the surface's own colour, over it where its alpha
+    /// says so, whatever the light.
     glow: Option<Handle<StandardMaterial>>,
 }
 
@@ -104,6 +104,11 @@ pub(crate) struct VertexLit;
 /// Marks a surface whose blend layer has already been spawned.
 #[derive(Component)]
 struct BlendLayered;
+
+/// The mesh a [`VertexLit`] surface was lit from, which has no vertex colours
+/// and so is what a layer that is lit by nothing is drawn with.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct UnlitMesh(pub(crate) Handle<Mesh>);
 
 /// Marks a surface whose glow layer has already been spawned.
 #[derive(Component)]
@@ -476,6 +481,7 @@ type SurfaceItems = (
     Has<GlowLayered>,
     Option<&'static ChildOf>,
     Option<&'static SkinnedMesh>,
+    Option<&'static UnlitMesh>,
 );
 
 /// Swaps each surface's placeholder material for the real one as soon as its
@@ -501,6 +507,7 @@ fn resolve_materials(
         glowing,
         parent,
         skin,
+        unlit,
     ) in &mut surfaces
     {
         let name = &surface.0;
@@ -525,10 +532,7 @@ fn resolve_materials(
                     .base_color2
                     .clone()
                     .map(|texture| standard_materials.add(blend_layer(texture))),
-                glow: source
-                    .emissive
-                    .clone()
-                    .map(|texture| standard_materials.add(glow_layer(texture))),
+                glow: self_lit(source).map(|texture| standard_materials.add(glow_layer(texture))),
             };
             if let Some((rate, angle)) = source.scroll {
                 material_maps.scrolling.push((
@@ -563,11 +567,13 @@ fn resolve_materials(
                 .insert(BlendLayered)
                 .add_child(layer);
         }
-        if let (Some(glow), true, false) = (resolved.glow, vertex_lit, glowing) {
-            // The same mesh, skin included, drawn again with the surface's own
-            // light added. Beside the surface rather than under it, where it
-            // is a part of its model like the surface.
-            let mut layer = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(glow)));
+        if let (Some(glow), false) = (resolved.glow, glowing) {
+            // The same mesh, skin included, drawn again in its own colour
+            // where it shines. Beside the surface rather than under it, where
+            // it is a part of its model like the surface.
+            // Without the vertex colours that carry the baked light.
+            let shape = unlit.map_or_else(|| mesh.0.clone(), |unlit| unlit.0.clone());
+            let mut layer = commands.spawn((Mesh3d(shape), MeshMaterial3d(glow)));
             if let Some(skin) = skin {
                 layer.insert(skin.clone());
             }
@@ -601,13 +607,23 @@ fn scroll_textures(
 /// faintly, tinted by the water's fog.
 const WATER_OPACITY: f32 = 0.75;
 
-/// How bright a `$selfillum` surface's light is, over the 1.0 of full
-/// white: Source's HDR lets it exceed what the lit surface can, which is
-/// what the bloom of a view model feeds on.
+/// How bright a `$selfillum` surface shines, over the 1.0 of its colour:
+/// Source's HDR lets it exceed what the lit surface can, which is what the
+/// bloom of a view model feeds on.
 const SELF_ILLUM_GAIN: f32 = 2.0;
 
-/// The light a `$selfillum` surface gives off: its masked colour, added to
-/// what is behind it and lit by nothing.
+/// The base texture of a `$selfillum` material, whose alpha says how much of
+/// the surface shines (an alpha-tested or translucent one uses it for that).
+fn self_lit(source: &SourceMaterial) -> Option<Handle<Image>> {
+    source
+        .base_color
+        .clone()
+        .filter(|_| source.self_illum && !source.translucent && source.alpha_test.is_none())
+}
+
+/// Source's `$selfillum`: a surface's lit colour is mixed with its own, lit
+/// by nothing, by the texture's alpha. Drawn over the lit surface, it is the
+/// own colour blended in by that alpha.
 fn glow_layer(texture: Handle<Image>) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::linear_rgb(SELF_ILLUM_GAIN, SELF_ILLUM_GAIN, SELF_ILLUM_GAIN),
@@ -615,7 +631,7 @@ fn glow_layer(texture: Handle<Image>) -> StandardMaterial {
         unlit: true,
         cull_mode: None,
         double_sided: true,
-        alpha_mode: AlphaMode::Add,
+        alpha_mode: AlphaMode::Blend,
         // Coplanar with the surface it lights.
         depth_bias: 1.0,
         ..default()
@@ -697,14 +713,46 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         double_sided: true,
         alpha_mode,
         lightmap_exposure: baked_light_scale(),
-        // `$selfillum`: where the base texture's alpha says so, it shines with
-        // its own colour, as bright as a lit surface at full light.
-        emissive: if source.emissive.is_some() {
-            LinearRgba::gray(baked_light_scale())
-        } else {
-            LinearRgba::BLACK
-        },
-        emissive_texture: source.emissive.clone(),
         ..default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lit_material(configure: impl FnOnce(&mut SourceMaterial)) -> SourceMaterial {
+        let mut material = SourceMaterial {
+            base_color: Some(Handle::default()),
+            self_illum: true,
+            ..default()
+        };
+        configure(&mut material);
+        material
+    }
+
+    #[test]
+    fn a_self_illum_material_shines_in_its_own_colour() {
+        assert!(self_lit(&lit_material(|_| {})).is_some());
+        let dull = SourceMaterial {
+            base_color: Some(Handle::default()),
+            ..default()
+        };
+        assert!(self_lit(&dull).is_none(), "no $selfillum");
+        assert!(self_lit(&lit_material(|m| m.base_color = None)).is_none());
+    }
+
+    #[test]
+    fn a_cutout_or_translucent_texture_uses_its_alpha_for_that_not_for_shining() {
+        assert!(self_lit(&lit_material(|m| m.translucent = true)).is_none());
+        assert!(self_lit(&lit_material(|m| m.alpha_test = Some(0.5))).is_none());
+    }
+
+    #[test]
+    fn the_glow_layer_blends_the_unlit_colour_by_the_alpha() {
+        let layer = glow_layer(Handle::default());
+        assert!(layer.unlit);
+        assert_eq!(layer.alpha_mode, AlphaMode::Blend);
+        assert_eq!(layer.emissive, LinearRgba::BLACK);
     }
 }

@@ -56,11 +56,11 @@ const VIEW_NEAR: f32 = 0.01;
 /// `threshold` does; the metal of the weapons stays as it is.
 fn view_bloom() -> Bloom {
     Bloom {
-        intensity: 0.35,
+        intensity: 0.5,
         low_frequency_boost: 0.6,
         low_frequency_boost_curvature: 0.9,
         prefilter: BloomPrefilter {
-            threshold: 0.55,
+            threshold: 0.45,
             threshold_softness: 0.5,
         },
         composite_mode: BloomCompositeMode::Additive,

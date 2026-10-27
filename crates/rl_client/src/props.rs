@@ -51,7 +51,7 @@ use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::player::{LocalPlayer, Movement, ViewAngles};
 use crate::world::{
-    MapHandle, MapScoped, MaterialMaps, Placeholder, SKY_LAYER, Surface, VertexLit,
+    MapHandle, MapScoped, MaterialMaps, Placeholder, SKY_LAYER, Surface, UnlitMesh, VertexLit,
 };
 
 /// A moving prop is relit once it has moved this far since it was last
@@ -361,7 +361,7 @@ fn attach_models(
                     child.insert(skin.clone());
                 }
                 if lit {
-                    child.insert(VertexLit);
+                    child.insert((VertexLit, UnlitMesh(part.mesh.clone())));
                 }
                 if lit && matches!(light, PropLight::Field) {
                     child.insert(LitPart {
