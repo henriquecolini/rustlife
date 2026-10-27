@@ -3,49 +3,68 @@
 //
 // Lengths are Source units (1 unit = 1 inch), masses kilograms, times
 // seconds. How often it acts is in weapons/manipulator.ron, like any
-// weapon's rate of fire. See docs/physics.md.
+// weapon's rate of fire. See docs/physics.md. The numbers are HL2DM's
+// Gravity Gun, read from server.so (CWeaponPhysCannon, CGrabController).
 Manipulator(
-    // Ranges follow HL2's physcannon_tracelength (250) and physcannon_maxmass (250).
     grab: (
-        // Props within this distance of the eyes can be grabbed...
-        range: 160.0,
-        // ...if they weigh at most this, kg.
+        // Props the crosshair is on within this distance of the eyes are
+        // grabbed (physcannon_tracelength)...
+        range: 250.0,
+        // ...if they weigh at most this, kg (physcannon_maxmass).
         max_mass: 250.0,
-        // Props farther away, up to this distance, are pulled in while
-        // secondary fire is held...
-        pull_range: 250.0,
-        // ...at this speed, units/s.
-        pull_speed: 500.0,
+        // Props farther away, up to this distance (4 x the trace length),
+        // are pulled in while secondary fire is held.
+        pull_range: 1000.0,
+        // With nothing under the crosshair: the prop within `range` nearest
+        // the view direction, if within this cosine (physcannon_cone).
+        cone: 0.97,
+        // Every reference tick a pull gives the prop this impulse towards
+        // the eyes, kg*units/s (physcannon_pullforce)...
+        pull_impulse: 4000.0,
+        // ...scaled by (mass + 0.5) * gain for props lighter than this.
+        pull_light_mass: 50.0,
+        pull_light_gain: 0.02,
+        // Source's tick, which the impulse above is given per.
+        reference_tick: 0.015,
+        // Secondary fire acts again this long after a grab.
+        grab_rest: 0.1,
     ),
     hold: (
-        // Gap between the eyes and the near side of the held prop.
-        distance: 20.0,
-        // The prop closes the gap to its hold point over about this long...
-        follow_time: 0.05,
-        // ...moving at most this fast (units/s) and turning at most this
-        // fast (degrees/s).
-        max_speed: 1500.0,
+        // The hold point is `clearance + reach` ahead of the eyes, where
+        // the reach is the player's radius plus the prop's extent along
+        // the view (CGrabController::UpdateObject).
+        clearance: 24.0,
+        player_radius: 22.627,
+        // The view's pitch is clamped to this when finding the hold point.
+        pitch_limit: 75.0,
+        // The prop closes the gap to its hold point over this long (the
+        // shadow controller's time to arrive)...
+        follow_time: 0.1,
+        // ...moving at most this fast (units/s; the shadow's maxSpeed) and
+        // turning at most this fast (degrees/s; not read from the game).
+        max_speed: 1000.0,
         max_angular_speed: 1080.0,
-        // The grip breaks if something holds the prop this far from the
-        // hold point for this long.
-        break_distance: 64.0,
-        break_time: 0.25,
+        // The grip breaks when the prop's distance from its hold point,
+        // averaged over about a second, exceeds this.
+        break_distance: 12.0,
     ),
     // Primary fire on a held prop throws it along the view. From server.so's
     // physcannon force routine: the speed is physcannon_maxforce (1500) up to
     // 100 kg, easing (smoothstep) down to physcannon_minforce (700) at 600 kg,
     // so the factor below is that curve over 1500.
     launch: (
-        range: 0.0,
         speed: 1500.0,
         mass_curve: [(0.0, 1.0), (100.0, 1.0), (150.0, 0.985), (200.0, 0.945), (250.0, 0.885), (600.0, 0.4667)],
     ),
-    // Primary fire on a prop that is not held knocks it away. The same force
-    // routine serves it (its entry is a thin wrapper); how the punt applies
-    // the force was not traced.
+    // Primary fire on a prop that is not held knocks it away
+    // (CWeaponPhysCannon::PuntVPhysics): an impulse through its centre and
+    // one at the point hit, both along the view.
     punt: (
-        range: 256.0,
-        speed: 1500.0,
-        mass_curve: [(0.0, 1.0), (100.0, 1.0), (150.0, 0.985), (200.0, 0.945), (250.0, 0.885), (600.0, 0.4667)],
+        range: 250.0,
+        force: 15000.0,
+        offset_force: 600.0,
+        offset_mass_cap: 250.0,
+        // Aimed downwards, the punt lifts instead, by this much of the aim.
+        downward_scale: -0.65,
     ),
 )

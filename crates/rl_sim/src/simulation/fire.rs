@@ -58,8 +58,11 @@ impl Simulation {
                 events.noises.push((id, weapon, noise));
             }
         }
+        let hull = player.state.hull(&self.data.movement);
         let aim = Aim {
             eye: movement_eye.unwrap_or(player.state.origin),
+            feet: player.state.origin.z + hull.mins.z,
+            top: player.state.origin.z + hull.maxs.z,
             pitch: cmd.pitch,
             yaw: cmd.yaw,
         };

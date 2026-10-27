@@ -359,7 +359,7 @@ fn the_manipulator_is_a_tool_once_deployed() {
         "a tool never fires through the inventory"
     );
     let intervals = inventory.tool(&arsenal).expect("ready");
-    assert_eq!((intervals.primary, intervals.secondary), (0.5, 0.4));
+    assert_eq!((intervals.primary, intervals.secondary), (0.5, 0.5));
 }
 
 #[test]

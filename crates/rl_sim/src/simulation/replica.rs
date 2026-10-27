@@ -157,8 +157,11 @@ impl Simulation {
         let Some((weapon, mode)) = prediction.weapon.fired else {
             return prediction;
         };
+        let hull = state.hull(&self.data.movement);
         let aim = Aim {
             eye: self.eye_position(id).unwrap_or(state.origin),
+            feet: state.origin.z + hull.mins.z,
+            top: state.origin.z + hull.maxs.z,
             pitch: cmd.pitch,
             yaw: cmd.yaw,
         };

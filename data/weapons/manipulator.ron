@@ -16,8 +16,9 @@ Weapon(
     clip: None,
     // Launch the held prop, or punt one in front; then rest this long.
     primary: Some((interval: 0.5, automatic: true, ammo: Unlimited, shot: Manipulator)),
-    // Grab (or pull, or drop); then rest this long.
-    secondary: Some((interval: 0.4, automatic: true, ammo: Unlimited, shot: Manipulator)),
+    // Drop, or look for a prop and find none; then rest this long (a grab
+    // rests 0.1 s, in tools/manipulator.ron).
+    secondary: Some((interval: 0.5, automatic: true, ammo: Unlimited, shot: Manipulator)),
     deploy_time: 0.322,
     pickup: None,
     sounds: {
