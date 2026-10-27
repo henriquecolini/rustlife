@@ -202,6 +202,14 @@ fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()
             sequence.activity,
             if sequence.looping { "loop" } else { "" }
         )?;
+        if sequence.delta || clip.is_some_and(|clip| clip.delta) {
+            writeln!(
+                out,
+                "    delta: sequence {} animation {}",
+                sequence.delta,
+                clip.is_some_and(|clip| clip.delta)
+            )?;
+        }
         if sequence.blends.len() > 1 {
             writeln!(
                 out,

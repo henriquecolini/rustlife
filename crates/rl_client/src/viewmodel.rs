@@ -26,6 +26,7 @@ use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use rl_data::{FireConfig, Shot};
 use rl_sim::combat::hitscan::Struck;
+use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Arsenal, Inventory, Mode, Phase, ReloadStep, WeaponId};
 
 use crate::AppState;
@@ -51,20 +52,24 @@ pub struct ViewModelPlugin;
 
 impl Plugin for ViewModelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ZoomPlugin, LaserPlugin, crate::prongs::ProngsPlugin))
-            .add_systems(Update, add_view_camera)
-            .add_systems(
-                Update,
-                (
-                    swap_view_model,
-                    layer_meshes,
-                    animate_view_model,
-                    follow_camera,
-                    light_view_model,
-                )
-                    .chain()
-                    .run_if(in_state(AppState::InGame)),
-            );
+        app.add_plugins((
+            ZoomPlugin,
+            LaserPlugin,
+            crate::gravity_gun::GravityGunPlugin,
+        ))
+        .add_systems(Update, add_view_camera)
+        .add_systems(
+            Update,
+            (
+                swap_view_model,
+                layer_meshes,
+                animate_view_model,
+                follow_camera,
+                light_view_model,
+            )
+                .chain()
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -202,7 +207,7 @@ fn swap_view_model(
             charging: false,
         },
         Moving,
-        crate::prongs::Prongs::default(),
+        crate::gravity_gun::Prongs::default(),
         // Lit from where the eyes are from the first frame: a model that
         // loads at once (a weapon taken up again) would otherwise be lit
         // from the world's origin, usually inside a wall.
@@ -334,6 +339,19 @@ fn slam_switch_activity(sticking: bool, detonator: bool) -> &'static str {
     }
 }
 
+/// The activity the Gravity Gun plays for what it did: `fire` for a throw,
+/// a punt or an empty swing, `altfire` for a grab (and letting go).
+fn tool_activity(event: ToolEvent) -> &'static str {
+    match event {
+        ToolEvent::Grabbed(_) | ToolEvent::Dropped(_) | ToolEvent::GripBroke(_) => {
+            "ACT_VM_SECONDARYATTACK"
+        }
+        ToolEvent::Launched(_) | ToolEvent::Punted(_) | ToolEvent::DryFire => {
+            "ACT_VM_PRIMARYATTACK"
+        }
+    }
+}
+
 /// The activity a reload step plays.
 fn reload_activity(step: ReloadStep) -> &'static str {
     match step {
@@ -441,7 +459,13 @@ pub(crate) fn animate_view_model(
         .zip(sim.arsenal().weapon(view.weapon))
         .filter(|(_, config)| config.slam)
         .map(|(inventory, _)| (inventory.slam_sticking(), inventory.slam_detonator()));
+    // The Gravity Gun, while it holds a prop, idles with its `hold_idle`
+    // (the model gives it the activity `ACT_VM_RELOAD`).
+    let holding = local_player.is_some_and(|player| player.manipulator.held().is_some());
     let act = |name: &'static str| {
+        if holding && name == "ACT_VM_IDLE" {
+            return "ACT_VM_RELOAD";
+        }
         slam.map_or(name, |(sticking, detonator)| {
             slam_activity(name, sticking, detonator)
         })
@@ -504,8 +528,10 @@ pub(crate) fn animate_view_model(
                 }
             }
         }
-        if events.tools.iter().any(|&(id, _)| mine(id)) && wanted.is_none() {
-            wanted = Some("ACT_VM_PRIMARYATTACK");
+        if wanted.is_none()
+            && let Some(&(_, event)) = events.tools.iter().rev().find(|&&(id, _)| mine(id))
+        {
+            wanted = Some(tool_activity(event));
         }
     }
     if let Some(activity) = wanted

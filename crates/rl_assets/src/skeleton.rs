@@ -135,9 +135,11 @@ pub struct SequenceClips {
     pub activity: String,
     /// Whether it loops.
     pub looping: bool,
-    /// Whether it is a delta, layered over whatever else plays (a weapon's
-    /// prongs opening) rather than played by itself.
-    pub delta: bool,
+    /// The joints it animates, if it is a layer: a one-frame pose blended by
+    /// a pose parameter with no activity of its own (a weapon's prongs,
+    /// `prong_blend`), which the game lays over whatever plays, on just the
+    /// joints it moves. `None` for an ordinary sequence.
+    pub layer: Option<Vec<usize>>,
     /// One clip per blend, in the sequence's grid order.
     pub clips: Vec<Handle<AnimationClip>>,
     /// The blend grid's size.
@@ -175,13 +177,10 @@ impl SequenceClips {
 
 /// Builds the clips of `sequences` (from `source`, whose bones are matched
 /// to `skeleton`'s by name), adding each clip with `add`. Delta sequences
-/// (layers such as aim matrices and gestures) are skipped unless
-/// `with_deltas`: a model's own few (a weapon's prongs) are wanted, the many
-/// of a player's animation set are not.
+/// (such as aim matrices and gestures) are skipped.
 pub fn sequence_clips(
     skeleton: &Skeleton,
     source: &ModelAnimation,
-    with_deltas: bool,
     add: &mut dyn FnMut(AnimationClip) -> Handle<AnimationClip>,
 ) -> Vec<SequenceClips> {
     // Each of the source's bones' joint in this skeleton.
@@ -194,7 +193,7 @@ pub fn sequence_clips(
     source
         .sequences
         .iter()
-        .filter(|sequence| with_deltas || !sequence.delta)
+        .filter(|sequence| !sequence.delta)
         .map(|sequence| {
             let clips = sequence
                 .blends
@@ -212,9 +211,47 @@ pub fn sequence_clips(
                 .blends
                 .first()
                 .map_or(0.0, |&animation| duration(&source.animations[animation]));
-            sequence_of(sequence, source, clips, duration)
+            let layer = layer_joints(sequence, source, &joints);
+            sequence_of(sequence, source, clips, duration, layer)
         })
         .collect()
+}
+
+/// The joints a layer sequence moves: a sequence with no activity that is
+/// a single frame blended between at least two poses animates the joints
+/// whose pose differs from one blend to the next. `None` for any other.
+fn layer_joints(
+    sequence: &Sequence,
+    source: &ModelAnimation,
+    joints: &[Option<usize>],
+) -> Option<Vec<usize>> {
+    if !sequence.activity.is_empty() || sequence.blends.len() < 2 {
+        return None;
+    }
+    let poses: Vec<&Animation> = sequence
+        .blends
+        .iter()
+        .filter_map(|&animation| source.animations.get(animation))
+        .collect();
+    if poses.len() != sequence.blends.len() || poses.iter().any(|pose| pose.frames > 1) {
+        return None;
+    }
+    let first = poses[0];
+    let moved: Vec<usize> = first
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(index, track)| {
+            poses[1..].iter().any(|pose| {
+                pose.tracks.get(*index).is_some_and(|other| {
+                    other.positions.first() != track.positions.first()
+                        || other.rotations.first() != track.rotations.first()
+                })
+            })
+        })
+        .filter_map(|(_, track)| joints.get(track.bone).copied().flatten())
+        .collect();
+    (!moved.is_empty()).then_some(moved)
 }
 
 fn sequence_of(
@@ -222,6 +259,7 @@ fn sequence_of(
     source: &ModelAnimation,
     clips: Vec<Handle<AnimationClip>>,
     duration: f32,
+    layer: Option<Vec<usize>>,
 ) -> SequenceClips {
     let axis = |axis: usize| {
         let parameter = source.pose_parameters.get(sequence.parameters[axis]?)?;
@@ -232,7 +270,7 @@ fn sequence_of(
         label: sequence.label.to_ascii_lowercase(),
         activity: sequence.activity.to_ascii_uppercase(),
         looping: sequence.looping,
-        delta: sequence.delta,
+        layer,
         clips,
         group: sequence.group,
         axes: [axis(0), axis(1)],
@@ -390,7 +428,7 @@ mod tests {
         let model = model();
         let skeleton = Skeleton::of(&model);
         let mut added = Vec::new();
-        let sequences = sequence_clips(&skeleton, &model, false, &mut |clip| {
+        let sequences = sequence_clips(&skeleton, &model, &mut |clip| {
             added.push(clip);
             Handle::default()
         });
@@ -416,7 +454,7 @@ mod tests {
     fn one_dimensional_blends_split_between_neighbours() {
         let model = model();
         let skeleton = Skeleton::of(&model);
-        let run = &sequence_clips(&skeleton, &model, false, &mut |_| Handle::default())[0];
+        let run = &sequence_clips(&skeleton, &model, &mut |_| Handle::default())[0];
         assert_eq!(run.blend_1d(-180.0), [(0, 1.0), (1, 0.0)]);
         assert_eq!(run.blend_1d(0.0), [(1, 1.0), (2, 0.0)]);
         let [(low, a), (high, b)] = run.blend_1d(90.0)[..] else {

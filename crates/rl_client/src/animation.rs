@@ -44,28 +44,26 @@ impl Animated {
     /// The index of the first sequence labelled `label` (any case).
     #[must_use]
     pub fn sequence(&self, label: &str) -> Option<usize> {
-        self.animation
-            .sequences
-            .iter()
-            .position(|sequence| !sequence.delta && sequence.label.eq_ignore_ascii_case(label))
+        self.animation.sequences.iter().position(|sequence| {
+            sequence.layer.is_none() && sequence.label.eq_ignore_ascii_case(label)
+        })
     }
 
     /// The index of the first sequence of activity `activity` (any case).
     #[must_use]
     pub fn activity(&self, activity: &str) -> Option<usize> {
         self.animation.sequences.iter().position(|sequence| {
-            !sequence.delta && sequence.activity.eq_ignore_ascii_case(activity)
+            sequence.layer.is_none() && sequence.activity.eq_ignore_ascii_case(activity)
         })
     }
 
-    /// The index of the delta layer labelled `label` (any case): a sequence
-    /// laid over whatever plays, by [`SequencePlayer::set_layer`].
+    /// The index of the layer labelled `label` (any case): a pose laid over
+    /// whatever plays, on the joints it moves, by [`SequencePlayer::set_layer`].
     #[must_use]
     pub fn layer(&self, label: &str) -> Option<usize> {
-        self.animation
-            .sequences
-            .iter()
-            .position(|sequence| sequence.delta && sequence.label.eq_ignore_ascii_case(label))
+        self.animation.sequences.iter().position(|sequence| {
+            sequence.layer.is_some() && sequence.label.eq_ignore_ascii_case(label)
+        })
     }
 }
 
@@ -109,6 +107,10 @@ pub(crate) fn spawn_skeleton(
     joints
 }
 
+/// The mask group of the joints a model's layers animate, and of the rest.
+const LAYER_JOINTS: u32 = 1;
+const OTHER_JOINTS: u32 = 2;
+
 /// One model's animation graph: every clip of its sequences as a node.
 struct ModelGraph {
     graph: Handle<AnimationGraph>,
@@ -141,8 +143,8 @@ struct Track {
 pub struct SequencePlayer {
     current: Option<Track>,
     fading: Vec<Track>,
-    /// Delta layers laid over the pose: the sequence, its blend value and
-    /// how strongly.
+    /// Layers laid over the pose: the sequence, its blend value and how
+    /// strongly.
     layers: Vec<(usize, f32, f32)>,
     /// Seconds a change of sequence fades over.
     pub fade: f32,
@@ -177,9 +179,9 @@ impl SequencePlayer {
         }
     }
 
-    /// Lays the delta sequence `sequence` over the pose, blended at `blend`
-    /// along its axis and `weight` strong (a weapon's prongs, opened by the
-    /// pose parameter `active`). Lasts until set again.
+    /// Lays the layer `sequence` over the pose, blended at `blend` along its
+    /// axis and `weight` strong (a weapon's prongs, opened by the pose
+    /// parameter `active`). Lasts until set again.
     pub fn set_layer(&mut self, sequence: usize, blend: f32, weight: f32) {
         match self.layers.iter_mut().find(|layer| layer.0 == sequence) {
             Some(layer) => *layer = (sequence, blend, weight),
@@ -308,15 +310,39 @@ fn prepare(
         let model = graphs.0.entry(animated.model.id()).or_insert_with(|| {
             let mut graph = AnimationGraph::new();
             let mut nodes = HashMap::new();
-            // Delta layers are added on top of the poses, under a node of
-            // their own.
-            let additive = graph.add_additive_blend(1.0, graph.root);
-            for sequence in &animated.animation.sequences {
-                let parent = if sequence.delta { additive } else { graph.root };
+            // A layer's joints are animated by its clips alone, and by
+            // nothing else: joints are put in a mask group, and the clips
+            // that must not touch them mask it out.
+            let sequences = &animated.animation.sequences;
+            let layered: Vec<usize> = sequences
+                .iter()
+                .filter_map(|sequence| sequence.layer.as_deref())
+                .flatten()
+                .copied()
+                .collect();
+            let skeleton = &animated.animation.skeleton;
+            if !layered.is_empty() {
+                for joint in 0..skeleton.joints.len() {
+                    let group = if layered.contains(&joint) {
+                        LAYER_JOINTS
+                    } else {
+                        OTHER_JOINTS
+                    };
+                    graph.add_target_to_mask_group(skeleton.target(joint), group);
+                }
+            }
+            for sequence in sequences {
+                let mask = if sequence.layer.is_some() {
+                    1 << OTHER_JOINTS
+                } else if layered.is_empty() {
+                    0
+                } else {
+                    1 << LAYER_JOINTS
+                };
                 for clip in &sequence.clips {
-                    nodes
-                        .entry(clip.id())
-                        .or_insert_with(|| graph.add_clip(clip.clone(), 1.0, parent));
+                    nodes.entry(clip.id()).or_insert_with(|| {
+                        graph.add_clip_with_mask(clip.clone(), mask, 1.0, graph.root)
+                    });
                 }
             }
             ModelGraph {
@@ -387,7 +413,7 @@ mod tests {
         let sequence = |looping, clips: usize| SequenceClips {
             label: "s".to_owned(),
             activity: String::new(),
-            delta: false,
+            layer: None,
             looping,
             clips: (0..clips).map(|_| Handle::default()).collect(),
             group: [clips, 1],

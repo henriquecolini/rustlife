@@ -334,7 +334,7 @@ fn find_muzzle(
 /// narrower view, draws `point`: pushed out from the view's centre by the
 /// ratio of their fields of view, so a tracer starts where the muzzle
 /// shows on screen.
-fn as_seen_by_main(point: Vec3, camera: &GlobalTransform, main_fov: f32) -> Vec3 {
+pub(crate) fn as_seen_by_main(point: Vec3, camera: &GlobalTransform, main_fov: f32) -> Vec3 {
     let ratio = (main_fov / 2.0).tan() / (VIEW_FOV_DEGREES.to_radians() / 2.0).tan();
     let local = camera.affine().inverse().transform_point3(point);
     camera.transform_point(Vec3::new(local.x * ratio, local.y * ratio, local.z))
