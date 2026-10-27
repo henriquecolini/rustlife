@@ -72,6 +72,7 @@ impl Plugin for ParticlesPlugin {
                 Update,
                 (note_fires, burn_props, spawn_blasts, move_particles)
                     .chain()
+                    .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(Update, (calm_shake, show_flash));

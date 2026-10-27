@@ -24,7 +24,12 @@ pub(crate) struct LaserPlugin;
 
 impl Plugin for LaserPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, draw_dots.run_if(in_state(AppState::InGame)));
+        app.add_systems(
+            Update,
+            draw_dots
+                .after(crate::camera::CameraPlaced)
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 

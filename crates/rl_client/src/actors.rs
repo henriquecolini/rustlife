@@ -53,6 +53,7 @@ impl Plugin for ActorsPlugin {
                     glow_projectiles,
                 )
                     .chain()
+                    .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
             );
     }

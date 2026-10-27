@@ -471,6 +471,7 @@ impl Plugin for ExplosionPlugin {
                 Update,
                 (play_scripted, spawn_puffs, move_puffs)
                     .chain()
+                    .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
             );
     }

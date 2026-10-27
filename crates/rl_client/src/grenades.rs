@@ -49,6 +49,7 @@ impl Plugin for GrenadesPlugin {
                 draw_beams,
             )
                 .chain()
+                .after(crate::camera::CameraPlaced)
                 .run_if(in_state(AppState::InGame)),
         );
     }

@@ -32,6 +32,7 @@ impl Plugin for SkyPlugin {
                 Update,
                 (spawn_sky_camera, follow_main_camera)
                     .chain()
+                    .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
             );
     }

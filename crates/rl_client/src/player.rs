@@ -131,8 +131,14 @@ impl Plugin for PlayerPlugin {
                     view_only_without_a_game,
                     face_respawns,
                     toggle_noclip,
-                    (look, latch_input.run_if(menu_closed), place_camera)
+                    (
+                        look,
+                        latch_input.run_if(menu_closed),
+                        place_camera,
+                        crate::camera::settle_camera,
+                    )
                         .chain()
+                        .in_set(crate::camera::CameraPlaced)
                         .run_if(resource_equals(ViewMode::Walk)),
                 )
                     .chain()

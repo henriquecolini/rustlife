@@ -43,6 +43,7 @@ impl Plugin for PcfPlugin {
                 Update,
                 (load_library, play_scripted, start_effects, play_effects)
                     .chain()
+                    .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
             );
     }

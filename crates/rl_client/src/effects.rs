@@ -73,21 +73,28 @@ pub struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Sprites>().add_systems(
-            Update,
-            (
-                load_sprites,
-                spawn_effects,
-                fly_tracers,
-                fly_spray,
-                follow_attachments,
-                animate_flashes,
-                face_camera,
-                expire,
+        app.init_resource::<Sprites>()
+            .add_systems(
+                Update,
+                (
+                    load_sprites,
+                    spawn_effects,
+                    fly_tracers,
+                    fly_spray,
+                    animate_flashes,
+                    face_camera,
+                    expire,
+                )
+                    .chain()
+                    .after(crate::camera::CameraPlaced)
+                    .run_if(in_state(AppState::InGame)),
             )
-                .chain()
-                .run_if(in_state(AppState::InGame)),
-        );
+            .add_systems(
+                PostUpdate,
+                follow_attachments
+                    .in_set(crate::camera::AttachedEffects)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -867,14 +874,15 @@ fn animate_flashes(
     }
 }
 
-/// Keeps muzzle flashes on their guns.
+/// Keeps muzzle flashes on their guns, where the guns are this frame.
 fn follow_attachments(
     attachments: Query<&GlobalTransform, With<Attachment>>,
-    mut effects: Query<(&AtAttachment, &mut Transform)>,
+    mut effects: Query<(&AtAttachment, &mut Transform, &mut GlobalTransform), Without<Attachment>>,
 ) {
-    for (at, mut transform) in &mut effects {
+    for (at, mut transform, mut global) in &mut effects {
         if let Ok(attachment) = attachments.get(at.0) {
             transform.translation = attachment.translation();
+            *global = GlobalTransform::from(*transform);
         }
     }
 }
@@ -976,5 +984,32 @@ mod tests {
         assert!(names.contains(&"effects/blood"));
         assert!(data.effects.bullet_impact("metal").is_some());
         assert!(data.effects.bullet_impact("nonsense").is_some(), "default");
+    }
+
+    #[test]
+    fn a_flash_goes_where_its_attachment_is_now_and_says_so() {
+        let mut world = World::new();
+        let attachment = world
+            .spawn((
+                Attachment("muzzle".into()),
+                GlobalTransform::from(Transform::from_xyz(1.0, 2.0, 3.0)),
+            ))
+            .id();
+        let flash = world
+            .spawn((
+                AtAttachment(attachment),
+                Transform::from_scale(Vec3::splat(0.5)),
+                GlobalTransform::IDENTITY,
+            ))
+            .id();
+        let follow = world.register_system(follow_attachments);
+        world.run_system(follow).unwrap();
+        let global = world.get::<GlobalTransform>(flash).unwrap();
+        assert_eq!(global.translation(), Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(global.to_scale_rotation_translation().0, Vec3::splat(0.5));
+        assert_eq!(
+            world.get::<Transform>(flash).unwrap().translation,
+            Vec3::new(1.0, 2.0, 3.0)
+        );
     }
 }
