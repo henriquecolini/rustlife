@@ -24,14 +24,16 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::math::Affine2;
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
-use rl_data::{EffectsConfig, ImpactEffectConfig, MuzzleFlashConfig, Shot, TracerConfig};
+use rl_data::{
+    EffectsConfig, ImpactEffectConfig, ImpactFlashConfig, MuzzleFlashConfig, Shot, TracerConfig,
+};
 use rl_sim::collision::contents::MASK_PLAYER_SOLID;
 use rl_sim::collision::{CollisionQuery, Hull};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::view_direction;
 use rl_sim::rng::Rng;
 use rl_sim::scene::Scene as WorldScene;
-use rl_sim::simulation::{PlayerId, Simulation};
+use rl_sim::simulation::{PlayerId, ShotEvent, Simulation};
 use rl_sim::weapons::WeaponId;
 
 use crate::AppState;
@@ -79,6 +81,7 @@ impl Plugin for EffectsPlugin {
                 fly_tracers,
                 fly_spray,
                 follow_attachments,
+                animate_flashes,
                 face_camera,
                 expire,
             )
@@ -180,6 +183,26 @@ struct Effect {
     until: f32,
 }
 
+/// A flash lying on a struck surface (the game's `FX_AddQuad`): its size and
+/// opacity move from a start to an end along bias curves.
+#[derive(Component)]
+struct SurfaceFlash {
+    age: f32,
+    life: f32,
+    /// Half-size at birth and death, metres.
+    size: (f32, f32),
+    size_bias: f32,
+    alpha: (f32, f32),
+    alpha_bias: f32,
+    material: Handle<StandardMaterial>,
+}
+
+/// The game's `Bias`: `t^-log2(bias)`. Below one half the value lags behind
+/// `t`, above it runs ahead.
+fn bias(t: f32, bias: f32) -> f32 {
+    t.clamp(0.0, 1.0).powf(-bias.log2())
+}
+
 /// Turns to face the camera, rolled by `roll` radians about the view.
 #[derive(Component)]
 struct FacesCamera {
@@ -254,6 +277,7 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
                 .chain([&effects.blood])
                 .flat_map(|impact| &impact.sprites),
         )
+        .chain(effects.weapon_flashes.values().map(|flash| &flash.sprite))
         .map(String::as_str)
 }
 
@@ -463,6 +487,47 @@ impl Painter<'_, '_> {
         self.spray(quad, impact, at, normal);
     }
 
+    /// A flat flash on the surface struck at `at`, facing out along `normal`.
+    fn surface_flash(
+        &mut self,
+        quad: &Handle<Mesh>,
+        flash: &ImpactFlashConfig,
+        at: Vec3,
+        normal: Vec3,
+    ) {
+        let Some(sprite) = self
+            .sprites
+            .handles
+            .get(&flash.sprite)
+            .and_then(|handle| self.sprite_assets.get(handle))
+        else {
+            return;
+        };
+        let scale = coords::METERS_PER_UNIT;
+        let start = flash.size.0 + (flash.size.1 - flash.size.0) * self.sprites.rng.unit();
+        let roll = self.sprites.rng.unit() * std::f32::consts::TAU;
+        let material = self.materials.add(sprite_material(sprite, [1.0; 3], false));
+        let until = self.time.elapsed_secs() + flash.life;
+        let turn = Quat::from_rotation_arc(Vec3::Z, normal.normalize_or(Vec3::Z))
+            * Quat::from_rotation_z(roll);
+        self.commands
+            .spawn(quad_bundle(quad, material.clone(), at, Vec2::ZERO, until))
+            .insert((
+                Transform::from_translation(at)
+                    .with_rotation(turn)
+                    .with_scale(Vec3::ZERO),
+                SurfaceFlash {
+                    age: 0.0,
+                    life: flash.life,
+                    size: (start * scale, flash.end_size * scale),
+                    size_bias: flash.size_bias,
+                    alpha: flash.alpha,
+                    alpha_bias: flash.alpha_bias,
+                    material,
+                },
+            ));
+    }
+
     /// Blood spray thrown out of a wound.
     fn blood(
         &mut self,
@@ -576,26 +641,15 @@ fn spawn_effects(
             match shot.trace.struck {
                 Struck::Nothing => {}
                 Struck::Player(_) => {
-                    let source_direction =
-                        (shot.trace.end - shot.start).normalize_or(shot.trace.normal);
-                    let spray_direction = shot.trace.normal.normalize_or(source_direction);
-                    let played = pcf.play(
-                        effects.blood.pcf.as_deref(),
-                        &mut pcf_spawns,
-                        shot.trace.end,
-                        spray_direction,
+                    let wound = Wound { shot, end, bullets };
+                    bleed(
+                        &wound,
+                        sim,
+                        &quad,
+                        &mut painter,
+                        (&pcf, &mut pcf_spawns),
+                        &mut decals,
                     );
-                    if !played {
-                        painter.blood(
-                            &quad,
-                            &effects.blood,
-                            end,
-                            coords::direction(spray_direction.to_array()),
-                        );
-                    }
-                    if bullets {
-                        stain_behind(sim, shot.trace.end, source_direction, &mut decals);
-                    }
                 }
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
                     let prop = surfaces.of_shot(sim, &shot.trace);
@@ -611,6 +665,14 @@ fn spawn_effects(
                     );
                     if !played {
                         painter.surface_impact(&quad, impact, end + lift, normal);
+                    }
+                    if bullets
+                        && let Some(flash) = sim
+                            .arsenal()
+                            .weapon_name(shot.weapon)
+                            .and_then(|weapon| effects.weapon_flashes.get(weapon))
+                    {
+                        painter.surface_flash(&quad, flash, end + lift, normal);
                     }
                     if bullets {
                         decals.write(DecalRequest {
@@ -638,6 +700,48 @@ fn spawn_effects(
                 procedural: !played,
             });
         }
+    }
+}
+
+/// A bullet that struck a player.
+struct Wound<'a> {
+    shot: &'a ShotEvent,
+    /// Where, Bevy space.
+    end: Vec3,
+    /// Whether it was fired by a gun (and so leaves a stain).
+    bullets: bool,
+}
+
+/// Blood thrown out of a wound, and the stain on whatever lies beyond.
+fn bleed(
+    wound: &Wound,
+    sim: &Simulation,
+    quad: &Handle<Mesh>,
+    painter: &mut Painter,
+    (pcf, pcf_spawns): (&Pcf, &mut MessageWriter<PcfSpawn>),
+    decals: &mut MessageWriter<DecalRequest>,
+) {
+    let Wound { shot, end, bullets } = wound;
+    let (end, bullets) = (*end, *bullets);
+    let blood = &sim.data().effects.blood;
+    let source_direction = (shot.trace.end - shot.start).normalize_or(shot.trace.normal);
+    let spray_direction = shot.trace.normal.normalize_or(source_direction);
+    let played = pcf.play(
+        blood.pcf.as_deref(),
+        pcf_spawns,
+        shot.trace.end,
+        spray_direction,
+    );
+    if !played {
+        painter.blood(
+            quad,
+            blood,
+            end,
+            coords::direction(spray_direction.to_array()),
+        );
+    }
+    if bullets {
+        stain_behind(sim, shot.trace.end, source_direction, decals);
     }
 }
 
@@ -734,6 +838,24 @@ fn tracer_pose(tracer: &Tracer, eye: Vec3) -> Option<(Vec3, Quat, f32)> {
     Some((middle, rotation, head - tail))
 }
 
+/// Sizes and fades the flashes on struck surfaces along their curves.
+fn animate_flashes(
+    time: Res<Time>,
+    mut flashes: Query<(&mut SurfaceFlash, &mut Transform)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (mut flash, mut transform) in &mut flashes {
+        flash.age += time.delta_secs();
+        let t = (flash.age / flash.life).clamp(0.0, 1.0);
+        let half = flash.size.0 + (flash.size.1 - flash.size.0) * bias(t, flash.size_bias);
+        transform.scale = Vec3::new(2.0 * half, 2.0 * half, 1.0);
+        let alpha = flash.alpha.0 + (flash.alpha.1 - flash.alpha.0) * bias(t, flash.alpha_bias);
+        if let Some(mut material) = materials.get_mut(&flash.material) {
+            material.base_color = Color::linear_rgba(1.0, 1.0, 1.0, alpha);
+        }
+    }
+}
+
 /// Keeps muzzle flashes on their guns.
 fn follow_attachments(
     attachments: Query<&GlobalTransform, With<Attachment>>,
@@ -773,6 +895,21 @@ fn expire(mut commands: Commands, time: Res<Time>, effects: Query<(Entity, &Effe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bias_curve_lags_below_one_half_and_runs_ahead_above_it() {
+        assert_eq!(bias(0.0, 0.75), 0.0);
+        assert_eq!(bias(1.0, 0.75), 1.0);
+        assert!(
+            (bias(0.5, 0.75) - 0.75).abs() < 1e-5,
+            "bias b maps one half to b"
+        );
+        assert!((bias(0.5, 0.4) - 0.4).abs() < 1e-5);
+        assert!(
+            (bias(0.3, 0.5) - 0.3).abs() < 1e-5,
+            "one half is the identity"
+        );
+    }
 
     #[test]
     fn frames_are_picked_by_shifting_texture_coordinates() {

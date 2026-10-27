@@ -30,6 +30,11 @@ pub struct EffectsConfig {
     pub explosion: ExplosionEffectConfig,
     /// A grenade in flight.
     pub grenade: GrenadeEffectConfig,
+    /// What a weapon adds where its bullets strike, by weapon id: the game's
+    /// own weapon code dispatches an extra effect beside the surface's
+    /// (the Pulse Rifle's flash, for one).
+    #[serde(default)]
+    pub weapon_flashes: BTreeMap<String, ImpactFlashConfig>,
 }
 
 /// A muzzle flash: one of several sprites, briefly.
@@ -58,6 +63,53 @@ pub struct TracerConfig {
     pub length: f32,
     /// Speed, units/s.
     pub speed: f32,
+}
+
+/// A flash drawn flat on the surface a weapon's bullet strikes: the game's
+/// `FX_AddQuad`. Its size and its opacity each run from a start to an end
+/// over its life along a bias curve (`t^-log2(bias)`, so below `0.5` it
+/// lingers and above it moves early).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImpactFlashConfig {
+    /// The sprite (a material under `materials/`).
+    pub sprite: String,
+    /// The half-size at birth, picked between these two, units.
+    pub size: (f32, f32),
+    /// The half-size at death, units.
+    pub end_size: f32,
+    /// The size's bias curve, `0..1`.
+    pub size_bias: f32,
+    /// Opacity at birth and at death.
+    pub alpha: (f32, f32),
+    /// The opacity's bias curve, `0..1`.
+    pub alpha_bias: f32,
+    /// Seconds it lasts.
+    pub life: f32,
+}
+
+impl ImpactFlashConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if self.sprite.trim().is_empty() {
+            check.fail(&format!("{field}.sprite"), "must name a sprite");
+        }
+        check.positive(&format!("{field}.size.0"), self.size.0);
+        if self.size.1 < self.size.0 {
+            check.fail(&format!("{field}.size"), "the range runs low to high");
+        }
+        check.non_negative(&format!("{field}.end_size"), self.end_size);
+        check.range(&format!("{field}.alpha.0"), self.alpha.0, 0.0, 1.0);
+        check.range(&format!("{field}.alpha.1"), self.alpha.1, 0.0, 1.0);
+        for (name, bias) in [
+            ("size_bias", self.size_bias),
+            ("alpha_bias", self.alpha_bias),
+        ] {
+            if !(bias > 0.0 && bias < 1.0) {
+                check.fail(&format!("{field}.{name}"), "must be between 0 and 1");
+            }
+        }
+        check.positive(&format!("{field}.life"), self.life);
+    }
 }
 
 /// What a bullet throws off a surface and the mark it leaves: spray
@@ -213,6 +265,9 @@ impl EffectsConfig {
             impact.validate(check, &format!("bullet_impacts.{surface}"));
         }
         self.blood.validate(check, "blood");
+        for (weapon, flash) in &self.weapon_flashes {
+            flash.validate(check, &format!("weapon_flashes.{weapon}"));
+        }
         let grenade = &self.grenade;
         check.positive("grenade.dot_size", grenade.dot_size);
         check.range("grenade.dot_dim", grenade.dot_dim, 0.0, 1.0);
@@ -276,6 +331,7 @@ mod tests {
                 shake: 0.6,
                 pcf: None,
             },
+            weapon_flashes: BTreeMap::new(),
             grenade: GrenadeEffectConfig {
                 dot_size: 6.0,
                 dot_offset: [0.0, 0.0, 5.0],
@@ -288,6 +344,36 @@ mod tests {
                 trail_alpha: 0.8,
             },
         }
+    }
+
+    fn flash() -> ImpactFlashConfig {
+        ImpactFlashConfig {
+            sprite: "effects/flash".to_owned(),
+            size: (24.0, 32.0),
+            end_size: 0.0,
+            size_bias: 0.75,
+            alpha: (1.0, 0.0),
+            alpha_bias: 0.4,
+            life: 0.25,
+        }
+    }
+
+    #[test]
+    fn a_weapon_flash_is_checked() {
+        let mut config = config();
+        config.weapon_flashes.insert("rifle".to_owned(), flash());
+        let mut check = Validator::default();
+        config.validate(&mut check);
+        assert!(check.finish().is_empty());
+        let mut bad = flash();
+        bad.sprite.clear();
+        bad.size = (30.0, 20.0);
+        bad.size_bias = 1.0;
+        bad.life = 0.0;
+        config.weapon_flashes.insert("rifle".to_owned(), bad);
+        let mut check = Validator::default();
+        config.validate(&mut check);
+        assert_eq!(check.finish().len(), 4);
     }
 
     #[test]

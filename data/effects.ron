@@ -151,6 +151,22 @@ Effects(
     explosion: (
         shake: 0.85,
     ),
+    // What a weapon's bullets add where they strike, beside the surface's own
+    // effect, by weapon id. The Pulse Rifle's is the game's `AR2Impact`: a quad
+    // of effects/combinemuzzle2_nocull lying on the surface, 24-32 units
+    // (half-size) shrinking to nothing, fading from full, for a quarter of a
+    // second, turned at random.
+    weapon_flashes: {
+        "rifle": (
+            sprite: "effects/combinemuzzle2_nocull",
+            size: (24.0, 32.0),
+            end_size: 0.0,
+            size_bias: 0.75,
+            alpha: (1.0, 0.0),
+            alpha_bias: 0.4,
+            life: 0.25,
+        ),
+    },
     // A thrown grenade: a red dot on its top that flashes with each tick of
     // its fuse (the dot's size at the flash, how bright it stays between
     // ticks, how long a flash takes to fade) and a red trail of where it has
