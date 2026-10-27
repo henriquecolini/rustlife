@@ -107,7 +107,7 @@ modes' intervals are its rest after acting.
 
 | Weapon | Slot | Clip | Primary | Secondary |
 |--------|------|------|---------|-----------|
-| Crowbar | 1 | — | 25 damage, 75 units, every 0.4 s | — |
+| Crowbar | 1 | — | 25 damage, 75 units (a line, then a 32-unit box), every 0.4 s | — |
 | Stun Baton | 1 | — | 40 damage, 75 units, every 0.8 s | — |
 | Gravity Gun | 1 | — | punt / launch | grab / pull |
 | 9MM Pistol | 2 | 18 | 8 damage, every 0.5 s held or 0.1 s clicked, 1°→6° cone | — |
@@ -118,6 +118,7 @@ modes' intervals are its rest after acting.
 | Crossbow | 4 | 1 | bolt: 100 damage, 3500 u/s, auto-reload | 20° zoom |
 | RPG | 5 | — | rocket: 150 damage over 300 units, laser-guided | laser on/off |
 | Grenade | 5 | — | overhand, 1200 u/s | lob 350 u/s; rolled when crouching |
+| S.L.A.M. | 5 | — | uses the current mode: sets a tripmine on a wall within 128 units, or throws a satchel | detonates your satchels, or switches mode |
 
 ### Shots
 
@@ -158,7 +159,8 @@ motor lights `ignite_delay` seconds later; then it flies at the projectile's
 `speed` along its heading, which turns every `steer_interval` by the
 fraction `steer` of the way towards its owner's laser dot while they still
 hold the launcher with the laser on. The dot is where a trace from the
-owner's eyes along their view first meets something. While the rocket
+owner's eyes along their view first meets something, drawn by the client as a
+red dot ([`Simulation::laser_dot`]). While the rocket
 flies the launcher fires nothing; when it has burst the launcher reloads.
 
 ### Grenades
@@ -191,6 +193,21 @@ Its `blip` is the fuse ticking: a tick as it leaves the hand, then every
 schedule is a function of the grenade's age (`BlipConfig::last`), so the
 sound (the weapon's `blip` sound) and the red dot's flash (`effects.ron`'s
 `grenade`) agree.
+
+### The SLAM
+
+A SLAM's charges are physics bodies like grenades (`GrenadeView`s). A
+**satchel** (`remote`) is thrown, lies where it lands (no sticking to walls)
+and has no fuse: it bursts when its thrower presses the alternate button.
+A **tripmine** (`fixed`) is set where the eyes meet a wall within 128 units
+(no wall: nothing is placed and the charge is given back), never moves, and
+two seconds after being set (`beam.arm_time`) shoots a laser along its axis;
+a player or prop crossing the beam, the owner's included, sets it off. The
+client draws the beam from the mine to where it ends. The SLAM's alternate
+button detonates the satchels you have out, or, with none, switches between
+tripmines and satchels. HL2DM's server leaves the SLAM's damage and radius to
+skill files it does not ship, so the 150 damage over 150 (satchel) and 170
+(tripmine) units are HL2's stock skill values.
 
 ### Explosions
 

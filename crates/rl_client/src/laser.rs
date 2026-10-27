@@ -20,7 +20,7 @@ const DOT_SIZE: f32 = 5.0;
 const DOT_COLOR: [f32; 3] = [1.8, 0.06, 0.03];
 
 /// Draws launchers' laser dots.
-pub struct LaserPlugin;
+pub(crate) struct LaserPlugin;
 
 impl Plugin for LaserPlugin {
     fn build(&self, app: &mut App) {

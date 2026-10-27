@@ -264,6 +264,20 @@ fn fire_activity(
     }
 }
 
+/// A SLAM's own names for the activities every weapon has: it draws, idles
+/// and acts differently in its tripmine and satchel modes.
+fn slam_activity(activity: &'static str, tripmine: bool) -> &'static str {
+    match (activity, tripmine) {
+        ("ACT_VM_DRAW", true) => "ACT_SLAM_TRIPMINE_DRAW",
+        ("ACT_VM_DRAW", false) => "ACT_SLAM_THROW_DRAW",
+        ("ACT_VM_IDLE", true) => "ACT_SLAM_TRIPMINE_IDLE",
+        ("ACT_VM_IDLE", false) => "ACT_SLAM_THROW_IDLE",
+        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", true) => "ACT_SLAM_TRIPMINE_ATTACH",
+        ("ACT_VM_PRIMARYATTACK" | "ACT_VM_SECONDARYATTACK", false) => "ACT_SLAM_THROW_THROW",
+        _ => activity,
+    }
+}
+
 /// The activity a reload step plays.
 fn reload_activity(step: ReloadStep) -> &'static str {
     match step {
@@ -332,6 +346,11 @@ fn animate_view_model(
     let local_player = sim.player(local.id);
     let inventory = local_player.map(|player| &player.inventory);
     let ducked = local_player.is_some_and(|player| player.state.ducked);
+    let slam = inventory
+        .zip(sim.arsenal().weapon(view.weapon))
+        .filter(|(_, config)| config.slam)
+        .map(|(inventory, _)| inventory.slam_tripmine());
+    let act = |name: &'static str| slam.map_or(name, |tripmine| slam_activity(name, tripmine));
     if !view.drawn {
         view.drawn = true;
         player.fade = VIEW_FADE_SECS;
@@ -385,7 +404,7 @@ fn animate_view_model(
     }
     let sequences = &animated.animation.sequences;
     if let Some(activity) = wanted
-        && let Some(sequence) = animated.activity(activity)
+        && let Some(sequence) = animated.activity(act(activity))
     {
         if view.primed.is_some() && activity.starts_with("ACT_VM_PULLBACK") {
             player.restart_held(sequence, 1.0);
@@ -401,10 +420,10 @@ fn animate_view_model(
     if idle && view.primed.is_none() {
         if view.thrown {
             view.thrown = false;
-            if let Some(sequence) = animated.activity("ACT_VM_DRAW") {
+            if let Some(sequence) = animated.activity(act("ACT_VM_DRAW")) {
                 player.restart(sequence, 1.0);
             }
-        } else if let Some(sequence) = animated.activity("ACT_VM_IDLE") {
+        } else if let Some(sequence) = animated.activity(act("ACT_VM_IDLE")) {
             player.play(sequence, 0.0, 1.0);
         }
     }

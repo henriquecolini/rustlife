@@ -41,7 +41,13 @@ impl Plugin for GrenadesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Fuses>().add_systems(
             Update,
-            (draw_grenades, tick_fuses, flash_dots, draw_trails)
+            (
+                draw_grenades,
+                tick_fuses,
+                flash_dots,
+                draw_trails,
+                draw_beams,
+            )
                 .chain()
                 .run_if(in_state(AppState::InGame)),
         );
@@ -217,6 +223,72 @@ fn draw_grenades(
             },
             MapScoped,
         ));
+    }
+}
+
+/// The laser beam of a tripmine.
+#[derive(Component)]
+struct Beam(u32);
+
+/// Width of a tripmine's beam, units.
+const BEAM_WIDTH: f32 = 0.5;
+
+/// Draws the beam of every armed tripmine, from the mine to where the beam
+/// ends.
+fn draw_beams(
+    mut commands: Commands,
+    drawn: Res<Drawn>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut beams: Query<(Entity, &Beam, &mut Transform)>,
+) {
+    let Some(world) = &drawn.0 else {
+        return;
+    };
+    let span = |id: u32| {
+        let view = world.grenades.iter().find(|view| view.id == id)?;
+        let end = view.beam_end?;
+        let start = coords::position(view.position.to_array());
+        Some((start, coords::position(end.to_array())))
+    };
+    let mut shown = Vec::new();
+    for (entity, beam, mut transform) in &mut beams {
+        match span(beam.0) {
+            Some((start, end)) => {
+                shown.push(beam.0);
+                *transform = beam_transform(start, end);
+            }
+            None => commands.entity(entity).try_despawn(),
+        }
+    }
+    for view in &world.grenades {
+        let Some((start, end)) = span(view.id).filter(|_| !shown.contains(&view.id)) else {
+            continue;
+        };
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::linear_rgba(1.6, 0.04, 0.02, 0.7),
+                unlit: true,
+                alpha_mode: AlphaMode::Add,
+                ..default()
+            })),
+            beam_transform(start, end),
+            NoFrustumCulling,
+            Beam(view.id),
+            MapScoped,
+        ));
+    }
+}
+
+/// Places a unit cuboid as a thin beam from `start` to `end`.
+fn beam_transform(start: Vec3, end: Vec3) -> Transform {
+    let along = end - start;
+    let width = BEAM_WIDTH * coords::METERS_PER_UNIT;
+    Transform {
+        translation: start.midpoint(end),
+        rotation: Quat::from_rotation_arc(Vec3::Z, along.normalize_or(Vec3::Z)),
+        scale: Vec3::new(width, width, along.length()),
     }
 }
 
@@ -429,6 +501,7 @@ mod tests {
             position,
             rotation,
             age: 0.0,
+            beam_end: None,
         }
     }
 
@@ -439,6 +512,15 @@ mod tests {
             Shot::Projectile(projectile) => projectile.body.clone().expect("body"),
             _ => unreachable!("frag throws a body"),
         }
+    }
+
+    #[test]
+    fn a_beam_spans_its_two_ends() {
+        let (start, end) = (Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 1.0, 4.0));
+        let beam = beam_transform(start, end);
+        assert!(beam.translation.abs_diff_eq(Vec3::new(0.0, 1.0, 2.0), 1e-6));
+        assert!((beam.scale.z - 4.0).abs() < 1e-6);
+        assert!((beam.rotation * Vec3::Z).abs_diff_eq(Vec3::Z, 1e-5));
     }
 
     #[test]

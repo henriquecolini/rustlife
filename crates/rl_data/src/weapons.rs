@@ -46,6 +46,10 @@ fn yes() -> bool {
 /// One weapon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Weapon", deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent traits of a plain description read from a data file"
+)]
 pub struct WeaponConfig {
     /// Name shown on the HUD and in the kill feed.
     pub name: String,
@@ -91,6 +95,13 @@ pub struct WeaponConfig {
     /// shotgun's pump).
     #[serde(default)]
     pub pump: Option<f32>,
+    /// An HL2 SLAM: the primary fire uses the mode it is in (the primary
+    /// fire mode's projectile for satchels, the secondary's for tripmines),
+    /// and the alternate button detonates the thrower's satchels or, with
+    /// none out, switches between the modes. Tripmines are set on walls
+    /// within 128 units.
+    #[serde(default)]
+    pub slam: bool,
     /// How HL2 ranks the weapon when one has to be chosen for the player:
     /// the heaviest weapon that has ammo is brought up when the weapon in
     /// hand has none left.
@@ -400,6 +411,18 @@ pub struct ProjectileBodyConfig {
     /// side instead of tumbling: a grenade rolled along the floor.
     #[serde(default)]
     pub rolled: bool,
+    /// It is set down on a wall within reach instead of thrown, and never
+    /// moves (a tripmine); a shot that finds no wall in reach is not made.
+    #[serde(default)]
+    pub fixed: bool,
+    /// A laser beam along the body's axis that sets it off when anything
+    /// crosses it (a tripmine).
+    #[serde(default)]
+    pub beam: Option<BeamConfig>,
+    /// It bursts when its thrower detonates their charges (a satchel), not
+    /// on a fuse.
+    #[serde(default)]
+    pub remote: bool,
     /// The fuse's ticking, if it ticks.
     #[serde(default)]
     pub blip: Option<BlipConfig>,
@@ -411,6 +434,16 @@ pub struct ProjectileBodyConfig {
     pub spin: f32,
     /// Fraction of its speed it loses per second to the air.
     pub damping: f32,
+}
+
+/// A tripmine's beam.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeamConfig {
+    /// How far the beam reaches, units.
+    pub length: f32,
+    /// Seconds after being set down before the mine is armed.
+    pub arm_time: f32,
 }
 
 /// A fuse's ticking: the sound and the red flash of a grenade, in step.
@@ -711,6 +744,10 @@ fn validate_projectile(check: &mut Validator, field: &str, projectile: &Projecti
             );
             check.non_negative(&format!("{field}.body.blip.warn_time"), blip.warn_time);
         }
+        if let Some(beam) = &body.beam {
+            check.positive(&format!("{field}.body.beam.length"), beam.length);
+            check.non_negative(&format!("{field}.body.beam.arm_time"), beam.arm_time);
+        }
         check.positive(&format!("{field}.body.mass"), body.mass);
         check.non_negative(&format!("{field}.body.friction"), body.friction);
         check.non_negative(&format!("{field}.body.spin"), body.spin);
@@ -784,6 +821,7 @@ mod tests {
             reload_after_projectile: None,
             laser: false,
             weight: 0,
+            slam: false,
             auto_switch_to: true,
             auto_switch_from: true,
             zoom: None,

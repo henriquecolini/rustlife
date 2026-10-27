@@ -18,8 +18,7 @@ EntityMap(
         "weapon_crossbow": Weapon("boltcaster"),
         "weapon_rpg": Weapon("launcher"),
         "weapon_frag": Weapon("frag"),
-        // rustlife has no tripmines; their spots hand out frags instead.
-        "weapon_slam": Weapon("frag"),
+        "weapon_slam": Weapon("slam"),
         // Everyone spawns with the Manipulator.
         "weapon_physcannon": Ignore,
 

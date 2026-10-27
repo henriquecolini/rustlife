@@ -302,6 +302,8 @@ pub struct Simulation {
     projectiles: Vec<Projectile>,
     /// The damage being dealt dissolves whoever it kills.
     dissolving: bool,
+    /// Players who detonated their satchels this tick.
+    detonations: Vec<PlayerId>,
     next_projectile: u32,
     /// Props players threw, punted or dropped: by whom and on which tick,
     /// so the harm they do is credited.
@@ -347,6 +349,7 @@ impl Simulation {
             hazard_clock: 0.0,
             projectiles: Vec::new(),
             dissolving: false,
+            detonations: Vec::new(),
             next_projectile: 0,
             thrown: Vec::new(),
             grenades: Vec::new(),

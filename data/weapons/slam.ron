@@ -1,0 +1,88 @@
+// The SLAM. HL2DM's: three charges (the weapon's `default_clip2`), five at
+// most. It is in one of two modes; the alternate button switches them, or,
+// with satchels out, detonates them.
+//   - tripmine (the secondary fire mode here): set on a wall within 128
+//     units; armed after a couple of seconds, it goes off when anything
+//     crosses its beam;
+//   - satchel (the primary fire mode here): thrown, it lies where it lands
+//     until its thrower detonates it.
+// Both do 150 damage (HL2's `sk_plr_dmg_satchel` and `_tripmine`, which the
+// game's server leaves at 0 for its skill files to set). The intervals add up
+// the view model's throw/attach animation and the draw of the next charge
+// (`models/weapons/v_slam.mdl`).
+Weapon(
+    name: "S.L.A.M.",
+    slot: 5,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('o'),
+    position: 2,
+    weight: 1,
+    slam: true,
+    view_model: Some("models/weapons/v_slam.mdl"),
+    world_model: "models/weapons/w_slam.mdl",
+    clip: None,
+    primary: Some((
+        // Throw (0.467 s) and the next satchel's draw (1.0 s).
+        interval: 1.467,
+        automatic: true,
+        ammo: Reserve(ammo: "slam", count: 1),
+        shot: Projectile((
+            model: "models/weapons/w_slam.mdl",
+            speed: 560.0,
+            lift: 100.0,
+            gravity: 1.0,
+            size: 3.0,
+            bounce: Some(0.2),
+            fuse: None,
+            hit_damage: 0.0,
+            explosion: Some((radius: 150.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            // Out for ten minutes at most.
+            lifetime: 600.0,
+            body: Some((
+                radius: 2.5,
+                height: 6.0,
+                model_center: (0.0, 0.0, 3.0),
+                surface: "weapon",
+                remote: true,
+                mass: 2.0,
+                friction: 0.8,
+                spin: 3.0,
+                damping: 0.2,
+            )),
+        )),
+    )),
+    secondary: Some((
+        // Attach (0.833 s) and the next mine's draw (0.833 s).
+        interval: 1.667,
+        automatic: true,
+        ammo: Reserve(ammo: "slam", count: 1),
+        shot: Projectile((
+            model: "models/weapons/w_slam.mdl",
+            speed: 1.0,
+            lift: 0.0,
+            gravity: 0.0,
+            size: 1.0,
+            bounce: Some(0.0),
+            fuse: None,
+            hit_damage: 0.0,
+            explosion: Some((radius: 170.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            lifetime: 600.0,
+            body: Some((
+                radius: 2.5,
+                height: 6.0,
+                model_center: (0.0, 0.0, 3.0),
+                surface: "weapon",
+                fixed: true,
+                beam: Some((length: 4096.0, arm_time: 2.0)),
+                mass: 2.0,
+                friction: 0.8,
+                spin: 0.0,
+                damping: 0.0,
+            )),
+        )),
+    )),
+    deploy_time: 1.0,
+    pickup: Some((ammo: 3, owned_ammo: 3, respawn: 20.0, radius: 24.0)),
+    sounds: {},
+    hold: Some("slam"),
+)

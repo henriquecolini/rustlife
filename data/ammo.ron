@@ -1,6 +1,6 @@
 // Ammo types, read by `rl_sim::weapons`. The caps are HL2DM's (`sk_max_*` as
 // its game rules fix them: 150 pistol, 12 magnum, 225 SMG, 60 AR2, 30
-// buckshot, 10 bolts, 3 rockets, 3 SMG and 3 AR2 grenades, 5 grenades).
+// buckshot, 10 bolts, 3 rockets, 3 SMG and 3 AR2 grenades, 5 grenades, 5 SLAMs).
 //
 // Weapons, items and the spawn loadout refer to these by id. `max` caps the
 // rounds a player carries (rounds loaded in clips are not counted).
@@ -16,5 +16,6 @@ Ammo(
         "bolt": (name: "Bolts", max: 10),
         "rocket": (name: "Rockets", max: 3),
         "frag": (name: "Frags", max: 5),
+        "slam": (name: "SLAMs", max: 5),
     },
 )

@@ -255,6 +255,10 @@ pub struct WeaponTick {
     pub retired: Option<WeaponId>,
     /// The scope was turned on or off: the new state.
     pub zoom: Option<bool>,
+    /// A SLAM's alternate button was pressed: the simulation detonates the
+    /// satchels out, or, with none, switches the mode
+    /// ([`Inventory::toggle_slam`]).
+    pub slam_alt: bool,
     /// The accuracy penalty the shot fired was subject to, seconds.
     pub penalty: f32,
 }
@@ -304,6 +308,8 @@ pub struct Inventory {
     zoomed: bool,
     /// The laser is on.
     laser: bool,
+    /// A SLAM is in its tripmine mode rather than its satchel mode.
+    slam_tripmine: bool,
     /// Counts clicks and pumps, for views to notice them: wraps.
     dry_count: u8,
     pump_count: u8,
@@ -330,6 +336,7 @@ impl Inventory {
             empty_wait: 0.0,
             zoomed: false,
             laser: true,
+            slam_tripmine: true,
             dry_count: 0,
             pump_count: 0,
             reload_count: 0,
@@ -392,6 +399,18 @@ impl Inventory {
     #[must_use]
     pub fn pump_count(&self) -> u8 {
         self.pump_count
+    }
+
+    /// Whether a SLAM is set to place tripmines (otherwise it throws
+    /// satchels).
+    #[must_use]
+    pub fn slam_tripmine(&self) -> bool {
+        self.slam_tripmine
+    }
+
+    /// Switches a SLAM between tripmines and satchels.
+    pub fn toggle_slam(&mut self) {
+        self.slam_tripmine = !self.slam_tripmine;
     }
 
     /// Whether the laser is on.
@@ -544,6 +563,7 @@ impl Inventory {
         self.latch.fire_on_empty = false;
         self.zoomed = false;
         self.laser = true;
+        self.slam_tripmine = true;
     }
 
     /// The weapon in hand before the current one, if still carried.
@@ -734,6 +754,9 @@ impl Inventory {
         {
             self.next[0] = self.next[0].min(0.0);
         }
+        if config.slam {
+            return self.slam_tick(arsenal, weapon, pressed, held, result);
+        }
         for (mode, button) in [
             (Mode::Secondary, Buttons::ATTACK2),
             (Mode::Primary, Buttons::ATTACK),
@@ -757,6 +780,29 @@ impl Inventory {
             result.reloading = self.start_reload(arsenal);
         } else if nothing_held {
             self.reload_or_switch(arsenal, weapon, &mut result);
+        }
+        result
+    }
+
+    /// A SLAM's trigger: the primary button uses the mode it is in (satchels
+    /// are the primary fire mode's, tripmines the secondary's); the alternate
+    /// button is only reported, for the simulation to act on.
+    fn slam_tick(
+        &mut self,
+        arsenal: &Arsenal,
+        weapon: WeaponId,
+        pressed: Buttons,
+        held: Buttons,
+        mut result: WeaponTick,
+    ) -> WeaponTick {
+        result.slam_alt = pressed.contains(Buttons::ATTACK2);
+        let mode = if self.slam_tripmine {
+            Mode::Secondary
+        } else {
+            Mode::Primary
+        };
+        if held.contains(Buttons::ATTACK) && self.next[mode as usize] <= 0.0 {
+            return self.pull_trigger(arsenal, weapon, mode, result);
         }
         result
     }

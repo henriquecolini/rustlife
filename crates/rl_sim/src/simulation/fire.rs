@@ -103,6 +103,9 @@ impl Simulation {
             events.tools.push((id, event));
         }
 
+        if pulled.slam_alt {
+            self.slam_alt(id);
+        }
         if let Some((weapon, mode)) = pulled.fired {
             events.fired.push((id, weapon, mode));
             let Some(fire) = arsenal.fire(weapon, mode) else {

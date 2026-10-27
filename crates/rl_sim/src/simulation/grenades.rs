@@ -15,10 +15,12 @@ use rl_data::{ProjectileBodyConfig, ProjectileConfig};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
-use crate::collision::ConvexHull;
+use crate::collision::{ConvexHull, Hull};
+use crate::combat::hitscan::{self, Struck};
 use crate::movement::view_direction;
 use crate::physics::{BodyId, Motion, PropDesc};
 use crate::rng::Rng;
+use crate::scene::Scene;
 use crate::tools::manipulator::Aim;
 use crate::weapons::{Mode, WeaponId};
 
@@ -31,6 +33,10 @@ const ROLL_DISTANCE: f32 = 24.0;
 const CYLINDER_SIDES: u16 = 12;
 /// Density of the metal a grenade is made of, kg/m³.
 const DENSITY: f32 = 7000.0;
+/// How far from the eyes a tripmine can be set on a wall, units.
+const ATTACH_REACH: f32 = 128.0;
+/// A tripmine's beam starts beyond the mine's own body, units.
+const BEAM_START: f32 = 4.0;
 /// A grenade this far below the world is lost.
 const VOID_Z: f32 = -16384.0;
 
@@ -44,6 +50,8 @@ pub(super) struct Grenade {
     owner: PlayerId,
     /// Seconds since it left the hand.
     age: f32,
+    /// Where a tripmine's beam ends, if it has one and is armed.
+    beam_end: Option<Vec3>,
 }
 
 /// A grenade as clients draw it.
@@ -63,6 +71,8 @@ pub struct GrenadeView {
     pub rotation: Quat,
     /// Seconds since it left the hand.
     pub age: f32,
+    /// Where an armed tripmine's beam ends (it starts at `position`).
+    pub beam_end: Option<Vec3>,
 }
 
 impl Simulation {
@@ -76,6 +86,10 @@ impl Simulation {
         body: &ProjectileBodyConfig,
         aim: &Aim,
     ) {
+        if body.fixed {
+            self.place_mine(owner, weapon, mode, projectile, body, aim);
+            return;
+        }
         let forward = view_direction(aim.pitch, aim.yaw);
         let Some(thrower) = self.player(owner) else {
             return;
@@ -147,9 +161,112 @@ impl Simulation {
             mode,
             owner,
             age: 0.0,
+            beam_end: None,
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
         self.refresh_grenade_views();
+    }
+
+    /// Sets a mine (a fixed body with a beam) on the wall the eyes look at,
+    /// if one is within reach; otherwise the shot is not made and its ammo
+    /// is given back.
+    fn place_mine(
+        &mut self,
+        owner: PlayerId,
+        weapon: WeaponId,
+        mode: Mode,
+        projectile: &ProjectileConfig,
+        body: &ProjectileBodyConfig,
+        aim: &Aim,
+    ) {
+        let forward = view_direction(aim.pitch, aim.yaw);
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let reach = hitscan::trace(
+            &scene,
+            &[],
+            owner,
+            aim.eye,
+            aim.eye + forward * ATTACH_REACH,
+            &Hull::POINT,
+        );
+        if !matches!(reach.struck, Struck::World | Struck::Brush(_)) {
+            self.refund(owner, weapon, mode);
+            return;
+        }
+        let normal = reach.normal.try_normalize().unwrap_or(Vec3::Z);
+        let desc = PropDesc {
+            pieces: vec![ConvexHull::cylinder(
+                body.radius,
+                body.height,
+                CYLINDER_SIDES,
+            )],
+            origin: reach.end + normal * body.height * 0.5,
+            rotation: Quat::from_rotation_arc(Vec3::Z, normal),
+            motion: Motion::Fixed,
+            mass: body.mass,
+            material: rl_data::MaterialConfig {
+                friction: body.friction,
+                restitution: projectile.bounce.unwrap_or(0.4),
+                density: DENSITY,
+            },
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            debris: true,
+            start_asleep: true,
+            grabbable: false,
+            free_on_grab: false,
+            breakable: None,
+            surface: body.surface.to_ascii_lowercase(),
+        };
+        let handle = self.physics.add_prop(&desc);
+        self.grenades.push(Grenade {
+            id: self.next_projectile,
+            body: handle,
+            weapon,
+            mode,
+            owner,
+            age: 0.0,
+            beam_end: None,
+        });
+        self.next_projectile = self.next_projectile.wrapping_add(1);
+        self.refresh_grenade_views();
+    }
+
+    /// Gives back the ammo of a shot that was not made.
+    fn refund(&mut self, owner: PlayerId, weapon: WeaponId, mode: Mode) {
+        let arsenal = std::sync::Arc::clone(&self.arsenal);
+        let Some(rl_data::FireAmmo::Reserve { ammo, count }) =
+            arsenal.fire(weapon, mode).map(|fire| fire.ammo.clone())
+        else {
+            return;
+        };
+        if let (Some(ammo), Some(player)) = (arsenal.find_ammo(&ammo), self.player_mut(owner)) {
+            player.inventory.give_ammo(&arsenal, ammo, count);
+        }
+    }
+
+    /// A SLAM's alternate button: detonates the player's satchels if any are
+    /// out, otherwise switches the SLAM between its modes.
+    pub(super) fn slam_alt(&mut self, owner: PlayerId) {
+        let arsenal = std::sync::Arc::clone(&self.arsenal);
+        let remote = |grenade: &Grenade| {
+            grenade.owner == owner
+                && matches!(
+                    arsenal.fire(grenade.weapon, grenade.mode).map(|fire| &fire.shot),
+                    Some(rl_data::Shot::Projectile(config))
+                        if config.body.as_ref().is_some_and(|body| body.remote)
+                )
+        };
+        if self.grenades.iter().any(remote) {
+            self.detonations.push(owner);
+        } else if let Some(player) = self.player_mut(owner) {
+            player.inventory.toggle_slam();
+        }
     }
 
     /// Runs the fuses: a grenade whose time is up explodes where it lies
@@ -159,6 +276,14 @@ impl Simulation {
             return;
         }
         let arsenal = std::sync::Arc::clone(&self.arsenal);
+        let targets = self.targets();
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let detonations = std::mem::take(&mut self.detonations);
         let mut gone = Vec::new();
         for grenade in &mut self.grenades {
             grenade.age += self.dt;
@@ -173,7 +298,29 @@ impl Simulation {
                 .physics
                 .center_of_mass(grenade.body)
                 .unwrap_or(Vec3::ZERO);
-            let burst = config.fuse.is_some_and(|fuse| grenade.age >= fuse);
+            let mut burst = config.fuse.is_some_and(|fuse| grenade.age >= fuse);
+            if let Some(body) = &config.body {
+                burst |= body.remote && detonations.contains(&grenade.owner);
+                if let Some(beam) = &body.beam
+                    && grenade.age >= beam.arm_time
+                    && let Some(pose) = self.physics.pose(grenade.body)
+                {
+                    let axis = pose.rotation * Vec3::Z;
+                    // No player's box is the owner's own here: the beam
+                    // catches everyone.
+                    let nobody = PlayerId::from_index(usize::from(u16::MAX));
+                    let trace = hitscan::trace(
+                        &scene,
+                        &targets,
+                        nobody,
+                        position + axis * BEAM_START,
+                        position + axis * beam.length,
+                        &Hull::POINT,
+                    );
+                    grenade.beam_end = Some(trace.end);
+                    burst |= matches!(trace.struck, Struck::Player(_) | Struck::Prop(_));
+                }
+            }
             if burst || grenade.age >= config.lifetime || position.z < VOID_Z {
                 if burst && let Some(explosion) = &config.explosion {
                     let (owner, weapon) = (grenade.owner, grenade.weapon);
@@ -245,6 +392,7 @@ impl Simulation {
                     position: self.physics.center_of_mass(grenade.body)?,
                     rotation: pose.rotation,
                     age: grenade.age,
+                    beam_end: grenade.beam_end,
                 })
             })
             .collect();

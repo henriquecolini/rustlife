@@ -84,9 +84,9 @@ pub use simulation::SimulationConfig;
 pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig, WeaponSelectSounds};
 pub use validate::Problem;
 pub use weapons::{
-    AccuracyConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig, HitscanConfig,
-    MeleeConfig, MissileConfig, ProjectileBodyConfig, ProjectileConfig, Reload, Shot,
-    WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
+    AccuracyConfig, BeamConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig,
+    HitscanConfig, MeleeConfig, MissileConfig, ProjectileBodyConfig, ProjectileConfig, Reload,
+    Shot, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
 };
 
 /// File name of the movement data.
@@ -150,6 +150,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "weapons/rifle.ron",
     "weapons/scattergun.ron",
     "weapons/sidearm.ron",
+    "weapons/slam.ron",
     "weapons/smg.ron",
     "weapons/stunstick.ron",
     "items/armor_station.ron",
