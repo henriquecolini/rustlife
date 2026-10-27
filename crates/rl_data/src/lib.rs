@@ -70,7 +70,7 @@ pub use effects::{
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};
 pub use items::{ITEM_SOUNDS, ItemConfig, ItemEffect, StationConfig};
-pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig, PuntConfig};
+pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
 pub use map_logic::{MapExplosionConfig, MapLogicConfig};
 pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,

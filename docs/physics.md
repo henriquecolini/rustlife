@@ -223,40 +223,19 @@ after a launch, punt or dry fire, secondary after a grab or drop.
 
 | Input | Action |
 |-------|--------|
-| Secondary fire, held | Look for a prop: the first one the aiming ray hits within `grab.pull_range`, else the liftable one nearest the view within `grab.range` and `grab.cone`. Grab it if it is within `grab.range` and weighs at most `grab.max_mass`; otherwise pull it (below). Nothing liftable: rest `interval`. |
+| Secondary fire, held | Grab a grabbable prop within `grab.range` weighing at most `grab.max_mass`. Pull one within `grab.pull_range` (1000, four times HL2's `physcannon_tracelength`) towards you, picking up speed at `grab.pull_accel` to `grab.pull_speed`, until it is close enough to grab: far props gravitate slowly and arrive fast. |
 | Secondary fire, pressed while holding | Let go. Secondary fire must then be released before it reaches for another prop. |
 | Primary fire while holding | Launch the prop along the view at `launch.speed × mass_curve(mass)`. |
-| Primary fire otherwise | Punt the dynamic prop under the crosshair within `punt.range` (below). |
+| Primary fire otherwise | Punt the dynamic prop under the crosshair within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. |
 
-**Rests.** A grab rests secondary fire for `grab.grab_rest` (0.1 s). A drop,
-a launch and a punt rest *both* buttons for the weapon's `interval` (0.5 s),
-as does a look that finds nothing (secondary only).
-
-**Pulling.** Every tick the prop gets an impulse towards the eyes of
-`grab.pull_impulse` (4000 kg·u/s per 15 ms, so scaled by `dt / reference_tick`
-on other tick rates), times `(mass + 0.5) × pull_light_gain` for props under
-`pull_light_mass` (50 kg). A prop of 50 kg or less therefore gains about
-80 units/s of speed per tick, a 250 kg one 16.
-
-**Punting.** Two impulses along the view (its downward part scaled by
-`punt.downward_scale`, so aiming down lifts): `punt.force` through the centre
-of mass, and `punt.offset_force × min(mass, offset_mass_cap)` at the point
-hit. A light prop leaves at about `force / mass`, a heavy one at about
-`offset_force` plus that.
-
-The **mass curve** of a launch is `(kg, factor)` points, interpolated
-linearly and held flat past the ends. Heavier props leave slower.
+The **mass curves** are `(kg, factor)` points, interpolated linearly and
+held flat past the ends. Heavier props leave slower.
 
 **Holding.** While held, a prop ignores gravity and does not collide with its
-holder. Its centre of mass is steered to the hold point, found as
-`CGrabController::UpdateObject` does: with `reach` = `hold.player_radius` plus
-how far the prop extends back towards the player, the point is
-`hold.clearance + reach` along the view (pitch clamped to `hold.pitch_limit`),
-or half the reach if a wall is within half of `clearance + 2 × reach`; and a
-sphere of the reach around it is kept off the player's vertical axis. Its
-orientation follows the view's yaw, keeping the orientation it had relative to
-the player when grabbed. The steering sets the prop's velocity each tick
-rather than moving it:
+holder. Its centre of mass is steered to the hold point, `hold.distance` plus
+the prop's radius in front of the eyes. Its orientation follows the view's
+yaw, keeping the orientation it had relative to the player when grabbed. The
+steering sets the prop's velocity each tick rather than moving it:
 
 ```text
 v = clamp((target − centre) / follow_time, max_speed)
@@ -264,9 +243,8 @@ v = clamp((target − centre) / follow_time, max_speed)
 ```
 
 So the held prop still collides. It shoves other props aside and cannot pass
-through walls. The grip breaks when the running average of the distance from
-the hold point (each tick weighs in by its length in seconds, so about a
-second long; halved while above `max_speed`) passes `hold.break_distance`.
+through walls. If something holds it more than `hold.break_distance` from
+the hold point for `hold.break_time`, the grip breaks.
 
 **Letting go.** A prop is usually held overlapping its holder's box, for
 example when looking down. Once let go, the prop and its former holder keep
@@ -322,35 +300,18 @@ the throw. These scripts move the player on the hosted server.
 `cargo bench -p rl_sim -- simulation` times a whole tick with one player
 running into 64 tumbling crates.
 
-## Gravity Gun numbers (from server.so)
+## Gravity Gun launch speed (from server.so)
 
-Read from `CWeaponPhysCannon` and `CGrabController` in HL2DM's `server.so`
-(see `docs/plans/hl2dm-effects.md` for how):
+The physcannon's force routine returns `direction * force`, where `force` is
+`physcannon_maxforce` (1500) for a prop up to 100 kg, easing (smoothstep over
+`(mass - 100) * 0.002`) down to `physcannon_minforce` (700) at 600 kg. A held
+prop thrown with primary fire leaves at that speed. `data/tools/manipulator.ron`
+encodes it as `speed: 1500` and a mass curve. The punt uses the same curve at a
+higher speed (2600), on purpose: HL2's punt hits much harder than a throw.
 
-- **Launch.** The force routine returns `direction * force`, where `force` is
-  `physcannon_maxforce` (1500) for a prop up to 100 kg, easing (smoothstep over
-  `(mass - 100) * 0.002`) down to `physcannon_minforce` (700) at 600 kg.
-  `data/tools/manipulator.ron` encodes it as `speed: 1500` and a mass curve.
-- **Finding a prop.** A hull trace 4 units wide runs 4 × `physcannon_tracelength`
-  (1000) along the view. A prop it hits within a quarter of that (250) is
-  grabbed, one farther is pulled. Without a hit, the prop within 251 units of
-  the eyes nearest the view direction inside `physcannon_cone` (0.97) is grabbed.
-- **Pull.** `ApplyForceCenter` (an impulse) of `physcannon_pullforce` (4000) along
-  the line to the eyes, every tick the button is held (the routine rearms itself
-  after 0.01 s), times `(mass + 0.5) × 0.02` below 50 kg.
-- **Punt** (`PuntVPhysics`). `ApplyForceCenter(15000 × r × dir)` and
-  `ApplyForceOffset(600 × min(M, 250) × r × dir, hit point)` for each physics
-  object of the entity, `r` its share of the mass (the main object's share plus a
-  half, up to 1; the others' half their share), `M` the total mass; a downward
-  `dir.z` is multiplied by -0.65. Range `physcannon_tracelength` (250).
-- **Hold.** The shadow controller's `maxSpeed` is 1000 and `maxAngular` 3600
-  (scaled by the cube of the time to arrive, 0.1 s, rising to 1 s when the prop
-  is pinned under something heavy: not modelled); `UpdateObject` gives the hold
-  point as above (24 + 2 × reach, minus the reach), and the grip breaks when
-  `ComputeError` exceeds 12.
-- **Refire.** A grab rests secondary 0.1 s; a miss, a drop, a launch and a
-  punt rest 0.5 s (a launch and a punt both buttons, as does a drop).
-
-Not modelled: props made of several physics objects (the punt's mass shares),
-the shadow controller's slowdown under heavy contact, and the angular speed
-limit's units.
+Reading `server.so` further (pull as an impulse every tick, a grip that breaks
+at a running error of 12 units, a hold point from the prop's extent) gave a pull
+that hurt the player and a grip that let go when the view was shaken, so those
+numbers were not used. The hold, grip and pull here are rustlife's own; what is
+HL2's is the reach (a look four times the trace length, so far props are drawn
+in), the mass limit and the launch speeds.

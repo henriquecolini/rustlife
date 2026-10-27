@@ -570,21 +570,6 @@ impl PhysicsWorld {
         self.prop(body).map(|prop| prop.radius)
     }
 
-    /// How far a prop reaches from its centre of mass along `direction` (a
-    /// unit vector): the farthest of its corners that way, units. Negative
-    /// if the whole prop lies behind its centre.
-    #[must_use]
-    pub fn extent(&self, body: BodyId, direction: Vec3) -> Option<f32> {
-        let prop = self.prop(body)?;
-        let pose = self.pose(body)?;
-        let center = self.center_of_mass(body)?;
-        prop.pieces
-            .iter()
-            .flat_map(|piece| piece.hull.vertices())
-            .map(|&vertex| ((pose.rotation * vertex + pose.position) - center).dot(direction))
-            .reduce(f32::max)
-    }
-
     /// Whether a prop is simulated (rather than fixed in place).
     #[must_use]
     pub fn is_dynamic(&self, body: BodyId) -> bool {

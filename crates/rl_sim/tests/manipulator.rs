@@ -157,10 +157,9 @@ fn grabs_a_prop_in_range_and_carries_it_in_front() {
         ..UserCmd::default()
     };
     room.run(60, &ahead);
-    // The crate reaches 8 units back towards the player.
-    let reach = data.manipulator.hold.player_radius + 8.0;
+    let radius = room.sim.physics().radius(room.prop).expect("prop");
     let eye = Vec3::new(0.0, 0.0, 1.0 + 64.0);
-    let expected = eye + Vec3::X * (data.manipulator.hold.clearance + reach);
+    let expected = eye + Vec3::X * (data.manipulator.hold.distance + radius);
     let center = room.center();
     assert!(
         center.distance(expected) < 4.0,
@@ -200,7 +199,7 @@ fn distant_props_are_pulled_in_then_grabbed() {
     );
     let mut room = Room::new(&data, distance, 10.0);
     let mut events = Vec::new();
-    for _ in 0..132 {
+    for _ in 0..400 {
         let cmd = room.aim(Buttons::ATTACK2);
         events.extend(room.run(1, &cmd));
         if !events.is_empty() {
@@ -213,6 +212,32 @@ fn distant_props_are_pulled_in_then_grabbed() {
         "pulled in: {}",
         room.center()
     );
+}
+
+#[test]
+fn far_props_start_to_move_slowly_and_gain_speed() {
+    let data = data();
+    let grab = &data.manipulator.grab;
+    let mut room = Room::new(&data, grab.pull_range - 50.0, 10.0);
+    let speed = |room: &Room| {
+        room.sim
+            .physics()
+            .velocity(room.prop)
+            .expect("prop")
+            .0
+            .length()
+    };
+    let cmd = room.aim(Buttons::ATTACK2);
+    room.run(8, &cmd);
+    let early = speed(&room);
+    assert!(early < grab.pull_speed * 0.5, "gentle at first: {early}");
+    for _ in 0..80 {
+        let cmd = room.aim(Buttons::ATTACK2);
+        room.run(1, &cmd);
+    }
+    let later = speed(&room);
+    assert!(later > early * 2.0, "then faster: {early} -> {later}");
+    assert!(later <= grab.pull_speed + 1.0, "never past the top speed");
 }
 
 #[test]
@@ -249,8 +274,7 @@ fn primary_fire_punts_a_prop_that_is_not_held() {
     let events = room.run(1, &punt);
     assert_eq!(events, [ToolEvent::Punted(room.prop)]);
     let (velocity, _) = room.sim.physics().velocity(room.prop).expect("prop");
-    let (through_center, at_point) = data.manipulator.punt.impulses(mass);
-    let expected = (through_center + at_point) / mass;
+    let expected = data.manipulator.punt.speed_for(mass);
     assert!(
         (velocity.x - expected).abs() < expected * 0.15 && velocity.z.abs() < expected * 0.15,
         "punted at {velocity}, expected about {expected} along +X"
@@ -260,78 +284,6 @@ fn primary_fire_punts_a_prop_that_is_not_held() {
     let mut far = Room::new(&data, data.manipulator.punt.range + 100.0, mass);
     let punt = far.aim(Buttons::ATTACK);
     assert_eq!(far.run(1, &punt), [ToolEvent::DryFire]);
-}
-
-#[test]
-fn a_punt_rests_the_tool_for_half_a_second() {
-    let data = data();
-    let mut room = Room::with_pedestal(&data, 100.0, 30.0, 56.0);
-    let punt = room.aim(Buttons::ATTACK);
-    assert_eq!(room.run(1, &punt), [ToolEvent::Punted(room.prop)]);
-    // Primary fire does nothing for the next half second (33 ticks)...
-    assert!(room.run(30, &punt).is_empty(), "rested for 0.5 s");
-    // ...and then fires again (at nothing: the prop is gone).
-    assert_eq!(room.run(10, &punt), [ToolEvent::DryFire]);
-}
-
-#[test]
-fn nothing_under_the_crosshair_takes_the_prop_in_the_cone() {
-    let data = data();
-    let mut room = Room::new(&data, 100.0, 20.0);
-    // Eight degrees off: the ray misses a crate 16 wide at 100 units, but
-    // it is well inside the cone.
-    let off = UserCmd {
-        yaw: 8.0,
-        ..room.aim(Buttons::ATTACK2)
-    };
-    assert_eq!(room.run(1, &off), [ToolEvent::Grabbed(room.prop)]);
-
-    // Forty degrees off is outside it.
-    let mut room = Room::new(&data, 100.0, 20.0);
-    let wide = UserCmd {
-        yaw: 40.0,
-        ..room.aim(Buttons::ATTACK2)
-    };
-    assert!(room.run(5, &wide).is_empty());
-    assert_eq!(room.held(), None);
-}
-
-#[test]
-fn a_fruitless_look_rests_secondary_fire() {
-    let data = data();
-    let mut room = Room::new(&data, 100.0, 20.0);
-    // Look away (a miss), then straight at the prop.
-    let away = UserCmd {
-        yaw: 90.0,
-        buttons: Buttons::ATTACK2,
-        ..UserCmd::default()
-    };
-    assert!(room.run(1, &away).is_empty());
-    let grab = room.aim(Buttons::ATTACK2);
-    assert!(room.run(30, &grab).is_empty(), "still resting");
-    assert_eq!(room.run(10, &grab), [ToolEvent::Grabbed(room.prop)]);
-}
-
-#[test]
-fn a_pull_gives_light_props_the_same_speed_up_per_tick() {
-    let data = data();
-    let distance = 600.0;
-    let mut speeds = Vec::new();
-    for mass in [5.0, 20.0, 45.0] {
-        let mut room = Room::new(&data, distance, mass);
-        let cmd = room.aim(Buttons::ATTACK2);
-        room.run(1, &cmd);
-        let (velocity, _) = room.sim.physics().velocity(room.prop).expect("prop");
-        speeds.push(velocity.length());
-    }
-    // (mass + 0.5) * 0.02 / mass is within a few percent of 0.02 * 1000/…
-    // — about 85 units/s per 15 ms tick for them all.
-    for speed in &speeds {
-        assert!(
-            (60.0..120.0).contains(speed),
-            "one tick of pulling gave {speed}: {speeds:?}"
-        );
-    }
 }
 
 #[test]
@@ -355,18 +307,17 @@ fn secondary_fire_drops_and_waits_for_a_fresh_press() {
 #[test]
 fn the_grip_breaks_when_the_prop_is_held_back() {
     let mut data = data();
-    data.manipulator.hold.break_distance = 1.0;
+    data.manipulator.hold.break_distance = 4.0;
+    data.manipulator.hold.break_time = 0.1;
     let mut room = Room::new(&data, 60.0, 10.0);
     let grab = room.aim(Buttons::ATTACK2);
     room.run(1, &grab);
-    // Looking down puts the hold point nearly on the floor, where the
-    // crate's centre cannot go: it stays a few units off, and the running
-    // average of that error passes the (tiny) limit.
+    // Looking straight down puts the hold point under the floor.
     let down = UserCmd {
         pitch: 89.0,
         ..UserCmd::default()
     };
-    let events = room.run(132, &down);
+    let events = room.run(66, &down);
     assert_eq!(events, [ToolEvent::GripBroke(room.prop)]);
 }
 
@@ -390,20 +341,4 @@ fn a_launched_prop_hurts_the_player_it_hits() {
     let hits: Vec<_> = impacts.iter().filter(|(id, _)| *id == victim).collect();
     assert_eq!(hits.len(), 1, "{impacts:?}");
     assert!(hits[0].1.damage > 50.0, "{:?}", hits[0]);
-}
-
-#[test]
-fn a_prop_reaches_as_far_as_its_corners_along_a_direction() {
-    let data = data();
-    let room = Room::new(&data, 100.0, 20.0);
-    let physics = room.sim.physics();
-    let along = |direction: Vec3| {
-        physics
-            .extent(room.prop, direction.normalize())
-            .expect("prop")
-    };
-    // A crate of half-size 8: a face is 8 away, a corner 8 * sqrt(3).
-    assert!((along(-Vec3::X) - 8.0).abs() < 0.1);
-    assert!((along(Vec3::Z) - 8.0).abs() < 0.1);
-    assert!((along(Vec3::ONE) - 8.0 * 3f32.sqrt()).abs() < 0.1);
 }
