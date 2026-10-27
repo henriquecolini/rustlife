@@ -92,10 +92,14 @@ pub(crate) fn latch_input(
             latched.buttons = latched.buttons | button;
         }
     }
+    // A slot key opens the list on that slot (a click picks), as HL2DM's
+    // `hud_fastswitch 0` does.
     for (key, slot) in SLOT_KEYS {
-        if keys.just_pressed(key) {
-            selector.dismiss();
-            latched.choice = Some(Choice::Slot(slot));
+        if keys.just_pressed(key)
+            && let (Some(sim), Some(local)) = (game.sim(), game.local())
+            && let Some(player) = sim.player(local)
+        {
+            selector.select_slot(&player.inventory, sim.arsenal(), slot);
         }
     }
     if bindings.just_pressed("last_weapon", &keys, mouse.as_deref()) {

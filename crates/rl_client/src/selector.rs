@@ -1,6 +1,6 @@
-//! The weapon list: scrolling the mouse wheel moves a cursor through the
-//! carried weapons without changing weapon, and a click confirms the pick,
-//! as in Half-Life 2.
+//! The weapon list: scrolling the mouse wheel or pressing a slot key moves a
+//! cursor through the carried weapons without changing weapon, and a click
+//! confirms the pick, as in Half-Life 2 (`hud_fastswitch 0`, its default).
 //!
 //! The list is open while the wheel keeps turning and for [`HOLD_SECS`]
 //! after the last notch, then fades over [`FADE_SECS`]. Once the hold is
@@ -102,6 +102,40 @@ impl WeaponSelector {
         };
         self.cues.push(Cue::Step);
         self.cursor = inventory.cycle(arsenal, from, forward).or(from);
+        self.idle = 0.0;
+    }
+
+    /// Opens the list on a weapon of `slot`, or moves on to the next one
+    /// there if the cursor (or the weapon in hand) is already in it,
+    /// wrapping round. A slot with nothing usable in it only cues a denial.
+    pub(crate) fn select_slot(&mut self, inventory: &Inventory, arsenal: &Arsenal, slot: u8) {
+        let order = |weapon: &WeaponId| {
+            arsenal
+                .weapon(*weapon)
+                .map_or((u8::MAX, u8::MAX), |config| (config.slot, config.position))
+        };
+        let from = if self.is_open() {
+            self.cursor
+        } else {
+            inventory.active()
+        };
+        let mut in_slot: Vec<WeaponId> = inventory
+            .weapons()
+            .filter(|weapon| order(weapon).0 == slot)
+            .filter(|&weapon| inventory.usable(arsenal, weapon) || Some(weapon) == from)
+            .collect();
+        in_slot.sort_by_key(order);
+        let at = from.and_then(|from| in_slot.iter().position(|&weapon| weapon == from));
+        let pick = match at {
+            Some(at) => in_slot.get((at + 1) % in_slot.len()),
+            None => in_slot.first(),
+        };
+        let Some(&pick) = pick else {
+            self.cues.push(Cue::Deny);
+            return;
+        };
+        self.cues.push(Cue::Step);
+        self.cursor = Some(pick);
         self.idle = 0.0;
     }
 
@@ -274,6 +308,63 @@ mod tests {
         selector.confirm();
         assert!(selector.swallows_attack(true, false), "and its later ticks");
         assert!(!selector.swallows_attack(false, false));
+    }
+
+    #[test]
+    fn a_slot_key_opens_the_list_on_that_slots_first_weapon() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        let slot = arsenal
+            .weapon(inventory.active().expect("armed"))
+            .expect("weapon")
+            .slot;
+        // Another slot than the one in hand holds the manipulator (slot 1).
+        let other = if slot == 1 { 2 } else { 1 };
+        selector.select_slot(&inventory, &arsenal, other);
+        assert!(selector.is_open());
+        let cursor = selector.cursor().expect("a weapon");
+        assert_eq!(arsenal.weapon(cursor).expect("weapon").slot, other);
+        assert_eq!(selector.take_cues(), [Cue::Step]);
+        assert_eq!(selector.confirm(), Some(cursor), "a click picks it");
+    }
+
+    #[test]
+    fn repeating_a_slot_key_steps_through_the_slot_and_wraps() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        let mut counts = std::collections::BTreeMap::new();
+        for weapon in inventory.weapons() {
+            if let Some(config) = arsenal.weapon(weapon) {
+                *counts.entry(config.slot).or_insert(0usize) += 1;
+            }
+        }
+        let (&crowded, &count) = counts
+            .iter()
+            .find(|&(_, &count)| count > 1)
+            .expect("the loadout has two weapons in one slot");
+        let mut seen = Vec::new();
+        for _ in 0..count {
+            selector.select_slot(&inventory, &arsenal, crowded);
+            seen.push(selector.cursor().expect("a weapon"));
+        }
+        let mut distinct = seen.clone();
+        distinct.sort_by_key(|weapon| weapon.index());
+        distinct.dedup();
+        assert_eq!(distinct.len(), count, "each weapon once: {seen:?}");
+        selector.select_slot(&inventory, &arsenal, crowded);
+        assert_eq!(selector.cursor(), seen.first().copied(), "wrapped round");
+    }
+
+    #[test]
+    fn an_empty_slot_is_denied() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        selector.select_slot(&inventory, &arsenal, 9);
+        assert!(!selector.is_open());
+        assert_eq!(selector.take_cues(), [Cue::Deny]);
     }
 
     #[test]

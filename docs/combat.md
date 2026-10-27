@@ -86,12 +86,12 @@ Shot by shot:
   opens with each shot and closes while the trigger is up.
 
 The command for a tick may choose a weapon (`UserCmd::select`). The client
-resolves number keys (cycling through the weapons of a slot), `Q` (last
-weapon) and a pick from the weapon list (`Choice::Weapon`) against the
-inventory (`Inventory::choose`). Switching deploys the new weapon, and
+resolves `Q` (last weapon) and a pick from the weapon list (`Choice::Weapon`)
+against the inventory (`Inventory::choose`). Switching deploys the new weapon, and
 cancels whatever the old one was doing.
 
-The mouse wheel does not switch by itself: it opens a weapon list above the
+The mouse wheel and the number keys (cycling through the weapons of a slot,
+as HL2DM's `hud_fastswitch 0` does) do not switch by themselves: they open a weapon list above the
 ammo counter and moves a cursor through the usable weapons
 (`Inventory::cycle`). Primary fire confirms the pick (and does not fire);
 after a second without scrolling the list fades and the pick is forgotten,
