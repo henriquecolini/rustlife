@@ -21,6 +21,7 @@ use bevy::camera::Exposure;
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::{IrradianceVolume, Skybox};
 use bevy::math::Affine2;
+use bevy::mesh::skinning::SkinnedMesh;
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use rl_assets::{MapAsset, MapMesh, SOURCE, SourceMaterial};
@@ -81,6 +82,9 @@ struct Resolved {
     vertex_lit: Handle<StandardMaterial>,
     /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
     blend: Option<Handle<StandardMaterial>>,
+    /// For `$selfillum`: the light the surface gives off, added over a
+    /// [`VertexLit`] surface (which, being unlit, has no emissive of its own).
+    glow: Option<Handle<StandardMaterial>>,
 }
 
 /// The root of a brush entity (door, breakable, ...).
@@ -100,6 +104,10 @@ pub(crate) struct VertexLit;
 /// Marks a surface whose blend layer has already been spawned.
 #[derive(Component)]
 struct BlendLayered;
+
+/// Marks a surface whose glow layer has already been spawned.
+#[derive(Component)]
+struct GlowLayered;
 
 /// The neutral material a surface shows until its real material is ready.
 #[derive(Resource)]
@@ -465,6 +473,9 @@ type SurfaceItems = (
     &'static mut MeshMaterial3d<StandardMaterial>,
     Has<BlendLayered>,
     Has<VertexLit>,
+    Has<GlowLayered>,
+    Option<&'static ChildOf>,
+    Option<&'static SkinnedMesh>,
 );
 
 /// Swaps each surface's placeholder material for the real one as soon as its
@@ -479,7 +490,19 @@ fn resolve_materials(
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (entity, surface, mesh, lightmap, mut material, layered, vertex_lit) in &mut surfaces {
+    for (
+        entity,
+        surface,
+        mesh,
+        lightmap,
+        mut material,
+        layered,
+        vertex_lit,
+        glowing,
+        parent,
+        skin,
+    ) in &mut surfaces
+    {
         let name = &surface.0;
 
         let resolved = if let Some(resolved) = material_maps.resolved.get(name) {
@@ -502,6 +525,10 @@ fn resolve_materials(
                     .base_color2
                     .clone()
                     .map(|texture| standard_materials.add(blend_layer(texture))),
+                glow: source
+                    .emissive
+                    .clone()
+                    .map(|texture| standard_materials.add(glow_layer(texture))),
             };
             if let Some((rate, angle)) = source.scroll {
                 material_maps.scrolling.push((
@@ -536,6 +563,20 @@ fn resolve_materials(
                 .insert(BlendLayered)
                 .add_child(layer);
         }
+        if let (Some(glow), true, false) = (resolved.glow, vertex_lit, glowing) {
+            // The same mesh, skin included, drawn again with the surface's own
+            // light added. Beside the surface rather than under it, where it
+            // is a part of its model like the surface.
+            let mut layer = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(glow)));
+            if let Some(skin) = skin {
+                layer.insert(skin.clone());
+            }
+            let layer = layer.id();
+            commands.entity(entity).insert(GlowLayered);
+            commands
+                .entity(parent.map_or(entity, ChildOf::parent))
+                .add_child(layer);
+        }
     }
 }
 
@@ -559,6 +600,27 @@ fn scroll_textures(
 /// How opaque a water surface is drawn: what lies below shows through
 /// faintly, tinted by the water's fog.
 const WATER_OPACITY: f32 = 0.75;
+
+/// How bright a `$selfillum` surface's light is, over the 1.0 of full
+/// white: Source's HDR lets it exceed what the lit surface can, which is
+/// what the bloom of a view model feeds on.
+const SELF_ILLUM_GAIN: f32 = 2.0;
+
+/// The light a `$selfillum` surface gives off: its masked colour, added to
+/// what is behind it and lit by nothing.
+fn glow_layer(texture: Handle<Image>) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::linear_rgb(SELF_ILLUM_GAIN, SELF_ILLUM_GAIN, SELF_ILLUM_GAIN),
+        base_color_texture: Some(texture),
+        unlit: true,
+        cull_mode: None,
+        double_sided: true,
+        alpha_mode: AlphaMode::Add,
+        // Coplanar with the surface it lights.
+        depth_bias: 1.0,
+        ..default()
+    }
+}
 
 /// A water surface: its fog colour, mostly opaque, unlit (water has no
 /// lightmap; its colour is the light it carries), and its base texture —
@@ -635,17 +697,14 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         double_sided: true,
         alpha_mode,
         lightmap_exposure: baked_light_scale(),
-        // `$selfillum`: it shines with its own colour, as bright as a lit
-        // surface at full light.
-        emissive: if source.self_illum {
+        // `$selfillum`: where the base texture's alpha says so, it shines with
+        // its own colour, as bright as a lit surface at full light.
+        emissive: if source.emissive.is_some() {
             LinearRgba::gray(baked_light_scale())
         } else {
             LinearRgba::BLACK
         },
-        emissive_texture: source
-            .self_illum
-            .then(|| source.base_color.clone())
-            .flatten(),
+        emissive_texture: source.emissive.clone(),
         ..default()
     }
 }
