@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 5c9e96679fe983155273b9ff651a9d6241b07d5fcb6bef3480faeded53db5ffd # shrinks to face = 0, gap = 0.0, across = (0.0, 0.0), steps = [(Vec3(0.0, 0.0, 0.0), 0.0)]
+cc d074a67efd0e728665c1f352a6bce9644f8d4096c14ee4381959040e181ffd2d # shrinks to face = 5, gap = 0.0, across = (0.0, 0.0), steps = [(Vec3(0.0, 0.0, 0.0), 0.0)]

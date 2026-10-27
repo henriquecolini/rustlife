@@ -150,7 +150,9 @@ pub(crate) fn clip_convex(
         if d2 > 0.0 {
             ends_out = true;
         }
-        if d1 > 0.0 {
+        // Resting exactly on a plane is outside it: touching is not
+        // penetrating.
+        if d1 >= 0.0 {
             starts_out = true;
         }
         // Starts in front of this plane and stays there (or gets farther
@@ -158,8 +160,9 @@ pub(crate) fn clip_convex(
         if d1 > 0.0 && (d2 >= DIST_EPSILON || d2 >= d1) {
             return;
         }
-        // Wholly behind this plane: it does not limit the segment.
-        if d1 <= 0.0 && d2 <= 0.0 {
+        // Wholly behind this plane: it does not limit the segment. Resting
+        // exactly on it is not behind it, so a move into the face is stopped.
+        if d1 < 0.0 && d2 < 0.0 {
             continue;
         }
         if d1 > d2 {
@@ -277,6 +280,18 @@ mod tests {
         let stuck = sweep(Vec3::ZERO, Vec3::new(0.5, 0.0, 0.0), 0.0);
         assert!(stuck.all_solid);
         assert_eq!(stuck.fraction, 0.0);
+    }
+
+    #[test]
+    fn resting_exactly_on_a_face_is_outside_it() {
+        // A box whose side lies exactly on the cube's face (centre 2 from the
+        // origin, half-extent 1, face at 1): not stuck, and blocked moving in.
+        let resting = Vec3::new(-2.0, 0.0, 0.0);
+        let still = sweep(resting, resting, 1.0);
+        assert!(!still.start_solid && still.fraction >= 1.0);
+        let into = sweep(resting, resting + Vec3::new(0.5, 0.0, 0.0), 1.0);
+        assert!(!into.start_solid);
+        assert!(into.fraction.abs() < f32::EPSILON, "{into:?}");
     }
 
     #[test]
