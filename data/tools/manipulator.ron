@@ -5,6 +5,7 @@
 // seconds. How often it acts is in weapons/manipulator.ron, like any
 // weapon's rate of fire. See docs/physics.md.
 Manipulator(
+    // Ranges follow HL2's physcannon_tracelength (250) and physcannon_maxmass (250).
     grab: (
         // Props within this distance of the eyes can be grabbed...
         range: 160.0,
@@ -12,7 +13,7 @@ Manipulator(
         max_mass: 250.0,
         // Props farther away, up to this distance, are pulled in while
         // secondary fire is held...
-        pull_range: 640.0,
+        pull_range: 250.0,
         // ...at this speed, units/s.
         pull_speed: 500.0,
     ),

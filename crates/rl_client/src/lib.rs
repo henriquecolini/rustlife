@@ -54,6 +54,7 @@ pub mod fog;
 pub mod grenades;
 pub mod hud;
 pub mod input;
+mod laser;
 pub mod menu;
 pub mod movers;
 pub mod net;

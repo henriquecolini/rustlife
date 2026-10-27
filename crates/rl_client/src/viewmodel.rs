@@ -31,6 +31,7 @@ use rl_sim::weapons::{Arsenal, Inventory, Mode, Phase, ReloadStep, WeaponId};
 use crate::AppState;
 use crate::animation::{Animated, SequencePlayer};
 use crate::camera::FlyCam;
+use crate::laser::LaserPlugin;
 use crate::net::Game;
 use crate::player::{LocalPlayer, Ticked, ViewMode};
 use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
@@ -50,7 +51,7 @@ pub struct ViewModelPlugin;
 
 impl Plugin for ViewModelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ZoomPlugin)
+        app.add_plugins((ZoomPlugin, LaserPlugin))
             .add_systems(Update, add_view_camera)
             .add_systems(
                 Update,

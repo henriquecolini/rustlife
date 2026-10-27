@@ -349,16 +349,37 @@ impl Simulation {
         self.next_projectile = self.next_projectile.wrapping_add(1);
     }
 
-    /// Where the laser of a missile's owner points: along their view from
-    /// their eyes to the first thing it meets, if they still hold the
-    /// launcher with its laser on.
-    fn laser_dot(&self, projectile: &Projectile, targets: &[Target]) -> Option<Vec3> {
-        let player = self.player(projectile.owner)?;
+    /// Where the laser of `owner` points: along their view from their eyes
+    /// to the first thing it meets, if they are alive with a launcher in
+    /// hand and its laser on. This is the red dot a rocket steers by.
+    #[must_use]
+    pub fn laser_dot(&self, owner: PlayerId) -> Option<Vec3> {
+        self.laser_dot_among(owner, None, &self.targets())
+    }
+
+    /// [`Self::laser_dot`], for a rocket of `weapon` if given (the owner
+    /// must still hold that weapon).
+    fn laser_dot_among(
+        &self,
+        owner: PlayerId,
+        weapon: Option<WeaponId>,
+        targets: &[Target],
+    ) -> Option<Vec3> {
+        let player = self.player(owner)?;
         let inventory = &player.inventory;
-        if !player.alive() || inventory.active() != Some(projectile.weapon) || !inventory.laser() {
+        let active = inventory.active()?;
+        let has_laser = self
+            .arsenal
+            .weapon(active)
+            .is_some_and(|config| config.laser);
+        if !player.alive()
+            || !has_laser
+            || !inventory.laser()
+            || weapon.is_some_and(|w| w != active)
+        {
             return None;
         }
-        let eye = self.eye_position(projectile.owner)?;
+        let eye = self.eye_position(owner)?;
         let (pitch, yaw) = player.look;
         let scene = Scene {
             world: &self.world,
@@ -367,7 +388,7 @@ impl Simulation {
             others: &[],
         };
         let end = eye + view_direction(pitch, yaw) * LASER_RANGE;
-        let trace = hitscan::trace(&scene, targets, projectile.owner, eye, end, &Hull::POINT);
+        let trace = hitscan::trace(&scene, targets, owner, eye, end, &Hull::POINT);
         (trace.struck != Struck::Nothing).then_some(trace.end)
     }
 
@@ -382,7 +403,9 @@ impl Simulation {
         let dots: Vec<Option<Vec3>> = self
             .projectiles
             .iter()
-            .map(|projectile| self.laser_dot(projectile, &targets))
+            .map(|projectile| {
+                self.laser_dot_among(projectile.owner, Some(projectile.weapon), &targets)
+            })
             .collect();
         let scene = Scene {
             world: &self.world,
