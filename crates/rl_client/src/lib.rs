@@ -57,6 +57,7 @@ pub mod grenades;
 pub mod hud;
 pub mod input;
 mod laser;
+mod lightning;
 pub mod menu;
 pub mod movers;
 pub mod net;

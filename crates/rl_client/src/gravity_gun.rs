@@ -1,7 +1,7 @@
 //! The Gravity Gun's look, from HL2DM's `C_WeaponPhysCannon`: its prongs open
-//! (a delta layer of the view model, driven by the `active` pose parameter)
-//! and glow, and a beam runs from the muzzle to the prop it is pulling or
-//! holding.
+//! (a layer of the view model, driven by the `active` pose parameter), sprites
+//! glow on its attachments, and arcs of lightning crackle between the prong
+//! tips and the muzzle while it holds something.
 //!
 //! The prongs open when the gun has something to take (a prop it could pull
 //! or grab is under the crosshair), is pulling or is holding one, and close
@@ -9,14 +9,29 @@
 //! (`m_ElementParameter`) that moves to its target along a spline: to open
 //! takes 0.2 s, to close 0.5 s.
 //!
-//! Glows sit on the model's attachments: a core (`sprites/orangecore1`,
-//! scale 14) on the muzzle, at half strength when the gun is ready and full
-//! when it is pulling or holding, and soft lights (`orangelight1`, strength
-//! 64 of 255) on the forks, fading in and out over 0.2 s. Their sizes are the
-//! game's scales read as units across, which was not verified against the
-//! game.
+//! The sprites are the game's `CPhysCannonEffect`s, each with a size (units
+//! across, drawn facing the camera) and a strength that move to their targets
+//! the same way:
+//!
+//! | sprite | where | ready | holding |
+//! |---|---|---|---|
+//! | `orangecore1` | muzzle | 14, half | 14, full |
+//! | `glow04` tinted orange | the forks' bases, middles and tips | 6.4, a quarter | 8, a quarter |
+//! | `orangeflare1` | the forks' tips | - | 6.4, full |
+//!
+//! The core is the game's size. The glows are an eighth of what `DoEffectReady`
+//! and `DoEffectHolding` ask for (51.2 and 64): drawn that big they cover the
+//! screen, which the game's frames do not, so they were matched to those.
+//! Strengths are blended as the game does, in gamma space, which in linear
+//! light is the strength to the power of 2.2.
+//!
+//! And, while it holds a prop, three `orangelight1` beams of amplitude 16
+//! (see [`crate::lightning`]) from each fork's tip to the muzzle.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
 use rl_data::Shot;
@@ -25,7 +40,7 @@ use rl_sim::tools::manipulator::{Aim, liftable_target};
 use crate::AppState;
 use crate::animation::{Animated, Attachment, SequencePlayer};
 use crate::camera::FlyCam;
-use crate::effects::as_seen_by_main;
+use crate::lightning::{self, BeamShape, Random};
 use crate::net::Game;
 use crate::player::{LocalPlayer, ViewAngles};
 use crate::settings::Bindings;
@@ -47,6 +62,16 @@ pub(crate) struct Element {
 }
 
 impl Element {
+    /// A value that is `value` and stays so until sent elsewhere.
+    pub(crate) fn at(value: f32) -> Self {
+        Self {
+            from: value,
+            to: value,
+            start: 0.0,
+            duration: 0.0,
+        }
+    }
+
     /// Where it is at time `now`, seconds.
     pub(crate) fn value(&self, now: f32) -> f32 {
         if self.duration <= 0.0 {
@@ -84,7 +109,7 @@ enum Look {
     Shut,
     /// A prop it could take is under the crosshair: prongs open, a glow.
     Ready,
-    /// Pulling a prop in or holding one: a brighter glow and a beam.
+    /// Pulling a prop in or holding one: a brighter glow, flares and arcs.
     Working,
 }
 
@@ -94,23 +119,23 @@ struct GunLook {
     /// Its view model.
     view: Option<Entity>,
     look: Look,
-    /// The prop it works on (Bevy space), for the beam.
-    target: Option<Vec3>,
 }
 
 /// The game's sprites for the effects.
 #[derive(Resource, Default)]
 struct GunSprites {
     core: Handle<SpriteAsset>,
-    light: Handle<SpriteAsset>,
-    beam: Handle<SpriteAsset>,
+    glow: Handle<SpriteAsset>,
+    flare: Handle<SpriteAsset>,
+    arc: Handle<SpriteAsset>,
 }
 
 fn load_sprites(mut sprites: ResMut<GunSprites>, assets: Res<AssetServer>) {
     let load = |name: &str| assets.load(format!("{SOURCE}://materials/sprites/{name}.vmt"));
     sprites.core = load("orangecore1");
-    sprites.light = load("orangelight1_noz");
-    sprites.beam = load("physbeam");
+    sprites.glow = load("glow04_noz");
+    sprites.flare = load("orangeflare1");
+    sprites.arc = load("orangelight1_noz");
 }
 
 /// Reads what the gun is doing, from the local player's game state and
@@ -147,11 +172,10 @@ fn read_gun(
             continue;
         };
         let pulling_wanted = bindings.pressed("attack2", &keys, mouse.as_deref());
-        let (state, target) = gun_state(sim, local.id, *angles, pulling_wanted);
+        let state = gun_state(sim, local.id, *angles, pulling_wanted);
         *look = GunLook {
             view: Some(entity),
             look: state,
-            target,
         };
         if state == Look::Shut {
             prongs.0.go_to(0.0, CLOSE_SECS, now);
@@ -162,25 +186,23 @@ fn read_gun(
     }
 }
 
-/// What the gun of `player` is doing, and the centre of the prop it works
-/// on: holding one, pulling one in (`pulling_wanted`, the alternate button
-/// held, on a prop beyond grab range), ready to take one, or nothing.
+/// What the gun of `player` is doing: holding a prop, pulling one in
+/// (`pulling_wanted`, the alternate button held, on a prop beyond grab range),
+/// ready to take one, or nothing.
 fn gun_state(
     sim: &rl_sim::simulation::Simulation,
     player: rl_sim::simulation::PlayerId,
     angles: ViewAngles,
     pulling_wanted: bool,
-) -> (Look, Option<Vec3>) {
-    let centre = |body| {
-        sim.physics()
-            .center_of_mass(body)
-            .map(|centre| coords::position(centre.to_array()))
-    };
-    if let Some(held) = sim.player(player).and_then(|p| p.manipulator.held()) {
-        return (Look::Working, centre(held));
+) -> Look {
+    if sim
+        .player(player)
+        .is_some_and(|p| p.manipulator.held().is_some())
+    {
+        return Look::Working;
     }
     let Some(eye) = sim.eye_position(player) else {
-        return (Look::Shut, None);
+        return Look::Shut;
     };
     let aim = Aim {
         eye,
@@ -188,72 +210,135 @@ fn gun_state(
         yaw: angles.yaw,
     };
     let config = &sim.data().manipulator;
-    let Some((body, point)) = liftable_target(&aim, sim.world(), sim.physics(), config) else {
-        return (Look::Shut, None);
+    let Some((_, point)) = liftable_target(&aim, sim.world(), sim.physics(), config) else {
+        return Look::Shut;
     };
     if pulling_wanted && point.distance(eye) > config.grab.range {
-        (Look::Working, centre(body))
+        Look::Working
     } else {
-        (Look::Ready, None)
+        Look::Ready
     }
 }
 
-/// A glow on one of the view model's attachments.
+/// The sprites that glow on the gun's attachments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The disc around the muzzle, `orangecore1`.
+    Core,
+    /// The soft orange light on the forks, `glow04`.
+    Glow,
+    /// The flare on each fork's tip, `orangeflare1`, while holding.
+    EndCap,
+}
+
+/// Where each sprite goes: its kind and the attachment it sits on. The view
+/// model has no third fork's glows, but has its tip.
+const PLACEMENTS: [(Kind, &str); 10] = [
+    (Kind::Core, "muzzle"),
+    (Kind::Glow, "fork1b"),
+    (Kind::Glow, "fork1m"),
+    (Kind::Glow, "fork1t"),
+    (Kind::Glow, "fork2b"),
+    (Kind::Glow, "fork2m"),
+    (Kind::Glow, "fork2t"),
+    (Kind::EndCap, "fork1t"),
+    (Kind::EndCap, "fork2t"),
+    (Kind::EndCap, "fork3t"),
+];
+
+/// The prong tips the arcs start from; they end at the muzzle.
+const ARC_TIPS: [&str; 3] = ["fork1t", "fork2t", "fork3t"];
+
+/// Where a sprite is headed: how big (units across) and how strong (0 to 1),
+/// and seconds each takes to get there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Goal {
+    size: f32,
+    size_secs: f32,
+    strength: f32,
+    strength_secs: f32,
+}
+
+impl Kind {
+    /// What the sprite does in `look`, if it shows at all. The numbers are
+    /// those of `DoEffectReady` and `DoEffectHolding`, the strengths out of
+    /// 255.
+    fn goal(self, look: Look) -> Option<Goal> {
+        let goal = |size, size_secs, strength: f32, strength_secs| Goal {
+            size,
+            size_secs,
+            strength: strength / 255.0,
+            strength_secs,
+        };
+        match (self, look) {
+            (_, Look::Shut) | (Self::EndCap, Look::Ready) => None,
+            (Self::Core, Look::Ready) => Some(goal(14.0, 0.2, 128.0, 0.2)),
+            (Self::Core, Look::Working) => Some(goal(14.0, 0.2, 255.0, 0.1)),
+            (Self::Glow, Look::Ready) => Some(goal(6.4, 0.2, 64.0, 0.2)),
+            (Self::Glow, Look::Working) => Some(goal(8.0, 0.2, 64.0, 0.2)),
+            (Self::EndCap, Look::Working) => Some(goal(6.4, 0.2, 255.0, 0.2)),
+        }
+    }
+
+    /// The size it starts at, units (`StartEffects`).
+    fn first_size(self) -> f32 {
+        match self {
+            Self::Core => 0.0,
+            Self::Glow | Self::EndCap => 6.4,
+        }
+    }
+
+    /// The colour it is drawn with: the glows are tinted orange
+    /// (255, 128, 0), the rest are as their textures are.
+    fn tint(self) -> Vec3 {
+        match self {
+            Self::Glow => Vec3::new(1.0, 128.0 / 255.0, 0.0),
+            Self::Core | Self::EndCap => Vec3::ONE,
+        }
+    }
+}
+
+/// Seconds a sprite takes to go out when the gun has nothing to do.
+const FADE_OUT_SECS: f32 = 0.1;
+
+/// A sprite on one of the view model's attachments.
 #[derive(Component)]
 struct Glow {
     view: Entity,
     attachment: Entity,
-    /// The muzzle's core, rather than a light on a fork.
-    core: bool,
-    alpha: Element,
+    kind: Kind,
+    /// Units across.
     size: Element,
+    /// 0 to 1.
+    strength: Element,
     material: Handle<StandardMaterial>,
 }
 
-/// The beam to the prop being worked, drawn in the world.
+/// What [`shine`] moves: each sprite and where it is.
+type GlowItems = (
+    &'static mut Glow,
+    &'static mut Transform,
+    &'static mut GlobalTransform,
+);
+
+/// One arc of lightning, drawn in the view model's space.
 #[derive(Component)]
-struct PhysBeam {
+struct Arc {
     view: Entity,
-    material: Handle<StandardMaterial>,
-    /// How many frames its sprite has: it crackles through them.
-    frames: u32,
+    tip: Entity,
+    muzzle: Entity,
+    mesh: Handle<Mesh>,
 }
 
-/// How many beam frames pass in a second.
-const BEAM_FRAMES_PER_SECOND: f32 = 20.0;
-
-/// The texture coordinates of frame `frame` of a sprite whose `frames`
-/// frames lie side by side.
-fn frame_uv(frames: u32, frame: u32) -> bevy::math::Affine2 {
-    let frames = frames.max(1) as f32;
-    bevy::math::Affine2::from_scale_angle_translation(
-        Vec2::new(1.0 / frames, 1.0),
-        0.0,
-        Vec2::new((frame % frames as u32) as f32 / frames, 0.0),
-    )
-}
-
-/// Seconds a glow takes to come and go.
-const GLOW_SECS: f32 = 0.2;
-/// Where the glows go, by attachment, and whether it is the muzzle's core.
-const GLOWS: [(&str, bool); 5] = [
-    ("muzzle", true),
-    ("fork1m", false),
-    ("fork1t", false),
-    ("fork2m", false),
-    ("fork2t", false),
-];
-/// How big the muzzle's core is, and the forks' lights ready and working,
-/// units across.
-const CORE_SIZE: f32 = 14.0;
-const LIGHT_SIZE: (f32, f32) = (6.4, 8.0);
-/// How strong they are: the core's ready and working (128 and 255 of 255),
-/// the lights' (64 of 255).
-const CORE_ALPHA: (f32, f32) = (0.5, 1.0);
-const LIGHT_ALPHA: f32 = 0.25;
-/// Width of the beam, units, and how strong.
-const BEAM_WIDTH: f32 = 2.0;
-const BEAM_ALPHA: f32 = 0.6;
+/// What an arc looks like while the gun holds something: `DoEffectHolding`'s
+/// `BeamInfo_t` for the view model (a width of 0 at the tip to 4 at the muzzle,
+/// amplitude 16, 8 segments, speed 150).
+const ARC: BeamShape = BeamShape {
+    widths: (0.0, 4.0),
+    amplitude: 16.0,
+    segments: 8,
+    speed: 150.0,
+};
 
 /// The attachment named `name` on `view`'s model.
 fn attachment_of(
@@ -277,8 +362,24 @@ fn attachment_of(
     })
 }
 
-/// Makes the gun's glows and beam when it comes into hand, and removes them
-/// when it goes.
+/// A material for a sprite: its texture, added to what is behind it.
+fn sprite_material(
+    materials: &mut Assets<StandardMaterial>,
+    sprite: &SpriteAsset,
+) -> Handle<StandardMaterial> {
+    materials.add(StandardMaterial {
+        base_color: Color::linear_rgba(1.0, 1.0, 1.0, 0.0),
+        base_color_texture: Some(sprite.image.clone()),
+        unlit: true,
+        double_sided: true,
+        cull_mode: None,
+        alpha_mode: AlphaMode::Add,
+        ..default()
+    })
+}
+
+/// Makes the gun's sprites and arcs when it comes into hand, and removes
+/// them when it goes.
 fn spawn_effects(
     mut commands: Commands,
     look: Res<GunLook>,
@@ -287,8 +388,9 @@ fn spawn_effects(
     attachments: Query<(Entity, &Attachment)>,
     parents: Query<&ChildOf>,
     glows: Query<(Entity, &Glow)>,
-    beams: Query<(Entity, &PhysBeam)>,
+    arcs: Query<(Entity, &Arc)>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (entity, glow) in &glows {
@@ -296,8 +398,8 @@ fn spawn_effects(
             commands.entity(entity).try_despawn();
         }
     }
-    for (entity, beam) in &beams {
-        if look.view != Some(beam.view) {
+    for (entity, arc) in &arcs {
+        if look.view != Some(arc.view) {
             commands.entity(entity).try_despawn();
         }
     }
@@ -307,38 +409,32 @@ fn spawn_effects(
     if glows.iter().any(|(_, glow)| glow.view == view) {
         return;
     }
-    let (Some(core), Some(light), Some(beam)) = (
+    let (Some(core), Some(glow), Some(flare), Some(arc)) = (
         assets.get(&sprites.core),
-        assets.get(&sprites.light),
-        assets.get(&sprites.beam),
+        assets.get(&sprites.glow),
+        assets.get(&sprites.flare),
+        assets.get(&sprites.arc),
     ) else {
         return;
     };
-    let sprite_material = |materials: &mut Assets<StandardMaterial>, sprite: &SpriteAsset| {
-        materials.add(StandardMaterial {
-            base_color: Color::linear_rgba(1.0, 1.0, 1.0, 0.0),
-            base_color_texture: Some(sprite.image.clone()),
-            uv_transform: frame_uv(sprite.frames, 0),
-            unlit: true,
-            double_sided: true,
-            cull_mode: None,
-            alpha_mode: AlphaMode::Add,
-            ..default()
-        })
-    };
     let quad = meshes.add(Rectangle::new(1.0, 1.0));
-    for (name, is_core) in GLOWS {
+    for (kind, name) in PLACEMENTS {
         let Some(attachment) = attachment_of(view, name, &attachments, &parents) else {
             continue;
         };
-        let material = sprite_material(&mut materials, if is_core { core } else { light });
+        let sprite = match kind {
+            Kind::Core => core,
+            Kind::Glow => glow,
+            Kind::EndCap => flare,
+        };
+        let material = sprite_material(&mut materials, sprite);
         commands.spawn((
             Glow {
                 view,
                 attachment,
-                core: is_core,
-                alpha: Element::default(),
-                size: Element::default(),
+                kind,
+                size: Element::at(kind.first_size()),
+                strength: Element::at(0.0),
                 material: material.clone(),
             },
             Mesh3d(quad.clone()),
@@ -348,42 +444,69 @@ fn spawn_effects(
             RenderLayers::layer(VIEW_LAYER),
         ));
     }
-    let material = sprite_material(&mut materials, beam);
-    commands.spawn((
-        PhysBeam {
-            view,
-            material: material.clone(),
-            frames: beam.frames,
-        },
-        Mesh3d(quad),
-        MeshMaterial3d(material),
-        Transform::from_scale(Vec3::ZERO),
-        NoFrustumCulling,
-    ));
+    // The beam's texture is tiled along it.
+    if let Some(mut image) = images.get_mut(&arc.image) {
+        image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_v: ImageAddressMode::Repeat,
+            ..ImageSamplerDescriptor::linear()
+        });
+    }
+    let material = materials.add(StandardMaterial {
+        base_color_texture: Some(arc.image.clone()),
+        unlit: true,
+        double_sided: true,
+        cull_mode: None,
+        alpha_mode: AlphaMode::Add,
+        ..default()
+    });
+    let Some(muzzle) = attachment_of(view, "muzzle", &attachments, &parents) else {
+        return;
+    };
+    for name in ARC_TIPS {
+        let Some(tip) = attachment_of(view, name, &attachments, &parents) else {
+            continue;
+        };
+        let mesh = meshes.add(Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        ));
+        commands.spawn((
+            Arc {
+                view,
+                tip,
+                muzzle,
+                mesh: mesh.clone(),
+            },
+            Mesh3d(mesh),
+            MeshMaterial3d(material.clone()),
+            Transform::IDENTITY,
+            Visibility::Hidden,
+            NoFrustumCulling,
+            RenderLayers::layer(VIEW_LAYER),
+        ));
+    }
 }
 
-/// Fades the glows with what the gun is doing and keeps them on their
-/// attachments, facing the camera.
+/// Sends each sprite to where the gun's state wants it, and keeps it on its
+/// attachment, facing the camera.
 fn shine(
     time: Res<Time>,
     look: Res<GunLook>,
     attachments: Query<&GlobalTransform, With<Attachment>>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
-    mut glows: Query<(&mut Glow, &mut Transform)>,
+    mut glows: Query<GlowItems, (Without<Attachment>, Without<FlyCam>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let now = time.elapsed_secs();
-    for (mut glow, mut transform) in &mut glows {
-        let (alpha, size) = match (glow.core, look.look) {
-            (_, Look::Shut) => (0.0, if glow.core { CORE_SIZE } else { LIGHT_SIZE.0 }),
-            (true, Look::Ready) => (CORE_ALPHA.0, CORE_SIZE),
-            (true, Look::Working) => (CORE_ALPHA.1, CORE_SIZE),
-            (false, Look::Ready) => (LIGHT_ALPHA, LIGHT_SIZE.0),
-            (false, Look::Working) => (LIGHT_ALPHA, LIGHT_SIZE.1),
-        };
-        glow.alpha.go_to(alpha, GLOW_SECS, now);
-        glow.size.go_to(size, GLOW_SECS, now);
-        let shown = glow.alpha.value(now);
+    for (mut glow, mut transform, mut global) in &mut glows {
+        match glow.kind.goal(look.look) {
+            Some(goal) => {
+                glow.size.go_to(goal.size, goal.size_secs, now);
+                glow.strength.go_to(goal.strength, goal.strength_secs, now);
+            }
+            None => glow.strength.go_to(0.0, FADE_OUT_SECS, now),
+        }
+        let strength = glow.strength.value(now);
         if let Ok(attachment) = attachments.get(glow.attachment) {
             transform.translation = attachment.translation();
         }
@@ -391,69 +514,73 @@ fn shine(
             transform.rotation = camera.to_scale_rotation_translation().1;
         }
         let across = glow.size.value(now) * coords::METERS_PER_UNIT;
-        transform.scale = if shown > 0.001 {
+        transform.scale = if strength > 0.001 {
             Vec3::new(across, across, 1.0)
         } else {
             Vec3::ZERO
         };
+        *global = GlobalTransform::from(*transform);
         if let Some(mut material) = materials.get_mut(&glow.material) {
-            material.base_color = Color::linear_rgba(1.0, 1.0, 1.0, shown);
+            let tint = glow.kind.tint();
+            material.base_color = Color::linear_rgba(tint.x, tint.y, tint.z, strength.powf(2.2));
         }
     }
 }
 
-/// Draws the beam from the muzzle to the prop being worked, while there is
-/// one.
-fn beam(
+/// Redraws the arcs, new every frame, while the gun is working: from each
+/// prong's tip to the muzzle.
+fn arcs(
     time: Res<Time>,
     look: Res<GunLook>,
-    named: Query<(Entity, &Attachment)>,
-    parents: Query<&ChildOf>,
     attachments: Query<&GlobalTransform, With<Attachment>>,
-    camera: Query<(&GlobalTransform, &Projection), With<FlyCam>>,
-    mut beams: Query<(&PhysBeam, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    camera: Query<&GlobalTransform, With<FlyCam>>,
+    mut arcs: Query<(&Arc, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut random: Local<Option<Random>>,
 ) {
-    let (Ok((camera, projection)), Ok((beam, mut transform))) =
-        (camera.single(), beams.single_mut())
-    else {
+    let Ok(camera) = camera.single() else {
         return;
     };
-    let muzzle = look
-        .view
-        .and_then(|view| attachment_of(view, "muzzle", &named, &parents))
-        .and_then(|entity| attachments.get(entity).ok())
-        .map(GlobalTransform::translation);
-    let (Some(muzzle), Some(target), Projection::Perspective(view), Look::Working) =
-        (muzzle, look.target, projection, look.look)
-    else {
-        transform.scale = Vec3::ZERO;
-        return;
-    };
-    // The view model camera has a narrower view: where the main camera sees
-    // the muzzle is the beam's start.
-    let start = as_seen_by_main(muzzle, camera, view.fov);
-    let along = target - start;
-    let length = along.length();
-    let Some(direction) = along.try_normalize() else {
-        transform.scale = Vec3::ZERO;
-        return;
-    };
-    // A strip along the beam, turned about it to face the camera.
-    let toward = (camera.translation() - start.midpoint(target)).normalize_or_zero();
-    let across = direction.cross(toward).normalize_or_zero();
-    let facing = across.cross(direction);
-    transform.translation = start.midpoint(target);
-    transform.rotation = Quat::from_mat3(&Mat3::from_cols(across, direction, facing));
-    transform.scale = Vec3::new(BEAM_WIDTH * coords::METERS_PER_UNIT, length, 1.0);
-    if let Some(mut material) = materials.get_mut(&beam.material) {
-        material.base_color = Color::linear_rgba(1.0, 1.0, 1.0, BEAM_ALPHA);
-        let frame = (time.elapsed_secs() * BEAM_FRAMES_PER_SECOND) as u32;
-        material.uv_transform = frame_uv(beam.frames, frame);
+    let random = random.get_or_insert_with(|| Random::new(0x51CA_77E5));
+    let now = time.elapsed_secs();
+    for (arc, mut visibility) in &mut arcs {
+        let ends = (look.look == Look::Working)
+            .then(|| {
+                attachments
+                    .get(arc.tip)
+                    .ok()
+                    .zip(attachments.get(arc.muzzle).ok())
+            })
+            .flatten();
+        let (Some((tip, muzzle)), Some(mut mesh)) = (ends, meshes.get_mut(&arc.mesh)) else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        visibility.set_if_neq(Visibility::Inherited);
+        let unit = coords::METERS_PER_UNIT;
+        let eye = camera.translation();
+        let noise = lightning::fractal_noise(random);
+        let toward_camera = |at: Vec3| (eye - at * unit).normalize_or_zero();
+        let start = tip.translation() / unit;
+        let end = muzzle.translation() / unit;
+        let middle = start.midpoint(end);
+        let points = lightning::points(start, end, toward_camera(middle), &ARC, &noise, now);
+        let (positions, uvs, indices) = lightning::ribbon(&points, toward_camera);
+        let positions: Vec<[f32; 3]> = positions
+            .into_iter()
+            .map(|p| (Vec3::from(p) * unit).to_array())
+            .collect();
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            vec![[0.0, 0.0, 1.0]; positions.len()],
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_indices(Indices::U32(indices));
     }
 }
 
-/// Draws the Gravity Gun's prongs, glows and beam.
+/// Draws the Gravity Gun's prongs, sprites and arcs.
 pub(crate) struct GravityGunPlugin;
 
 impl Plugin for GravityGunPlugin {
@@ -463,9 +590,19 @@ impl Plugin for GravityGunPlugin {
             .add_systems(Startup, load_sprites)
             .add_systems(
                 Update,
-                (read_gun, spawn_effects, shine, beam)
+                (read_gun, spawn_effects)
                     .chain()
                     .after(crate::viewmodel::animate_view_model)
+                    .after(crate::camera::CameraPlaced)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            // On the attachments, which are where they are this frame only
+            // once transforms are propagated.
+            .add_systems(
+                PostUpdate,
+                (shine, arcs)
+                    .chain()
+                    .in_set(crate::camera::AttachedEffects)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -500,20 +637,59 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_of_a_strip_is_a_slice_of_the_texture() {
-        let uv = frame_uv(20, 3);
-        assert!((uv.transform_point2(Vec2::new(0.0, 0.5)).x - 0.15).abs() < 1e-6);
-        assert!((uv.transform_point2(Vec2::new(1.0, 0.5)).x - 0.2).abs() < 1e-6);
-        // Frames wrap round.
-        assert_eq!(frame_uv(20, 23), frame_uv(20, 3));
-    }
-
-    #[test]
     fn the_same_target_does_not_restart_it() {
         let mut element = Element::default();
         element.go_to(1.0, OPEN_SECS, 0.0);
         let before = element.value(0.15);
         element.go_to(1.0, OPEN_SECS, 0.15);
         assert!((element.value(0.15) - before).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_value_made_at_a_number_is_there() {
+        let element = Element::at(6.4);
+        assert_eq!(element.value(0.0), 6.4);
+        assert_eq!(element.value(100.0), 6.4);
+    }
+
+    #[test]
+    fn the_sprites_do_what_the_game_says_when_ready_and_holding() {
+        let core = |look| Kind::Core.goal(look).unwrap();
+        assert_eq!(
+            (core(Look::Ready).size, core(Look::Working).size),
+            (14.0, 14.0)
+        );
+        assert!(
+            (core(Look::Ready).strength - 0.5).abs() < 0.01,
+            "128 of 255"
+        );
+        assert_eq!(core(Look::Working).strength, 1.0);
+        let glow = |look| Kind::Glow.goal(look).unwrap();
+        assert_eq!(
+            (glow(Look::Ready).size, glow(Look::Working).size),
+            (6.4, 8.0)
+        );
+        assert!(
+            (glow(Look::Ready).strength - 0.25).abs() < 0.01,
+            "64 of 255"
+        );
+        assert_eq!(Kind::EndCap.goal(Look::Ready), None, "only while holding");
+        assert_eq!(Kind::EndCap.goal(Look::Working).unwrap().size, 6.4);
+    }
+
+    #[test]
+    fn nothing_shows_while_the_gun_has_nothing_to_do() {
+        for kind in [Kind::Core, Kind::Glow, Kind::EndCap] {
+            assert_eq!(kind.goal(Look::Shut), None);
+        }
+    }
+
+    #[test]
+    fn only_the_glows_are_orange() {
+        assert_eq!(Kind::Core.tint(), Vec3::ONE);
+        assert_eq!(Kind::EndCap.tint(), Vec3::ONE);
+        let glow = Kind::Glow.tint();
+        assert_eq!((glow.x, glow.z), (1.0, 0.0));
+        assert!((glow.y - 0.5).abs() < 0.01);
     }
 }
