@@ -57,7 +57,15 @@ const FIRE_DEPTH_BIAS: f32 = 4.0;
 /// How much brighter the additive layers (fire, embers) are drawn than their
 /// colour says. The engine adds them in HDR, where overlapping puffs blow out
 /// to white; this stands in for that.
-const GLOW_GAIN: f32 = 3.0;
+const GLOW_GAIN: f32 = 2.0;
+/// Smoke is never drawn darker than this share of the room's light.
+const SMOKE_FLOOR: f32 = 0.05;
+/// A spark streak's width is picked between these, units.
+const SPARK_WIDTH: (f32, f32) = (2.0, 16.0);
+/// A spark streak is this many seconds of its flight long.
+const SPARK_SECONDS: f32 = 0.04;
+/// The longest a frame is allowed to age the puffs, seconds.
+const MAX_STEP: f32 = 1.0 / 30.0;
 /// Most puffs alive at once.
 const MAX_PUFFS: usize = 400;
 
@@ -73,11 +81,19 @@ pub(crate) enum Sprite {
     Embers1,
     /// `effects/fire_embers2`.
     Embers2,
+    /// `effects/fire_embers3`: the spark streaks of `CreateDebris`.
+    Spark,
 }
 
 impl Sprite {
     /// Every sprite, to load.
-    const ALL: [Self; 4] = [Self::Smoke, Self::Fire, Self::Embers1, Self::Embers2];
+    const ALL: [Self; 5] = [
+        Self::Smoke,
+        Self::Fire,
+        Self::Embers1,
+        Self::Embers2,
+        Self::Spark,
+    ];
 
     fn material(self) -> &'static str {
         match self {
@@ -85,6 +101,7 @@ impl Sprite {
             Self::Fire => "effects/fire_cloud2",
             Self::Embers1 => "effects/fire_embers1",
             Self::Embers2 => "effects/fire_embers2",
+            Self::Spark => "effects/fire_embers3",
         }
     }
 }
@@ -149,6 +166,9 @@ pub(crate) struct Puff {
     pub roll: f32,
     /// Starting roll speed, radians/s.
     pub roll_speed: f32,
+    /// Whether it is a streak along its flight (a spark) rather than a
+    /// camera-facing puff; sparks are not braked.
+    pub streak: bool,
 }
 
 /// A number in `low..high`.
@@ -192,6 +212,9 @@ fn plane_axes(normal: Vec3) -> (Vec3, Vec3) {
 /// see [`wall_normal`]): four big smoke clouds, eight smaller, sixteen
 /// embers, thirty-two quick fire puffs (the fireball) and a ring of smoke
 /// thirty-two flung flat.
+// The engine's groups are one long list of numbers; splitting it would only
+// scatter them.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puff> {
     let mut puffs = Vec::with_capacity(92);
     // A grey of `low..1` of full; the smoke's is of the light's `level`.
@@ -201,7 +224,7 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
     };
     let lit = light.tint();
     let smoke = |rng: &mut Rng| {
-        let g = between(rng, 0.5, 1.0) * light.level;
+        let g = between(rng, 0.5, 1.0) * (SMOKE_FLOOR + (1.0 - SMOKE_FLOOR) * light.level);
         [g * lit[0], g * lit[1], g * lit[2]]
     };
 
@@ -219,6 +242,7 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             color: smoke(rng),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -2.0, 2.0),
+            streak: false,
         });
     }
     // Eight smaller, quicker smoke clouds around the centre: 32-64 doubling.
@@ -236,6 +260,7 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             color: smoke(rng),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
+            streak: false,
         });
     }
     // Sixteen embers thrown all about, leaning along the open side: constant
@@ -258,6 +283,7 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             color: grey(rng, 0.75, 1.0),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
+            streak: false,
         });
     }
     // The fireball: thirty-two fire puffs of 0.2-0.4 s scattered over 96 units.
@@ -275,6 +301,7 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             color: grey(rng, 0.5, 1.0),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -16.0, 16.0),
+            streak: false,
         });
     }
     // A ring of thirty-two flung flat along the open side.
@@ -289,9 +316,27 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             velocity: direction * between(rng, 500.0, 2000.0),
             life: between(rng, 0.5, 1.5),
             size: (size, size),
-            color: grey(rng, 0.5, light.level),
+            color: grey(rng, 0.5, SMOKE_FLOOR + (1.0 - SMOKE_FLOOR) * light.level),
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
+            streak: false,
+        });
+    }
+    // Eight to sixteen spark streaks flung every way, gone in a tenth of a
+    // second (`CreateDebris`).
+    for _ in 0..(8 + rng.below(9)) {
+        let direction = random_vector(rng, 1.0).normalize_or_zero();
+        let half_width = 0.5 * between(rng, SPARK_WIDTH.0, SPARK_WIDTH.1);
+        puffs.push(Puff {
+            sprite: Sprite::Spark,
+            offset: Vec3::ZERO,
+            velocity: direction * between(rng, 1500.0, 2500.0),
+            life: between(rng, 0.05, 0.1),
+            size: (half_width, half_width),
+            color: [1.0, 0.85, 0.55],
+            roll: 0.0,
+            roll_speed: 0.0,
+            streak: true,
         });
     }
     puffs
@@ -463,6 +508,10 @@ struct Alive {
     color: [f32; 3],
     /// Whether it is added to what is behind it, and so given [`GLOW_GAIN`].
     glows: bool,
+    /// Whether it is a streak along its flight.
+    streak: bool,
+    /// Where it began, Bevy space.
+    origin: Vec3,
     roll: f32,
     roll_speed: f32,
     material: Handle<StandardMaterial>,
@@ -528,6 +577,8 @@ fn spawn_puffs(
                     size: puff.size,
                     color: puff.color,
                     glows: sprite.additive,
+                    streak: puff.streak,
+                    origin: blast.at + offset,
                     roll: puff.roll,
                     roll_speed: puff.roll_speed,
                     material: material.clone(),
@@ -549,7 +600,8 @@ fn move_puffs(
     mut puffs: Query<(Entity, &mut Alive, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let dt = time.delta_secs();
+    // A long frame must not age the briefest puffs to death unseen.
+    let dt = time.delta_secs().min(MAX_STEP);
     let Ok(camera) = camera.single() else {
         return;
     };
@@ -561,18 +613,43 @@ fn move_puffs(
             commands.entity(entity).try_despawn();
             continue;
         }
-        puff.velocity = braked(puff.velocity, dt);
+        if !puff.streak {
+            puff.velocity = braked(puff.velocity, dt);
+        }
         let step = coords::direction(puff.velocity.to_array()) * coords::METERS_PER_UNIT * dt;
-        transform.translation += step;
+        if !puff.streak {
+            transform.translation += step;
+        }
         let (roll, roll_speed) = rolled(puff.roll, puff.roll_speed, dt);
         puff.roll = roll;
         puff.roll_speed = roll_speed;
         let t = puff.age / puff.life;
         let half = puff.size.0 + (puff.size.1 - puff.size.0) * t;
-        transform.scale = Vec3::splat(2.0 * half * coords::METERS_PER_UNIT);
-        transform.rotation = facing * Quat::from_rotation_z(puff.roll);
+        if puff.streak {
+            let heading = coords::direction(puff.velocity.to_array()).normalize_or_zero();
+            let length = puff.velocity.length() * SPARK_SECONDS * coords::METERS_PER_UNIT;
+            let toward = (eye - transform.translation).normalize_or_zero();
+            let across = heading.cross(toward).normalize_or_zero();
+            let facing_axis = across.cross(heading);
+            transform.rotation = Quat::from_mat3(&Mat3::from_cols(across, heading, facing_axis));
+            transform.scale = Vec3::new(2.0 * half * coords::METERS_PER_UNIT, length, 1.0);
+            // The head has flown straight; the streak's middle is half its
+            // length behind it.
+            let head = puff.origin
+                + coords::direction(puff.velocity.to_array()) * coords::METERS_PER_UNIT * puff.age;
+            transform.translation = head - heading * (0.5 * length);
+        } else {
+            transform.scale = Vec3::splat(2.0 * half * coords::METERS_PER_UNIT);
+            transform.rotation = facing * Quat::from_rotation_z(puff.roll);
+        }
         let depth = (transform.translation - eye).dot(*forward) / coords::METERS_PER_UNIT;
-        let brightness = fade(t);
+        // Sparks keep their brightness until they die; puffs fade as the
+        // engine's explosion particles do.
+        let brightness = if puff.streak {
+            1.0 - t.powi(4)
+        } else {
+            fade(t)
+        };
         let alpha = brightness * near_fade(depth);
         if let Some(mut material) = materials.get_mut(&puff.material) {
             let gain = if puff.glows { GLOW_GAIN } else { 1.0 };
@@ -590,6 +667,10 @@ mod tests {
         engine_puffs(&mut Rng::seeded(&[9]), normal, Light::BRIGHT)
     }
 
+    fn sparks(puffs: &[Puff]) -> usize {
+        puffs.iter().filter(|p| p.streak).count()
+    }
+
     fn of(puffs: &[Puff], sprite: Sprite) -> Vec<Puff> {
         puffs
             .iter()
@@ -599,9 +680,9 @@ mod tests {
     }
 
     #[test]
-    fn a_blast_is_ninety_two_puffs_in_five_groups() {
+    fn a_blast_is_ninety_two_puffs_in_five_groups_and_some_sparks() {
         let all = puffs(Vec3::Z);
-        assert_eq!(all.len(), 92);
+        assert_eq!(all.len() - sparks(&all), 92);
         assert_eq!(of(&all, Sprite::Fire).len(), 32, "the fireball");
         assert_eq!(
             of(&all, Sprite::Smoke).len(),
@@ -629,12 +710,26 @@ mod tests {
     fn every_puff_stays_within_the_engines_ranges() {
         for seed in 0..20 {
             for p in engine_puffs(&mut Rng::seeded(&[seed]), Vec3::Z, Light::BRIGHT) {
-                assert!(p.life >= 0.2 && p.life <= 3.0, "{p:?}");
+                assert!(p.life >= 0.05 && p.life <= 3.0, "{p:?}");
                 assert!(p.size.0 >= 1.0 && p.size.1 >= p.size.0 && p.size.1 <= 256.0);
                 assert!(p.color.iter().all(|c| (0.0..=1.0).contains(c)), "{p:?}");
                 assert!(p.velocity.length() <= 4000.0, "{p:?}");
                 assert!(p.velocity.is_finite() && p.offset.is_finite());
                 assert!(p.offset.abs().max_element() <= 48.0);
+            }
+        }
+    }
+
+    #[test]
+    fn eight_to_sixteen_sparks_fly_fast_and_are_gone_in_a_tenth_of_a_second() {
+        for seed in 0..30 {
+            let all = engine_puffs(&mut Rng::seeded(&[seed]), Vec3::Z, Light::BRIGHT);
+            let sparks: Vec<&Puff> = all.iter().filter(|p| p.streak).collect();
+            assert!((8..=16).contains(&sparks.len()), "{}", sparks.len());
+            for p in sparks {
+                assert!((1500.0..=2500.0).contains(&p.velocity.length()));
+                assert!((0.05..=0.1).contains(&p.life));
+                assert_eq!(p.sprite, Sprite::Spark);
             }
         }
     }
