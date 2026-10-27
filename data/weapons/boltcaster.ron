@@ -40,6 +40,13 @@ Weapon(
             ricochet: Some((max_dot: 0.5, min_speed: 100.0, speed_scale: 0.75, gravity: 1.0)),
             stick: Some(2.0),
             impact_force: 17411.0,
+            // The bolt's tail glow (sprites/light_glow02_noz, scale 0.2).
+            glow: Some((
+                halo: "sprites/light_glow02_noz",
+                halo_size: 5.0,
+                core: "sprites/light_glow02_noz",
+                core_size: 2.5,
+            )),
         )),
     )),
     secondary: None,
