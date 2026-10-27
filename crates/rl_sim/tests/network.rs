@@ -376,6 +376,7 @@ fn replica_props_collide_where_the_server_put_them() {
             world: sim.world(),
             physics: sim.physics(),
             ignore: None,
+            others: &[],
         };
         scene
             .trace_hull(

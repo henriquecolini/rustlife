@@ -53,7 +53,7 @@ use crate::movement::{Buttons, MoveEvents, PlayerState, UserCmd, simulate};
 use crate::physics::{BodyId, Impact, JointDesc, PhysicsWorld, PropDesc};
 use crate::pickups::{self, Pickup};
 use crate::rules::{Match, MatchEvent};
-use crate::scene::Scene;
+use crate::scene::{PlayerBox, Scene};
 use crate::tools::manipulator::{Manipulator, ToolEvent};
 use crate::weapons::projectile::Projectile;
 use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
@@ -758,6 +758,7 @@ impl Simulation {
 
     /// Moves one living player and runs their weapon.
     fn run_player(&mut self, id: PlayerId, cmd: &UserCmd, events: &mut TickEvents) {
+        let others = self.player_boxes(id);
         let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };
@@ -776,6 +777,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: player.manipulator.held(),
+            others: &others,
         };
         let (state, moved) = simulate(&player.state, cmd, &self.data.movement, self.dt, &scene);
         player.state = state;
@@ -797,6 +799,25 @@ impl Simulation {
             self.hurt(id, damage, events);
         }
         self.run_weapon(id, cmd, events);
+    }
+
+    /// The boxes of the living players `id` collides with: everyone else.
+    pub(super) fn player_boxes(&self, id: PlayerId) -> Vec<PlayerBox> {
+        self.players()
+            .filter(|&(other, player)| other != id && player.alive())
+            .map(|(other, player)| {
+                let hull = player.state.hull(&self.data.movement);
+                PlayerBox {
+                    mins: player.state.origin + hull.mins,
+                    maxs: player.state.origin + hull.maxs,
+                    tie_break: if id.index() < other.index() {
+                        Vec3::X
+                    } else {
+                        Vec3::NEG_X
+                    },
+                }
+            })
+            .collect()
     }
 
     /// Every living player's box, as shots see it.
@@ -828,6 +849,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: None,
+            others: &[],
         };
         let hull = Hull::from(&self.data.movement.hulls.standing);
         find_free_position(&scene, origin, &hull)

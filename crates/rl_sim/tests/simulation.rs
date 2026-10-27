@@ -8,7 +8,7 @@ use rl_data::GameData;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{Motion, PropDesc};
-use rl_sim::simulation::Simulation;
+use rl_sim::simulation::{Life, Simulation};
 
 #[expect(
     clippy::expect_used,
@@ -144,4 +144,70 @@ fn a_run_repeats_exactly() {
         (sim.player(player).expect("player").state, poses)
     };
     assert_eq!(run(), run());
+}
+
+#[test]
+fn players_cannot_walk_through_each_other() {
+    let mut sim = room();
+    sim.tick(&[]);
+    let walker = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+    let standing = sim.spawn_player(Vec3::new(100.0, 0.0, 1.0));
+    let forward = UserCmd {
+        forward: 1.0,
+        ..UserCmd::default()
+    };
+    for _ in 0..200 {
+        sim.tick(&[(walker, forward), (standing, UserCmd::default())]);
+    }
+    let walker = sim.player(walker).expect("player").state.origin;
+    let standing = sim.player(standing).expect("player").state.origin;
+    assert!(
+        (standing.x - 100.0).abs() < 1.0,
+        "the one standing is not moved: {standing}"
+    );
+    assert!(
+        walker.x > 60.0 && walker.x <= standing.x - 32.0 + 0.1,
+        "stopped at the other's side: {walker} vs {standing}"
+    );
+}
+
+#[test]
+fn players_standing_on_the_same_spot_are_pushed_apart() {
+    let mut sim = room();
+    sim.tick(&[]);
+    let a = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+    let b = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+    for _ in 0..66 {
+        sim.tick(&[(a, UserCmd::default()), (b, UserCmd::default())]);
+    }
+    let a = sim.player(a).expect("player").state.origin;
+    let b = sim.player(b).expect("player").state.origin;
+    assert!(
+        (a - b).abs().max_element() >= 32.0,
+        "no longer overlapping: {a} vs {b}"
+    );
+    assert!(a.z <= 1.5 && b.z <= 1.5, "pushed sideways: {a} {b}");
+}
+
+#[test]
+fn a_dead_player_does_not_block() {
+    let mut sim = room();
+    sim.tick(&[]);
+    let walker = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+    let dead = sim.spawn_player(Vec3::new(60.0, 0.0, 1.0));
+    // The match starts once two are there, and respawns everyone.
+    sim.tick(&[]);
+    sim.player_mut(dead).expect("player").life = Life::Dead {
+        since: u64::MAX / 2,
+        killer: None,
+    };
+    let forward = UserCmd {
+        forward: 1.0,
+        ..UserCmd::default()
+    };
+    for _ in 0..132 {
+        sim.tick(&[(walker, forward)]);
+    }
+    let walker = sim.player(walker).expect("player").state.origin;
+    assert!(walker.x > 100.0, "walked past the dead player: {walker}");
 }

@@ -130,6 +130,7 @@ fn players_collide_with_props_and_can_stand_on_them() {
         world: &world,
         physics: &physics,
         ignore: None,
+        others: &[],
     };
 
     // Walking into the crate stops at its face (x = 48, minus the hull).
@@ -214,6 +215,7 @@ fn walking_into_a_prop_pushes_it() {
             world: &world,
             physics: &physics,
             ignore: None,
+            others: &[],
         };
         let (next, events) = simulate(&state, &forward, &config, DT, &scene);
         let touches: Vec<_> = events.touches().copied().collect();
@@ -755,6 +757,7 @@ fn a_player_inside_a_prop_is_pushed_out_of_it() {
         world: &world,
         physics: &physics,
         ignore: None,
+        others: &[],
     };
     let hull = Hull::from(&config.hulls.standing);
     // Its face is at x = 24; the box reaches 16 either side of the origin.
@@ -823,6 +826,7 @@ fn a_player_is_not_pushed_through_a_wall_getting_out_of_a_prop() {
         world: &world,
         physics: &physics,
         ignore: None,
+        others: &[],
     };
     let mut state = PlayerState::at(Vec3::new(-8.0, 0.0, 1.0));
     for _ in 0..66 {

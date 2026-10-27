@@ -185,7 +185,10 @@ pub fn prop_desc(
         material,
         linear_damping,
         angular_damping,
-        debris: is_physics && flags & spawnflags::DEBRIS != 0,
+        // Source's "debris" flag lets players walk through a prop, but maps
+        // flag cinder blocks, chairs and crates that look solid; only
+        // pickups lie as debris (see `rl_level`).
+        debris: false,
         start_asleep: flags & spawnflags::START_ASLEEP != 0,
         grabbable: is_physics && flags & spawnflags::PREVENT_PICKUP == 0,
         free_on_grab: is_physics
@@ -270,7 +273,8 @@ mod tests {
             | spawnflags::START_ASLEEP;
         let desc = prop_desc(&flagged, Some(&barrel()), BOUNDS, "", &config).expect("solid");
         assert_eq!(desc.motion, Motion::Fixed);
-        assert!(desc.free_on_grab && desc.debris && desc.start_asleep);
+        assert!(desc.free_on_grab && desc.start_asleep);
+        assert!(!desc.debris, "the debris flag does not let players through");
 
         flagged.spawnflags = spawnflags::PREVENT_PICKUP;
         let desc = prop_desc(&flagged, Some(&barrel()), BOUNDS, "", &config).expect("solid");

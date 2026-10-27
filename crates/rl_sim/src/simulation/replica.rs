@@ -133,6 +133,7 @@ impl Simulation {
             return prediction;
         }
         let arsenal = Arc::clone(&self.arsenal);
+        let others = self.player_boxes(id);
         let Some(player) = self
             .players
             .get_mut(id.index())
@@ -145,6 +146,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: player.manipulator.held(),
+            others: &others,
         };
         let (state, moved) = simulate(&player.state, cmd, &self.data.movement, self.dt, &scene);
         player.state = state;

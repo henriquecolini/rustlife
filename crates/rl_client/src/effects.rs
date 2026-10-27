@@ -587,6 +587,7 @@ fn spawn_effects(
                             world: sim.world(),
                             physics: sim.physics(),
                             ignore: None,
+                            others: &[],
                         };
                         let trace = |to| {
                             scene.trace_hull(shot.trace.end, to, &Hull::POINT, MASK_PLAYER_SOLID)

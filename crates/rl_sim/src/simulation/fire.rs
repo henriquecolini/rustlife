@@ -162,6 +162,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: None,
+            others: &[],
         };
         (0..bullets.pellets)
             .map(|_| {
@@ -226,6 +227,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: None,
+            others: &[],
         };
         let end = aim.eye + forward * swing.range;
         hitscan::trace(&scene, &targets, id, aim.eye, end, &hull)
@@ -301,6 +303,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: None,
+            others: &[],
         };
         let mut ended = Vec::new();
         self.projectiles.retain_mut(|projectile| {

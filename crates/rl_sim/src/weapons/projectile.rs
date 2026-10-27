@@ -229,6 +229,7 @@ mod tests {
             world: &world,
             physics: &physics,
             ignore: None,
+            others: &[],
         };
         let mut rocket = projectile(Vec3::new(0.0, 0.0, 50.0), Vec3::new(1000.0, 0.0, 0.0));
         let flights = fly(&mut rocket, &config(), &scene, &[], 30);
@@ -252,6 +253,7 @@ mod tests {
             world: &world,
             physics: &physics,
             ignore: None,
+            others: &[],
         };
         let box_at = |index, x: f32| Target {
             player: PlayerId::from_index(index),
@@ -277,6 +279,7 @@ mod tests {
             world: &world,
             physics: &physics,
             ignore: None,
+            others: &[],
         };
         let grenade = ProjectileConfig {
             gravity: 1.0,
@@ -309,6 +312,7 @@ mod tests {
             world: &world,
             physics: &physics,
             ignore: None,
+            others: &[],
         };
         let short = ProjectileConfig {
             lifetime: 0.1,

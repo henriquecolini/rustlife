@@ -192,6 +192,7 @@ impl Simulation {
             world: &self.world,
             physics: &self.physics,
             ignore: None,
+            others: &[],
         };
         users
             .into_iter()
@@ -327,6 +328,7 @@ impl Simulation {
                 world: &self.world,
                 physics: &self.physics,
                 ignore: player.manipulator.held(),
+                others: &[],
             };
             let stuck = crate::collision::CollisionQuery::trace_hull(
                 &scene,

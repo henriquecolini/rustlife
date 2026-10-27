@@ -44,9 +44,11 @@ of its planes meet inside all of them. Displacements become triangle meshes.
   default.
 - *Motion*: `prop_physics*` (and ragdolls, as one body) are dynamic; static
   props and other prop entities are fixed.
-- *Spawnflags*: `1` starts asleep, `4` makes the prop debris (players pass
-  through it), `8` fixes it in place, `64` frees a fixed prop when it is
-  grabbed, and `512` prevents pickup.
+- *Spawnflags*: `1` starts asleep, `8` fixes it in place, `64` frees a fixed prop when it is
+  grabbed, and `512` prevents pickup. Source's `4` (debris, which players
+  walk through) is ignored: maps flag props that look solid, such as
+  cinder blocks, chairs and plastic crates, and players should not pass
+  through them. Only pickups lie as debris.
 
 Dynamic props use Box3D's continuous collision detection, and props moving
 faster than `ccd_min_speed` are marked as bullets for the step, so a thrown
@@ -108,6 +110,16 @@ creeps.
 Players also have a **kinematic box** in the physics world, moved to the
 player's position each tick. Props land on players and bump into them
 instead of passing through.
+
+Other players block a player's movement too. `Simulation` hands each
+player's movement the boxes of the other living players (`scene::PlayerBox`),
+and `Scene` sweeps against them with the same exact box clip, so players
+stop at one another and can stand on each other's heads. Players overlapping
+(spawning on the same point, standing up beside someone) are pushed apart by
+the same push-out as for props; two players exactly on top of each other
+leave in opposite directions. Dead players do not block. The boxes are not
+part of the physics world: they never touch props through it, and nothing
+pushes a player by walking into them.
 
 Props act on players back in two ways.
 

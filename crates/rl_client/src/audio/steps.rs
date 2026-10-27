@@ -145,6 +145,7 @@ fn ground_surface(sim: &Simulation, surfaces: &MapSurfaces, feet: Vec3) -> Strin
         world: sim.world(),
         physics: sim.physics(),
         ignore: None,
+        others: &[],
     };
     let trace = scene.trace_hull(
         feet + Vec3::Z * 2.0,
