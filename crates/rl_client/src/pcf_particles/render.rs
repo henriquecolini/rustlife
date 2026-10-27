@@ -115,10 +115,10 @@ fn load_library(vfs: Res<GameVfs>, mut pcf: ResMut<Pcf>) {
 /// How long into a map a scripted capture waits before playing its system,
 /// seconds, and how far in front of the eye it plays, Source units.
 const SCRIPT_DELAY: f32 = 1.5;
-const SCRIPT_DISTANCE: f32 = 120.0;
+const SCRIPT_DISTANCE: f32 = 300.0;
 
-/// Plays the system a capture script (`--pcf`) asks for, once, in front of
-/// the view.
+/// Plays the system a capture script (`--pcf`) asks for, once, where the view
+/// points.
 fn play_scripted(
     script: Option<Res<crate::script::InputScript>>,
     game: Game,
@@ -141,10 +141,18 @@ fn play_scripted(
     *done = true;
     let eye = Vec3::from(coords::to_source_position(camera.translation()));
     let forward = Vec3::from(coords::to_source_direction(camera.forward().into()));
+    // Where a shot along the view would land, like a real impact: at the
+    // surface hit, standing off it a little, facing out of it.
+    let world = game.sim().map(rl_sim::simulation::Simulation::world);
+    let trace = world.map(|world| world.trace_ray(eye, eye + forward * SCRIPT_DISTANCE, SOLID));
+    let (position, normal) = match trace {
+        Some(trace) if trace.hit() => (trace.end + trace.normal * 4.0, trace.normal),
+        _ => (eye + forward * SCRIPT_DISTANCE - Vec3::Z * 20.0, Vec3::Z),
+    };
     spawns.write(PcfSpawn {
         name,
-        position: eye + forward * SCRIPT_DISTANCE - Vec3::Z * 20.0,
-        normal: Vec3::Z,
+        position,
+        normal,
     });
 }
 
