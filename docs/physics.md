@@ -144,7 +144,10 @@ Props act on players back in two ways.
   player's box), shortest first, and the player takes the first that the
   map leaves open and that ends in the clear (`PhysicsWorld::penetrations`,
   `Scene::penetration`). Exits that lift the player more than 24 units are
-  skipped: a player under a prop leaves sideways, not over the top. If none
+  skipped: a player under a prop leaves sideways, not over the top.
+  A prop that overlaps only the player's head (its lowest point above the
+  player's centre) is left alone: it neither pushes nor blocks, so a player
+  can carry a prop on their head and walk out from under it. If none
   qualifies, the one that gets farthest is taken. Movement is at most
   `movement.unstick_speed` per second, so nobody is flung through a wall.
   Movement runs on clients too, so prediction does the same.

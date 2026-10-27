@@ -897,7 +897,7 @@ fn a_resting_prop_shoves_nobody() {
 }
 
 #[test]
-fn a_player_under_a_wide_prop_resting_on_their_head_gets_out() {
+fn a_player_under_a_wide_prop_on_their_head_is_not_stuck() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
     let config = movement_config();
@@ -925,19 +925,34 @@ fn a_player_under_a_wide_prop_resting_on_their_head_gets_out() {
         others: &[],
     };
     let mut state = PlayerState::at(Vec3::new(0.0, 0.0, 0.1));
-    for _ in 0..132 {
+    // Nothing shoves them: a prop on the head is allowed to stay there.
+    for _ in 0..66 {
         state = simulate(&state, &UserCmd::default(), &config, DT, &scene).0;
     }
-    let free = !rl_sim::collision::CollisionQuery::trace_hull(
-        &scene,
-        state.origin,
-        state.origin,
-        &hull,
-        contents::MASK_PLAYER_SOLID,
-    )
-    .start_solid;
-    assert!(free, "out from under the slab: {state:?}");
-    assert!(state.origin.z >= 0.0, "not pushed through the floor");
+    assert!(
+        state.origin.truncate().length() < 0.5 && state.on_ground,
+        "left where they stand: {state:?}"
+    );
+    // They can walk out from under it, whichever way they go.
+    for yaw in [0.0, 90.0, 180.0, 270.0] {
+        let walk = UserCmd {
+            forward: 1.0,
+            yaw,
+            ..UserCmd::default()
+        };
+        let mut moving = state;
+        for _ in 0..132 {
+            moving = simulate(&moving, &walk, &config, DT, &scene).0;
+        }
+        assert!(
+            moving.origin.truncate().length() >= 80.0 + hull.maxs.x,
+            "walked out from under the slab at yaw {yaw}: {moving:?}"
+        );
+        assert!(
+            moving.origin.z.abs() < 1.0,
+            "stayed on the floor: {moving:?}"
+        );
+    }
 }
 
 #[test]

@@ -18,6 +18,18 @@ use crate::collision::{Hull, Trace};
 /// within the clip epsilon is missed.
 const CULL_MARGIN: f32 = 1.0;
 
+/// Whether a piece whose lowest point is `piece_bottom` is over the head of
+/// a box centred at height `center_z` that overlaps it: it bottoms out
+/// above the box's centre.
+///
+/// Such a piece neither blocks nor pushes: a player may carry a prop on
+/// their head (set there with the Manipulator, say), and walks out from
+/// under it like from under a hat. One that overlaps the box lower down is
+/// something the player is inside, and is not overhead.
+fn overhead(piece_bottom: f32, center_z: f32) -> bool {
+    piece_bottom >= center_z
+}
+
 impl PhysicsWorld {
     /// The props in `groups` whose bounds overlap `mins..maxs`, by id.
     fn candidates(&self, mins: Vec3, maxs: Vec3, groups: u64) -> Vec<BodyId> {
@@ -67,7 +79,9 @@ impl PhysicsWorld {
                 continue;
             };
             for piece in &prop.pieces {
-                if !(mins.cmple(piece.maxs).all() && piece.mins.cmple(maxs).all()) {
+                if !(mins.cmple(piece.maxs).all() && piece.mins.cmple(maxs).all())
+                    || overhead(piece.mins.z, center.z)
+                {
                     continue;
                 }
                 // How far past each grown plane the centre is; it is inside
@@ -150,6 +164,9 @@ impl PhysicsWorld {
                     }
                     let mut hit = Hit::default();
                     clip_convex(&sweep, piece.planes.iter().copied(), SOLID, &mut hit);
+                    if hit.start_solid && overhead(piece.mins.z, sweep.start.z) {
+                        continue;
+                    }
                     best.start_solid |= hit.start_solid;
                     best.all_solid |= hit.all_solid;
                     if hit.fraction < best.fraction {
