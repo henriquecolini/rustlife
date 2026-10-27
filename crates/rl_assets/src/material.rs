@@ -20,6 +20,7 @@ use crate::source::SOURCE;
 /// A resolved Source material: the textures it references and how it should be
 /// drawn. The client turns this into a `StandardMaterial`.
 #[derive(Asset, TypePath, Debug, Clone, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SourceMaterial {
     /// `$basetexture` as a loaded image, if any.
     pub base_color: Option<Handle<Image>>,
@@ -41,6 +42,25 @@ pub struct SourceMaterial {
     /// `$additive`: the surface adds its colour to what is behind it, lit by
     /// nothing (energy effects).
     pub additive: bool,
+    /// A `TextureScroll` proxy: how fast (repeats per second) and which way
+    /// (degrees) the texture slides.
+    pub scroll: Option<(f32, f32)>,
+}
+
+/// The `TextureScroll` proxy of a material's text: `(rate, angle in degrees)`.
+fn texture_scroll(text: &str) -> Option<(f32, f32)> {
+    let lower = text.to_ascii_lowercase();
+    let value = |key: &str| -> Option<f32> {
+        let at = lower.find(key)? + key.len();
+        lower[at..]
+            .trim_start_matches(|c: char| c == '"' || c.is_whitespace())
+            .split(|c: char| c == '"' || c.is_whitespace())
+            .next()?
+            .parse()
+            .ok()
+    };
+    let rate = value("texturescrollrate")?;
+    Some((rate, value("texturescrollangle").unwrap_or(0.0)))
 }
 
 /// Errors from [`VmtLoader`].
@@ -96,6 +116,7 @@ impl AssetLoader for VmtLoader {
             no_cull: desc.no_cull,
             water_fog: desc.water_fog,
             self_illum: desc.self_illum,
+            scroll: texture_scroll(&text),
             additive: crate::sprite::is_additive(&text)
                 && !text
                     .trim_start()
@@ -151,5 +172,20 @@ mod tests {
             source_path("materials/brick/wall.vmt"),
             "source://materials/brick/wall.vmt"
         );
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::texture_scroll;
+
+    #[test]
+    fn a_texture_scroll_proxy_is_read() {
+        let text = r#""UnlitGeneric" { "Proxies" { "TextureScroll" {
+            "texturescrollvar" "$basetexturetransform"
+            "texturescrollrate" -1
+            "texturescrollangle" 45 } } }"#;
+        assert_eq!(texture_scroll(text), Some((-1.0, 45.0)));
+        assert_eq!(texture_scroll(r#""UnlitGeneric" { }"#), None);
     }
 }

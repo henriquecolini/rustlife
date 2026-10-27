@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use bevy::camera::Exposure;
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::{IrradianceVolume, Skybox};
+use bevy::math::Affine2;
 use bevy::pbr::Lightmap;
 use bevy::prelude::*;
 use rl_assets::{MapAsset, MapMesh, SOURCE, SourceMaterial};
@@ -54,6 +55,9 @@ struct MapSpawned(bool);
 pub(crate) struct MaterialMaps {
     source: HashMap<String, Handle<SourceMaterial>>,
     resolved: HashMap<String, Resolved>,
+    /// Materials whose texture slides (`TextureScroll`): the Bevy materials
+    /// built for them, and the proxy's rate and angle.
+    scrolling: Vec<(Vec<Handle<StandardMaterial>>, f32, f32)>,
 }
 
 impl MaterialMaps {
@@ -131,7 +135,7 @@ impl Plugin for WorldPlugin {
             .add_systems(
                 Update,
                 (
-                    (spawn_when_loaded, resolve_materials).chain(),
+                    (spawn_when_loaded, resolve_materials, scroll_textures).chain(),
                     cull_by_visibility,
                     inherit_render_layers,
                 )
@@ -499,6 +503,13 @@ fn resolve_materials(
                     .clone()
                     .map(|texture| standard_materials.add(blend_layer(texture))),
             };
+            if let Some((rate, angle)) = source.scroll {
+                material_maps.scrolling.push((
+                    vec![resolved.base.clone(), resolved.vertex_lit.clone()],
+                    rate,
+                    angle,
+                ));
+            }
             material_maps
                 .resolved
                 .insert(name.clone(), resolved.clone());
@@ -524,6 +535,23 @@ fn resolve_materials(
                 .entity(entity)
                 .insert(BlendLayered)
                 .add_child(layer);
+        }
+    }
+}
+
+/// Slides the textures of materials with a `TextureScroll` proxy.
+fn scroll_textures(
+    time: Res<Time>,
+    maps: Res<MaterialMaps>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (handles, rate, angle) in &maps.scrolling {
+        let heading = angle.to_radians();
+        let offset = Vec2::new(heading.cos(), heading.sin()) * (rate * time.elapsed_secs());
+        for handle in handles {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.uv_transform = Affine2::from_translation(offset.fract());
+            }
         }
     }
 }

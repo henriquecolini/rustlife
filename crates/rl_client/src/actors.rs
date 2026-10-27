@@ -536,10 +536,17 @@ fn draw_projectiles(
     }
 }
 
+/// How fast an animated glow steps through its frames (the engine's
+/// `animatedtextureframerate` for the ball's core).
+const GLOW_FPS: f32 = 25.0;
+
 /// One of a glowing projectile's two sprites.
 #[derive(Component)]
 struct GlowQuad {
     projectile: u32,
+    /// The material, whose texture steps through `frames` side by side.
+    material: Handle<StandardMaterial>,
+    frames: u32,
     /// Half-size, metres.
     size: f32,
     /// How fast it pulses, if it does.
@@ -626,6 +633,8 @@ fn glow_projectiles(
             commands.spawn((
                 GlowQuad {
                     projectile: projectile.id,
+                    material: material.clone(),
+                    frames: sprite.frames,
                     size,
                     pulse: pulses,
                 },
