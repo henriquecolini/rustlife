@@ -269,6 +269,12 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
         .muzzle_flash
         .sprites
         .iter()
+        .chain(
+            effects
+                .weapon_muzzle_flashes
+                .values()
+                .flat_map(|flash| &flash.sprites),
+        )
         .chain([&effects.tracer.sprite])
         .chain(
             effects
@@ -626,7 +632,12 @@ fn spawn_effects(
                 .is_some_and(|fire| matches!(fire.shot, Shot::Hitscan(_)));
             if bullets {
                 let (muzzle, at) = muzzle_of(player);
-                painter.flash(&quad, &effects.muzzle_flash, muzzle, at);
+                let flash = sim
+                    .arsenal()
+                    .weapon_name(weapon)
+                    .and_then(|name| effects.weapon_muzzle_flashes.get(name))
+                    .unwrap_or(&effects.muzzle_flash);
+                painter.flash(&quad, flash, muzzle, at);
             }
         }
         for shot in &events.shots {

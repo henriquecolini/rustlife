@@ -151,6 +151,15 @@ Effects(
     explosion: (
         shake: 0.85,
     ),
+    // A gun's own muzzle flash: the Pulse Rifle's is the Combine one.
+    weapon_muzzle_flashes: {
+        "rifle": (
+            sprites: ["effects/combinemuzzle1", "effects/combinemuzzle2"],
+            size: 20.0,
+            view_size: 12.0,
+            duration: 0.05,
+        ),
+    },
     // What a weapon's bullets add where they strike, beside the surface's own
     // effect, by weapon id. The Pulse Rifle's is the game's `AR2Impact`: a quad
     // of effects/combinemuzzle2_nocull lying on the surface, 24-32 units

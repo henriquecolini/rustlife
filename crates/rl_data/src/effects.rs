@@ -35,6 +35,10 @@ pub struct EffectsConfig {
     /// (the Pulse Rifle's flash, for one).
     #[serde(default)]
     pub weapon_flashes: BTreeMap<String, ImpactFlashConfig>,
+    /// A weapon's own muzzle flash, by weapon id, instead of `muzzle_flash`
+    /// (the game gives each gun a flash of its own kind).
+    #[serde(default)]
+    pub weapon_muzzle_flashes: BTreeMap<String, MuzzleFlashConfig>,
 }
 
 /// A muzzle flash: one of several sprites, briefly.
@@ -332,6 +336,7 @@ mod tests {
                 pcf: None,
             },
             weapon_flashes: BTreeMap::new(),
+            weapon_muzzle_flashes: BTreeMap::new(),
             grenade: GrenadeEffectConfig {
                 dot_size: 6.0,
                 dot_offset: [0.0, 0.0, 5.0],
