@@ -1,6 +1,9 @@
 // What shots and blasts look like, read by the client. Sprites are the
 // mounted game's materials (relative to materials/, without extension),
-// drawn on quads facing the camera. Sizes are units.
+// drawn on quads facing the camera. Sizes are units. An entry's `pcf` names a
+// particle system of the game's own `particles/*.pcf` files, played in place of
+// the sprites and particles described beside it; those are the fallback when
+// the game has no such system.
 Effects(
     // A gun going off: one of these at random, briefly, at the muzzle.
     muzzle_flash: (
@@ -32,6 +35,7 @@ Effects(
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
             decal_size: 9.0,
             decal_life: 30.0,
+            pcf: Some("impact_concrete"),
         ),
         "concrete": (
             sprites: ["effects/fleck_cement1", "effects/fleck_cement2"],
@@ -44,6 +48,7 @@ Effects(
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
             decal_size: 9.0,
             decal_life: 30.0,
+            pcf: Some("impact_concrete"),
         ),
         "tile": (
             sprites: ["effects/fleck_tile1", "effects/fleck_tile2"],
@@ -56,6 +61,7 @@ Effects(
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
             decal_size: 9.0,
             decal_life: 30.0,
+            pcf: Some("impact_concrete"),
         ),
         "metal": (
             sprites: ["effects/spark"],
@@ -68,6 +74,7 @@ Effects(
             decals: ["decals/metal/shot1", "decals/metal/shot2", "decals/metal/shot3", "decals/metal/shot4", "decals/metal/shot5"],
             decal_size: 8.0,
             decal_life: 30.0,
+            pcf: Some("impact_metal"),
         ),
         "wood": (
             sprites: ["effects/fleck_wood1", "effects/fleck_wood2"],
@@ -80,6 +87,7 @@ Effects(
             decals: ["decals/wood/shot1", "decals/wood/shot2", "decals/wood/shot3", "decals/wood/shot4", "decals/wood/shot5"],
             decal_size: 9.0,
             decal_life: 30.0,
+            pcf: Some("impact_wood"),
         ),
         "glass": (
             sprites: ["effects/fleck_glass1", "effects/fleck_glass2", "effects/fleck_glass3"],
@@ -104,6 +112,7 @@ Effects(
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3"],
             decal_size: 10.0,
             decal_life: 30.0,
+            pcf: Some("impact_dirt"),
         ),
         "water": (
             sprites: ["effects/splash1", "effects/splash2", "effects/splash3"],
@@ -131,6 +140,7 @@ Effects(
         decals: ["decals/flesh/blood1", "decals/flesh/blood2", "decals/flesh/blood3", "decals/flesh/blood4", "decals/flesh/blood5"],
         decal_size: 22.0,
         decal_life: 35.0,
+        pcf: Some("blood_impact_red_01"),
     ),
     // A blast, drawn as particles the game makes itself: a fireball of
     // overlapping puffs (its size a share of the blast's radius, its centre
@@ -147,6 +157,8 @@ Effects(
         duration: 0.7,
         smoke_duration: 4.5,
         shake: 0.85,
+        // The game's own explosion; the particles above are the fallback.
+        pcf: Some("explosion_huge"),
     ),
     // A thrown grenade: a red dot on its top that flashes with each tick of
     // its fuse (the dot's size at the flash, how bright it stays between

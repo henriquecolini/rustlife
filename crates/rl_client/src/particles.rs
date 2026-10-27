@@ -94,6 +94,9 @@ impl Plugin for ParticlesPlugin {
 pub(crate) struct Blast {
     pub at: Vec3,
     pub radius: f32,
+    /// Whether to make the particles here; `false` when the game's own
+    /// particle system is playing, leaving only the shake and flash.
+    pub procedural: bool,
 }
 
 /// How hard the view is shaking, `0..=1`.
@@ -758,7 +761,12 @@ fn spawn_blasts(
         }
         let radius = blast.radius * coords::METERS_PER_UNIT;
         let floor = floor_below(sim.world(), blast.at, radius * DUST_REACH);
-        for spec in blast_particles(config, radius, floor, rng) {
+        let specs = if blast.procedural {
+            blast_particles(config, radius, floor, rng)
+        } else {
+            Vec::new()
+        };
+        for spec in specs {
             if room == 0 {
                 break;
             }
@@ -993,6 +1001,7 @@ mod tests {
             duration: 0.8,
             smoke_duration: 3.5,
             shake: 0.7,
+            pcf: None,
         }
     }
 

@@ -41,6 +41,7 @@ use crate::camera::FlyCam;
 use crate::decals::{DecalKind, DecalRequest, trace_stain};
 use crate::net::Game;
 use crate::particles::Blast;
+use crate::pcf_particles::{Pcf, PcfSpawn};
 use crate::player::{LocalPlayer, Ticked};
 use crate::surfaces::{MapSurfaces, class_of_prop};
 use crate::viewmodel::{VIEW_FOV_DEGREES, VIEW_LAYER, ViewModel};
@@ -534,6 +535,8 @@ fn spawn_effects(
     surfaces: Res<MapSurfaces>,
     mut blasts: MessageWriter<Blast>,
     mut decals: MessageWriter<DecalRequest>,
+    pcf: Res<Pcf>,
+    mut pcf_spawns: MessageWriter<PcfSpawn>,
     mut painter: Painter,
     scene: Scene,
 ) {
@@ -576,33 +579,22 @@ fn spawn_effects(
                     let source_direction =
                         (shot.trace.end - shot.start).normalize_or(shot.trace.normal);
                     let spray_direction = shot.trace.normal.normalize_or(source_direction);
-                    painter.blood(
-                        &quad,
-                        &effects.blood,
-                        end,
-                        coords::direction(spray_direction.to_array()),
+                    let played = pcf.play(
+                        effects.blood.pcf.as_deref(),
+                        &mut pcf_spawns,
+                        shot.trace.end,
+                        spray_direction,
                     );
+                    if !played {
+                        painter.blood(
+                            &quad,
+                            &effects.blood,
+                            end,
+                            coords::direction(spray_direction.to_array()),
+                        );
+                    }
                     if bullets {
-                        let scene = WorldScene {
-                            world: sim.world(),
-                            physics: sim.physics(),
-                            ignore: None,
-                            others: &[],
-                        };
-                        let trace = |to| {
-                            scene.trace_hull(shot.trace.end, to, &Hull::POINT, MASK_PLAYER_SOLID)
-                        };
-                        if let Some((at, normal, target)) =
-                            trace_stain(shot.trace.end, source_direction, trace)
-                        {
-                            decals.write(DecalRequest {
-                                kind: DecalKind::Blood,
-                                target,
-                                at,
-                                normal,
-                                direction: source_direction,
-                            });
-                        }
+                        stain_behind(sim, shot.trace.end, source_direction, &mut decals);
                     }
                 }
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
@@ -611,7 +603,15 @@ fn spawn_effects(
                     let Some(impact) = effects.bullet_impact(class.name()) else {
                         continue;
                     };
-                    painter.surface_impact(&quad, impact, end + lift, normal);
+                    let played = pcf.play(
+                        impact.pcf.as_deref(),
+                        &mut pcf_spawns,
+                        shot.trace.end + shot.trace.normal * IMPACT_LIFT,
+                        shot.trace.normal,
+                    );
+                    if !played {
+                        painter.surface_impact(&quad, impact, end + lift, normal);
+                    }
                     if bullets {
                         decals.write(DecalRequest {
                             kind: DecalKind::Bullet(class),
@@ -626,11 +626,44 @@ fn spawn_effects(
             }
         }
         for explosion in &events.explosions {
+            let played = pcf.play(
+                effects.explosion.pcf.as_deref(),
+                &mut pcf_spawns,
+                explosion.position,
+                Vec3::Z,
+            );
             blasts.write(Blast {
                 at: coords::position(explosion.position.to_array()),
                 radius: explosion.radius,
+                procedural: !played,
             });
         }
+    }
+}
+
+/// Asks for a blood stain on whatever lies beyond a wound at `at`, along
+/// the bullet's `direction`.
+fn stain_behind(
+    sim: &Simulation,
+    at: Vec3,
+    direction: Vec3,
+    decals: &mut MessageWriter<DecalRequest>,
+) {
+    let scene = WorldScene {
+        world: sim.world(),
+        physics: sim.physics(),
+        ignore: None,
+        others: &[],
+    };
+    let trace = |to| scene.trace_hull(at, to, &Hull::POINT, MASK_PLAYER_SOLID);
+    if let Some((stain, normal, target)) = trace_stain(at, direction, trace) {
+        decals.write(DecalRequest {
+            kind: DecalKind::Blood,
+            target,
+            at: stain,
+            normal,
+            direction,
+        });
     }
 }
 

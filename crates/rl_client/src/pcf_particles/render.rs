@@ -61,7 +61,7 @@ pub struct PcfSpawn {
 
 /// The loaded systems and the materials they draw with.
 #[derive(Resource, Default)]
-struct Pcf {
+pub(crate) struct Pcf {
     library: Library,
     loaded: bool,
     sprites: HashMap<String, Handle<SpriteAsset>>,
@@ -71,6 +71,32 @@ struct Pcf {
 }
 
 impl Pcf {
+    /// Whether the game's particle system `name` is loaded.
+    pub(crate) fn has(&self, name: &str) -> bool {
+        self.library.get(name).is_some()
+    }
+
+    /// Plays the system `name` at `position` (Source units) with its up along
+    /// `normal`, if there is one, and says whether it did: when it did not,
+    /// the caller draws its own effect.
+    pub(crate) fn play(
+        &self,
+        name: Option<&str>,
+        spawns: &mut MessageWriter<PcfSpawn>,
+        position: Vec3,
+        normal: Vec3,
+    ) -> bool {
+        let Some(name) = name.filter(|name| self.has(name)) else {
+            return false;
+        };
+        spawns.write(PcfSpawn {
+            name: name.to_owned(),
+            position,
+            normal,
+        });
+        true
+    }
+
     /// The sprite for `material`, started loading if it was not yet.
     fn sprite(&mut self, material: &str, assets: &AssetServer) -> Handle<SpriteAsset> {
         self.sprites
@@ -520,7 +546,21 @@ fn build_mesh(quads: &[Quad], view: View) -> Mesh {
 
 #[cfg(test)]
 mod tests {
+    use source_formats::pcf::ParticleSystem;
+
     use super::*;
+
+    #[test]
+    fn only_loaded_systems_are_available() {
+        let mut pcf = Pcf::default();
+        assert!(!pcf.has("impact_metal"));
+        pcf.library.add(&[ParticleSystem {
+            name: "impact_metal".into(),
+            ..ParticleSystem::default()
+        }]);
+        assert!(pcf.has("impact_metal"));
+        assert!(!pcf.has("impact_wood"));
+    }
 
     #[test]
     fn a_mesh_has_four_vertices_and_six_indices_per_quad() {

@@ -9,4 +9,5 @@ mod draw;
 mod render;
 pub mod sim;
 
+pub(crate) use render::Pcf;
 pub use render::{PcfPlugin, PcfSpawn};

@@ -91,6 +91,10 @@ pub struct ImpactEffectConfig {
     pub decal_size: f32,
     /// How long a decal stays, seconds.
     pub decal_life: f32,
+    /// The game's particle system (from its `.pcf` files) to play instead of
+    /// the spray; the spray is used when the system is not there.
+    #[serde(default)]
+    pub pcf: Option<String>,
 }
 
 impl ImpactEffectConfig {
@@ -116,6 +120,13 @@ impl ImpactEffectConfig {
             if decal.trim().is_empty() {
                 check.fail(&format!("{field}.decals[{index}]"), "must name a decal");
             }
+        }
+        if self
+            .pcf
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            check.fail(&format!("{field}.pcf"), "must name a particle system");
         }
         if !self.decals.is_empty() {
             check.positive(&format!("{field}.decal_size"), self.decal_size);
@@ -149,6 +160,11 @@ pub struct ExplosionEffectConfig {
     /// How hard the view shakes right at the blast, `0..=1`. It fades
     /// with distance, reaching nothing at three times the blast's radius.
     pub shake: f32,
+    /// The game's particle system to play instead of the particles made
+    /// here (the view still shakes and flashes); those are used when the
+    /// system is not there.
+    #[serde(default)]
+    pub pcf: Option<String>,
 }
 
 /// What a grenade in flight shows: a glowing red dot on its top that
@@ -230,6 +246,13 @@ impl EffectsConfig {
         check.positive("explosion.duration", blast.duration);
         check.positive("explosion.smoke_duration", blast.smoke_duration);
         check.range("explosion.shake", blast.shake, 0.0, 1.0);
+        if blast
+            .pcf
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            check.fail("explosion.pcf", "must name a particle system");
+        }
         for (field, count) in [
             ("explosion.fireballs", blast.fireballs),
             ("explosion.smoke", blast.smoke),
@@ -258,6 +281,7 @@ mod tests {
             decals: vec!["decals/concrete/shot1".to_owned()],
             decal_size: 10.0,
             decal_life: 20.0,
+            pcf: None,
         }
     }
 
@@ -289,6 +313,7 @@ mod tests {
                 duration: 0.9,
                 smoke_duration: 3.0,
                 shake: 0.6,
+                pcf: None,
             },
             grenade: GrenadeEffectConfig {
                 dot_size: 6.0,
@@ -325,8 +350,10 @@ mod tests {
         bad.explosion.sparks = 5000;
         bad.explosion.rise = 2.0;
         bad.grenade.flash_fade = 0.0;
+        bad.explosion.pcf = Some(" ".to_owned());
+        bad.blood.pcf = Some(String::new());
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 7);
+        assert_eq!(check.finish().len(), 9);
     }
 }

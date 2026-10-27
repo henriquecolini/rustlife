@@ -1,6 +1,6 @@
 # Plan: HL2DM visual effects, Gravity Gun and physics fidelity
 
-Status: in progress — step 1 (PCF parser, simulation core, sprite sheets, renderer, `PcfSpawn` + `--pcf NAME` debug flag) is done; next: map events to systems via effects.ron (1.3) then the per-effect work in step 2.
+Status: in progress — step 1 is done: PCF parser, simulation, sprite sheets, renderer, and events mapped to systems through `pcf:` in `data/effects.ron` (impacts per surface, blood, explosion; the procedural effects remain the fallback). Next: the per-effect work in step 2 (muzzle flashes, AR2, combine ball, crossbow, gravity gun) and the rest of the plan.
 mechanics) is done; this plan covers what is left of "make it identical to
 HL2DM". Work in small commits; run `cargo run -q -p xtask -- ci` before each.
 
