@@ -717,7 +717,7 @@ fn move_puffs(
             fall(
                 &mut puff,
                 &mut transform,
-                game.sim().map(|sim| sim.world()),
+                game.sim().map(rl_sim::simulation::Simulation::world),
                 dt,
             );
             puff.roll += puff.roll_speed * dt;
@@ -864,7 +864,8 @@ mod tests {
                 assert!(matches!(chip.sprite, Sprite::Chip1 | Sprite::Chip2));
                 assert_eq!(chip.life, 3.0);
                 assert_eq!((chip.gravity, chip.bounce), (800.0, 0.5));
-                assert!((1.0..=3.0).contains(&chip.size.0) && chip.size.0 == chip.size.1);
+                assert!((1.0..=3.0).contains(&chip.size.0));
+                assert!((chip.size.0 - chip.size.1).abs() < f32::EPSILON);
                 assert!(
                     chip.color
                         .iter()
