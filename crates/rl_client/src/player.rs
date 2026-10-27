@@ -474,6 +474,7 @@ fn place_camera(
     angles: Res<ViewAngles>,
     movement: Res<Movement>,
     shake: Option<Res<crate::particles::Shake>>,
+    punch: Option<Res<crate::view_punch::ViewPunch>>,
     clock: Res<Time>,
     mut camera: Query<&mut Transform, With<FlyCam>>,
 ) {
@@ -499,7 +500,14 @@ fn place_camera(
     };
     let position = eye(&player.previous).lerp(eye(&player.current), alpha) + error;
     transform.translation = coords::position(position.to_array());
-    transform.rotation = view_rotation(*angles)
+    // The view is kicked by a punch (the Gravity Gun's) without the aim
+    // moving: only what is drawn turns.
+    let (punch_pitch, punch_yaw) = punch.map_or((0.0, 0.0), |punch| punch.pitch_yaw());
+    let punched = ViewAngles {
+        pitch: angles.pitch + punch_pitch,
+        yaw: angles.yaw + punch_yaw,
+    };
+    transform.rotation = view_rotation(punched)
         * shake.map_or(Quat::IDENTITY, |shake| shake.rotation(clock.elapsed_secs()));
 }
 

@@ -194,12 +194,12 @@ pub(crate) struct Puff {
 }
 
 /// A number in `low..high`.
-fn between(rng: &mut Rng, low: f32, high: f32) -> f32 {
+pub(crate) fn between(rng: &mut Rng, low: f32, high: f32) -> f32 {
     low + (high - low) * rng.unit()
 }
 
 /// A vector whose components are each in `-reach..reach`.
-fn random_vector(rng: &mut Rng, reach: f32) -> Vec3 {
+pub(crate) fn random_vector(rng: &mut Rng, reach: f32) -> Vec3 {
     Vec3::new(
         between(rng, -reach, reach),
         between(rng, -reach, reach),

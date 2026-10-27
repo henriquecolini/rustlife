@@ -366,7 +366,7 @@ fn quad_bundle(
 
 /// What spawning effects reads about the scene.
 #[derive(bevy::ecs::system::SystemParam)]
-struct Scene<'w, 's> {
+pub(crate) struct Scene<'w, 's> {
     attachments: Query<'w, 's, (Entity, &'static Attachment, &'static GlobalTransform)>,
     parents: Query<'w, 's, &'static ChildOf>,
     owners: Query<'w, 's, (Option<&'static PlayerView>, Has<ViewModel>)>,
@@ -374,6 +374,17 @@ struct Scene<'w, 's> {
 }
 
 impl Scene<'_, '_> {
+    /// Where `shooter`'s gun fires from, as the main camera sees it (Bevy
+    /// space).
+    pub(crate) fn muzzle_position(
+        &self,
+        sim: &Simulation,
+        shooter: PlayerId,
+        local: Option<PlayerId>,
+    ) -> Vec3 {
+        self.muzzle(sim, shooter, local).1
+    }
+
     /// Where `shooter`'s gun fires from, as the main camera sees it, and the
     /// muzzle attachment it is at, if their model has one.
     fn muzzle(

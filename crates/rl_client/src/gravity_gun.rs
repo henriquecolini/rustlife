@@ -27,6 +27,11 @@
 //!
 //! And, while it holds a prop, three `orangelight1` beams of amplitude 16
 //! (see [`crate::lightning`]) from each fork's tip to the muzzle.
+//!
+//! Throwing a prop sets off one more sprite (`DoEffectLaunch`), `orangecore2`
+//! at the muzzle: a blast that grows from 8 to 64 units in a tenth of a
+//! second while it fades out over a fifth (see [`crate::physcannon_impact`]
+//! for the rest of the launch effect).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
@@ -42,6 +47,7 @@ use crate::animation::{Animated, Attachment, SequencePlayer};
 use crate::camera::FlyCam;
 use crate::lightning::{self, BeamShape, Random};
 use crate::net::Game;
+use crate::physcannon_impact::PhyscannonImpact;
 use crate::player::{LocalPlayer, ViewAngles};
 use crate::settings::Bindings;
 use crate::viewmodel::{VIEW_LAYER, ViewModel};
@@ -69,6 +75,17 @@ impl Element {
             to: value,
             start: 0.0,
             duration: 0.0,
+        }
+    }
+
+    /// A value that is `from` at `now` and reaches `to` after `duration`
+    /// seconds.
+    pub(crate) fn between(from: f32, to: f32, duration: f32, now: f32) -> Self {
+        Self {
+            from,
+            to,
+            start: now,
+            duration,
         }
     }
 
@@ -103,7 +120,7 @@ pub(crate) struct Prongs(pub(crate) Element);
 
 /// What the gun is doing, as far as how it looks goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum Look {
+pub(crate) enum Look {
     /// Nothing to take: prongs shut, no glow.
     #[default]
     Shut,
@@ -115,10 +132,11 @@ enum Look {
 
 /// The Gravity Gun in hand this frame, if it is.
 #[derive(Resource, Debug, Default)]
-struct GunLook {
+pub(crate) struct GunLook {
     /// Its view model.
-    view: Option<Entity>,
-    look: Look,
+    pub(crate) view: Option<Entity>,
+    /// What it is doing.
+    pub(crate) look: Look,
 }
 
 /// The game's sprites for the effects.
@@ -128,6 +146,7 @@ struct GunSprites {
     glow: Handle<SpriteAsset>,
     flare: Handle<SpriteAsset>,
     arc: Handle<SpriteAsset>,
+    blast: Handle<SpriteAsset>,
 }
 
 fn load_sprites(mut sprites: ResMut<GunSprites>, assets: Res<AssetServer>) {
@@ -136,6 +155,7 @@ fn load_sprites(mut sprites: ResMut<GunSprites>, assets: Res<AssetServer>) {
     sprites.glow = load("glow04_noz");
     sprites.flare = load("orangeflare1");
     sprites.arc = load("orangelight1_noz");
+    sprites.blast = load("orangecore2");
 }
 
 /// Reads what the gun is doing, from the local player's game state and
@@ -229,12 +249,16 @@ enum Kind {
     Glow,
     /// The flare on each fork's tip, `orangeflare1`, while holding.
     EndCap,
+    /// The blast at the muzzle when the gun throws something,
+    /// `orangecore2`; set off by a launch rather than by the gun's state.
+    Blast,
 }
 
 /// Where each sprite goes: its kind and the attachment it sits on. The view
 /// model has no third fork's glows, but has its tip.
-const PLACEMENTS: [(Kind, &str); 10] = [
+const PLACEMENTS: [(Kind, &str); 11] = [
     (Kind::Core, "muzzle"),
+    (Kind::Blast, "muzzle"),
     (Kind::Glow, "fork1b"),
     (Kind::Glow, "fork1m"),
     (Kind::Glow, "fork1t"),
@@ -271,7 +295,7 @@ impl Kind {
             strength_secs,
         };
         match (self, look) {
-            (_, Look::Shut) | (Self::EndCap, Look::Ready) => None,
+            (_, Look::Shut) | (Self::EndCap, Look::Ready) | (Self::Blast, _) => None,
             (Self::Core, Look::Ready) => Some(goal(14.0, 0.2, 128.0, 0.2)),
             (Self::Core, Look::Working) => Some(goal(14.0, 0.2, 255.0, 0.1)),
             (Self::Glow, Look::Ready) => Some(goal(6.4, 0.2, 64.0, 0.2)),
@@ -284,6 +308,7 @@ impl Kind {
     fn first_size(self) -> f32 {
         match self {
             Self::Core => 0.0,
+            Self::Blast => BLAST_SIZE.0,
             Self::Glow | Self::EndCap => 6.4,
         }
     }
@@ -293,10 +318,17 @@ impl Kind {
     fn tint(self) -> Vec3 {
         match self {
             Self::Glow => Vec3::new(1.0, 128.0 / 255.0, 0.0),
-            Self::Core | Self::EndCap => Vec3::ONE,
+            Self::Core | Self::EndCap | Self::Blast => Vec3::ONE,
         }
     }
 }
+
+/// How big the launch's blast is, in units across, when it starts and when
+/// it is done growing, and the seconds it takes to grow and to fade out
+/// (`DoEffectLaunch`).
+const BLAST_SIZE: (f32, f32) = (8.0, 64.0);
+const BLAST_GROW_SECS: f32 = 0.1;
+const BLAST_FADE_SECS: f32 = 0.2;
 
 /// Seconds a sprite takes to go out when the gun has nothing to do.
 const FADE_OUT_SECS: f32 = 0.1;
@@ -409,11 +441,12 @@ fn spawn_effects(
     if glows.iter().any(|(_, glow)| glow.view == view) {
         return;
     }
-    let (Some(core), Some(glow), Some(flare), Some(arc)) = (
+    let (Some(core), Some(glow), Some(flare), Some(arc), Some(blast)) = (
         assets.get(&sprites.core),
         assets.get(&sprites.glow),
         assets.get(&sprites.flare),
         assets.get(&sprites.arc),
+        assets.get(&sprites.blast),
     ) else {
         return;
     };
@@ -426,6 +459,7 @@ fn spawn_effects(
             Kind::Core => core,
             Kind::Glow => glow,
             Kind::EndCap => flare,
+            Kind::Blast => blast,
         };
         let material = sprite_material(&mut materials, sprite);
         commands.spawn((
@@ -527,6 +561,28 @@ fn shine(
     }
 }
 
+/// Sets off the blast at the muzzle when the local player's gun throws
+/// something: it grows and fades as `DoEffectLaunch` says.
+fn kick_blast(
+    time: Res<Time>,
+    look: Res<GunLook>,
+    mut impacts: MessageReader<PhyscannonImpact>,
+    mut glows: Query<&mut Glow>,
+) {
+    let now = time.elapsed_secs();
+    for impact in impacts.read() {
+        if !impact.local {
+            continue;
+        }
+        for mut glow in &mut glows {
+            if glow.kind == Kind::Blast && Some(glow.view) == look.view {
+                glow.size = Element::between(BLAST_SIZE.0, BLAST_SIZE.1, BLAST_GROW_SECS, now);
+                glow.strength = Element::between(1.0, 0.0, BLAST_FADE_SECS, now);
+            }
+        }
+    }
+}
+
 /// Redraws the arcs, new every frame, while the gun is working: from each
 /// prong's tip to the muzzle.
 fn arcs(
@@ -590,7 +646,7 @@ impl Plugin for GravityGunPlugin {
             .add_systems(Startup, load_sprites)
             .add_systems(
                 Update,
-                (read_gun, spawn_effects)
+                (read_gun, spawn_effects, kick_blast)
                     .chain()
                     .after(crate::viewmodel::animate_view_model)
                     .after(crate::camera::CameraPlaced)
@@ -679,9 +735,43 @@ mod tests {
 
     #[test]
     fn nothing_shows_while_the_gun_has_nothing_to_do() {
-        for kind in [Kind::Core, Kind::Glow, Kind::EndCap] {
+        for kind in [Kind::Core, Kind::Glow, Kind::EndCap, Kind::Blast] {
             assert_eq!(kind.goal(Look::Shut), None);
         }
+    }
+
+    #[test]
+    fn the_blast_belongs_to_launches_not_to_the_guns_state() {
+        for look in [Look::Shut, Look::Ready, Look::Working] {
+            assert_eq!(Kind::Blast.goal(look), None);
+        }
+        assert_eq!(Kind::Blast.first_size(), 8.0);
+        assert_eq!(Kind::Blast.tint(), Vec3::ONE);
+        assert!(PLACEMENTS.contains(&(Kind::Blast, "muzzle")));
+    }
+
+    #[test]
+    fn the_blast_grows_in_a_tenth_of_a_second_and_fades_over_a_fifth() {
+        let size = Element::between(BLAST_SIZE.0, BLAST_SIZE.1, BLAST_GROW_SECS, 5.0);
+        let strength = Element::between(1.0, 0.0, BLAST_FADE_SECS, 5.0);
+        assert_eq!((size.value(5.0), strength.value(5.0)), (8.0, 1.0));
+        assert!(
+            (size.value(5.05) - 36.0).abs() < 1e-3,
+            "halfway along its spline"
+        );
+        assert_eq!(size.value(5.1), 64.0);
+        assert_eq!(size.value(6.0), 64.0, "stays big while it fades");
+        assert!((strength.value(5.1) - 0.5).abs() < 1e-5);
+        assert_eq!(strength.value(5.2), 0.0);
+    }
+
+    #[test]
+    fn a_blast_on_its_way_out_is_not_restarted_by_the_guns_idle_fade() {
+        let mut strength = Element::between(1.0, 0.0, BLAST_FADE_SECS, 0.0);
+        let before = strength.value(0.1);
+        strength.go_to(0.0, FADE_OUT_SECS, 0.1);
+        assert_eq!(strength.value(0.1), before);
+        assert_eq!(strength.value(0.2), 0.0);
     }
 
     #[test]

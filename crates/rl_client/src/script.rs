@@ -88,6 +88,9 @@ pub struct InputScript {
     /// Set off the game's explosion where the view hits the map once it has
     /// loaded.
     pub explode: bool,
+    /// Once the grabbed prop is in hand, look this many degrees above the
+    /// horizon, so that it is thrown into the air rather than at the floor.
+    pub throw_pitch: Option<f32>,
     progress: Progress,
 }
 
@@ -107,6 +110,14 @@ impl InputScript {
     #[must_use]
     pub fn with_all_weapons(mut self, all: bool) -> Self {
         self.all_weapons = all;
+        self
+    }
+
+    /// This script, also looking `degrees` above the horizon while it holds
+    /// the prop it grabbed.
+    #[must_use]
+    pub fn with_throw_pitch(mut self, degrees: Option<f32>) -> Self {
+        self.throw_pitch = degrees;
         self
     }
 
@@ -438,11 +449,17 @@ fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &
             (Some(eye), Some(center)) => angles_to(eye, center),
             _ => (pitch, yaw),
         };
-        cmd.pitch = pitch;
-        cmd.yaw = yaw;
         let held = sim
             .player(player)
             .and_then(|player| player.manipulator.held());
+        // Once the prop is in hand, look up if asked to: it is thrown
+        // along the view.
+        let pitch = match (held == Some(body), script.throw_pitch) {
+            (true, Some(up)) => -up,
+            _ => pitch,
+        };
+        cmd.pitch = pitch;
+        cmd.yaw = yaw;
         if held != Some(body) && !script.progress.fired {
             cmd.buttons = cmd.buttons | Buttons::ATTACK2;
         }

@@ -114,6 +114,11 @@ struct Cli {
     #[arg(long, value_name = "SECS", requires = "grab_prop")]
     throw_after: Option<f32>,
 
+    /// With `--grab-prop`, look this many degrees above the horizon once the
+    /// prop is in hand, so that it is thrown into the air.
+    #[arg(long, value_name = "DEGREES", requires = "grab_prop")]
+    throw_pitch: Option<f32>,
+
     /// Add this many training dummies to a hosted game: players who stand
     /// still where they spawn and respawn when killed.
     #[arg(long, default_value_t = 0, value_name = "N")]
@@ -236,6 +241,7 @@ fn main() -> Result<()> {
             .with_visit(visit)
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
+            .with_throw_pitch(cli.throw_pitch)
             .with_pcf(cli.pcf)
             .with_explosion(cli.explode)
     });

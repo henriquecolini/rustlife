@@ -63,15 +63,19 @@ pub mod movers;
 pub mod net;
 pub mod particles;
 pub mod pcf_particles;
+mod physcannon_impact;
 pub mod player;
 pub mod props;
 pub mod ragdolls;
+mod screen_fade;
 pub mod script;
 mod selector;
 pub mod settings;
 pub mod sky;
 pub mod surfaces;
+mod trail_sparks;
 pub mod ui;
+mod view_punch;
 pub mod viewmodel;
 mod visual_world;
 pub mod world;
@@ -199,6 +203,10 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         debris::DebrisPlugin,
         particles::ParticlesPlugin,
         explosion::ExplosionPlugin,
+        trail_sparks::TrailSparksPlugin,
+        physcannon_impact::PhyscannonImpactPlugin,
+        screen_fade::ScreenFadePlugin,
+        view_punch::ViewPunchPlugin,
         pcf_particles::PcfPlugin,
         GrenadesPlugin,
         SurfacesPlugin,
