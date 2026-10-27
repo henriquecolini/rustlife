@@ -70,3 +70,6 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# `box3d-rust` (the Box3D physics port) is not on crates.io; it is pinned to an
+# exact revision in the workspace manifest. It is the only git dependency.
+allow-git = ["https://github.com/larsbrubaker/box3d-rust"]
