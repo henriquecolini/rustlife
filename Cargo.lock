@@ -5408,7 +5408,6 @@ dependencies = [
  "futures-lite",
  "half",
  "proptest",
- "serde",
  "source_formats",
  "source_fs",
  "tempfile",

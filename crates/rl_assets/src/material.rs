@@ -16,7 +16,6 @@ use source_formats::vmt::{self, MaterialDesc, VmtError};
 use thiserror::Error;
 
 use crate::source::SOURCE;
-use crate::texture::VtfSettings;
 
 /// A resolved Source material: the textures it references and how it should be
 /// drawn. The client turns this into a `StandardMaterial`.
@@ -40,9 +39,6 @@ pub struct SourceMaterial {
     pub water_fog: Option<WaterFog>,
     /// `$selfillum`: the surface glows with its own colour, whatever the light.
     pub self_illum: bool,
-    /// The light a `$selfillum` surface gives off: its base texture's colour
-    /// where the alpha says so.
-    pub emissive: Option<Handle<Image>>,
     /// `$additive`: the surface adds its colour to what is behind it, lit by
     /// nothing (energy effects).
     pub additive: bool,
@@ -120,16 +116,6 @@ impl AssetLoader for VmtLoader {
             no_cull: desc.no_cull,
             water_fog: desc.water_fog,
             self_illum: desc.self_illum,
-            emissive: desc
-                .base_texture
-                .as_deref()
-                .filter(|_| desc.self_illum)
-                .map(|t| {
-                    load_context
-                        .load_builder()
-                        .with_settings(|settings: &mut VtfSettings| settings.self_illum = true)
-                        .load(texture_path(t))
-                }),
             scroll: texture_scroll(&text),
             additive: crate::sprite::is_additive(&text)
                 && !text
