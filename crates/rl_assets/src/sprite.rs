@@ -52,6 +52,37 @@ pub enum SpriteLoadError {
     Decode(#[from] VtfError),
 }
 
+/// How a particle card's size is limited and faded, from `$minsize`,
+/// `$maxsize`, `$startfadesize` and `$endfadesize`. All are fractions of the
+/// distance from the viewer to the particle: its radius divided by that
+/// distance. The engine's `SpriteCard` vertex shader keeps a card's radius
+/// between `min` and `max` times its distance, and fades it out as the
+/// fraction grows from `start_fade` to `end_fade` (so a cloud the viewer is
+/// inside of disappears rather than whiting the screen out).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SizeLimits {
+    /// Smallest radius, as a fraction of the distance.
+    pub min: f32,
+    /// Largest radius, as a fraction of the distance.
+    pub max: f32,
+    /// Where fading out starts.
+    pub start_fade: f32,
+    /// Where the card is gone.
+    pub end_fade: f32,
+}
+
+impl Default for SizeLimits {
+    /// The shader's defaults, which never limit anything a scene draws.
+    fn default() -> Self {
+        Self {
+            min: 0.0,
+            max: 20.0,
+            start_fade: 10.0,
+            end_fade: 20.0,
+        }
+    }
+}
+
 /// A sprite: its frames side by side, and how it is drawn.
 #[derive(Asset, TypePath, Debug, Clone)]
 pub struct SpriteAsset {
@@ -62,6 +93,8 @@ pub struct SpriteAsset {
     /// Whether it adds its colour to what is behind (`$additive`), rather
     /// than covering it by its alpha.
     pub additive: bool,
+    /// How a particle card's size is limited and faded.
+    pub size_limits: SizeLimits,
     /// What the colour is multiplied by (`$overbrightfactor`), `1` if unset.
     pub overbright: f32,
     /// Where each frame of each animation lies in the image, for particle
@@ -103,6 +136,7 @@ impl AssetLoader for SpriteLoader {
             frames: count.max(1),
             additive: is_additive(&text),
             overbright: overbright(&text),
+            size_limits: size_limits(&text),
             sheet,
         })
     }
@@ -129,6 +163,32 @@ fn is_additive(text: &str) -> bool {
             // A particle card that adds a copy of itself is a glowing one.
             || (pair.key.eq_ignore_ascii_case("spritecard") && block.get_str("$addself").is_some())
     })
+}
+
+/// A material's size limits: `$minsize`, `$maxsize`, `$startfadesize` and
+/// `$endfadesize`, each the shader's default when unset. A key may carry the
+/// `!lowfill?` prefix (the setting for normal quality, which is the one used
+/// here); the `lowfill?` ones are for reduced particle detail and ignored.
+fn size_limits(text: &str) -> SizeLimits {
+    let mut limits = SizeLimits::default();
+    let Ok(document) = source_fs::keyvalues::parse(text) else {
+        return limits;
+    };
+    let Some(block) = document.root.iter().find_map(|pair| pair.value.as_block()) else {
+        return limits;
+    };
+    let read = |name: &str| -> Option<f32> {
+        let standard = format!("!lowfill?{name}");
+        block
+            .get_str(&standard)
+            .or_else(|| block.get_str(name))
+            .and_then(|value| value.trim().parse::<f32>().ok())
+    };
+    limits.min = read("$minsize").unwrap_or(limits.min);
+    limits.max = read("$maxsize").unwrap_or(limits.max);
+    limits.start_fade = read("$startfadesize").unwrap_or(limits.start_fade);
+    limits.end_fade = read("$endfadesize").unwrap_or(limits.end_fade);
+    limits
 }
 
 /// A material's `$overbrightfactor`, or `1`.
@@ -220,6 +280,24 @@ mod tests {
         assert!(!is_additive(
             r#""SpriteCard" { "$basetexture" "a" "$translucent" "1" }"#
         ));
+    }
+
+    #[test]
+    fn size_limits_read_the_normal_quality_values() {
+        let text = r#""SpriteCard" {
+            "$basetexture" "a"
+            "!lowfill?$startfadesize" ".7"
+            "lowfill?$startfadesize" ".1"
+            "!lowfill?$endfadesize" "1.1"
+            "lowfill?$endfadesize" ".2"
+            "$maxsize" "0.5"
+        }"#;
+        let limits = size_limits(text);
+        assert!((limits.start_fade - 0.7).abs() < 1e-6);
+        assert!((limits.end_fade - 1.1).abs() < 1e-6);
+        assert!((limits.max - 0.5).abs() < 1e-6);
+        assert_eq!(limits.min, 0.0);
+        assert_eq!(size_limits(r#""SpriteCard" { }"#), SizeLimits::default());
     }
 
     #[test]

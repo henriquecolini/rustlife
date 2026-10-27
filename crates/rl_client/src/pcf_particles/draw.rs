@@ -5,6 +5,7 @@
 //! quads into meshes.
 
 use bevy::math::Vec3;
+use rl_assets::SizeLimits;
 use source_formats::sheet::{Rect, Sheet};
 
 /// One camera-facing (or otherwise oriented) rectangle to draw.
@@ -102,6 +103,25 @@ pub(super) fn frame_rect(
         u1: (index + 1) as f32 / frames as f32,
         v1: 1.0,
     }
+}
+
+/// A card's radius and opacity scale as the engine's `SpriteCard` shader
+/// gives them, for a card of `radius` seen from `distance` away (same
+/// units): the radius is kept between `limits.min` and `limits.max` times
+/// the distance, and the card fades out, to nothing, as the radius grows
+/// from `limits.start_fade` to `limits.end_fade` times the distance.
+pub(super) fn limit_size(radius: f32, distance: f32, limits: SizeLimits) -> (f32, f32) {
+    let distance = distance.max(f32::EPSILON);
+    let size = radius.max(limits.min * distance);
+    let fade = if size > limits.end_fade * distance {
+        0.0
+    } else if size > limits.start_fade * distance {
+        1.0 - (size - limits.start_fade * distance)
+            / ((limits.end_fade - limits.start_fade) * distance)
+    } else {
+        1.0
+    };
+    (size.min(limits.max * distance), fade.clamp(0.0, 1.0))
 }
 
 fn corners_uv(rect: Rect) -> [[f32; 2]; 4] {
@@ -288,6 +308,32 @@ mod tests {
                 },
             ],
         }
+    }
+
+    #[test]
+    fn cards_keep_their_size_and_fade_when_they_fill_the_view() {
+        let limits = SizeLimits {
+            min: 0.01,
+            max: 0.5,
+            start_fade: 0.25,
+            end_fade: 0.45,
+        };
+        // Small against its distance: as it is.
+        assert_eq!(limit_size(1.0, 100.0, limits), (1.0, 1.0));
+        // Too small to see: raised to the minimum.
+        assert_eq!(limit_size(0.1, 100.0, limits).0, 1.0);
+        // Halfway through the fade.
+        let (size, fade) = limit_size(35.0, 100.0, limits);
+        assert_eq!(size, 35.0);
+        assert!((fade - 0.5).abs() < 1e-5, "{fade}");
+        // Past the end of the fade: invisible, and never past the maximum.
+        let (size, fade) = limit_size(80.0, 100.0, limits);
+        assert_eq!((size, fade), (50.0, 0.0));
+        // The defaults limit nothing a scene draws.
+        assert_eq!(
+            limit_size(100.0, 100.0, SizeLimits::default()),
+            (100.0, 1.0)
+        );
     }
 
     #[test]

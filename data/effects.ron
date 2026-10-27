@@ -157,8 +157,8 @@ Effects(
         duration: 0.7,
         smoke_duration: 4.5,
         shake: 0.85,
-        // The game's own explosion; the particles above are the fallback.
-        pcf: Some("explosion_huge"),
+        // HL2DM draws its explosions with the old FX_Explosion sprites
+        // (effects/fire_cloud), not a particle system, so there is no `pcf`.
     ),
     // A thrown grenade: a red dot on its top that flashes with each tick of
     // its fuse (the dot's size at the flash, how bright it stays between

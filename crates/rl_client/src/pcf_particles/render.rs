@@ -409,6 +409,66 @@ fn tint(p: &Particle, sprite: &SpriteAsset) -> [f32; 4] {
     ]
 }
 
+/// The camera cards of `instance`'s particles: oriented as `orientation`
+/// says, sized and faded as the material's size limits say, animated at
+/// `animation` (rate, whether it spans the particle's life).
+fn sprite_quads(
+    instance: &Instance,
+    sprite: &SpriteAsset,
+    view: View,
+    (rate, fit_lifetime): (f32, bool),
+    (orientation, orientation_point): (i32, i32),
+) -> Vec<Quad> {
+    let sheet = sprite.sheet.as_ref();
+    let scale = coords::METERS_PER_UNIT;
+    let facing = match orientation {
+        2 => Facing::Upright,
+        3 => {
+            let point = usize::try_from(orientation_point)
+                .ok()
+                .and_then(|i| instance.points.get(i))
+                .or_else(|| instance.points.first());
+            point.map_or(Facing::Camera, |point| {
+                Facing::Plane(
+                    coords::direction(point.right.to_array()),
+                    coords::direction(point.forward.to_array()),
+                )
+            })
+        }
+        _ => Facing::Camera,
+    };
+    instance
+        .particles()
+        .iter()
+        .filter(|p| p.alpha > 0.0 && p.radius > 0.0)
+        .filter_map(|p| {
+            let center = world_position(p);
+            let (radius, fade) = draw::limit_size(
+                p.radius * scale,
+                center.distance(view.position),
+                sprite.size_limits,
+            );
+            if fade <= 0.0 {
+                return None;
+            }
+            let rect = draw::frame_rect(
+                sheet,
+                sprite.frames,
+                p.sequence,
+                p.age,
+                p.life_fraction(),
+                rate,
+                fit_lifetime,
+            );
+            let mut color = tint(p, sprite);
+            color[3] *= fade;
+            Some(draw::sprite(
+                center, radius, p.rotation, facing, view, rect, color,
+            ))
+        })
+        .collect()
+}
+
 /// The quads for `instance`'s particles under one renderer.
 fn draw_particles(
     instance: &Instance,
@@ -425,47 +485,13 @@ fn draw_particles(
             orientation,
             orientation_point,
         } => {
-            let facing = match orientation {
-                2 => Facing::Upright,
-                3 => {
-                    let point = usize::try_from(orientation_point)
-                        .ok()
-                        .and_then(|i| instance.points.get(i))
-                        .or_else(|| instance.points.first());
-                    point.map_or(Facing::Camera, |point| {
-                        Facing::Plane(
-                            coords::direction(point.right.to_array()),
-                            coords::direction(point.forward.to_array()),
-                        )
-                    })
-                }
-                _ => Facing::Camera,
-            };
-            let quads = instance
-                .particles()
-                .iter()
-                .filter(|p| p.alpha > 0.0 && p.radius > 0.0)
-                .map(|p| {
-                    let rect = draw::frame_rect(
-                        sheet,
-                        sprite.frames,
-                        p.sequence,
-                        p.age,
-                        p.life_fraction(),
-                        rate,
-                        fit_lifetime,
-                    );
-                    draw::sprite(
-                        world_position(p),
-                        p.radius * scale,
-                        p.rotation,
-                        facing,
-                        view,
-                        rect,
-                        tint(p, sprite),
-                    )
-                })
-                .collect();
+            let quads = sprite_quads(
+                instance,
+                sprite,
+                view,
+                (rate, fit_lifetime),
+                (orientation, orientation_point),
+            );
             (Kind::Sprite, quads)
         }
         Renderer::SpriteTrail {

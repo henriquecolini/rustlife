@@ -46,7 +46,7 @@ pub use skeleton::{Joint, SequenceClips, Skeleton};
 pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use source_formats::props::PropKind;
-pub use sprite::{SpriteAsset, SpriteLoadError, SpriteLoader};
+pub use sprite::{SizeLimits, SpriteAsset, SpriteLoadError, SpriteLoader};
 pub use texture::{TextureDetail, VtfLoadError, VtfLoader};
 pub use vertex_lighting::{VertexLightingAsset, VhvLoadError, VhvLoader};
 
