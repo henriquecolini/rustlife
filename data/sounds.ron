@@ -18,6 +18,9 @@ Sounds(
     ),
     // A landing that hurt.
     fall_damage: "Player.FallDamage",
+    // The suit: a sprint begins, or is refused for want of power.
+    sprint_start: "HL2Player.SprintStart",
+    sprint_denied: "HL2Player.SprintNoPower",
     // A weapon picked up (items name their own pickup sounds).
     weapon_pickup: "Player.PickupWeapon",
     death: "Player.Death",

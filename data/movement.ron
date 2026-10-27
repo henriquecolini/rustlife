@@ -8,9 +8,12 @@ Movement(
     // No velocity component may exceed this, units/s.
     max_velocity: 3500.0,
     ground: (
-        // Top speed when running and walking (walk button held), units/s.
-        run_speed: 320.0,
+        // Top speed when running, walking (walk button held) and sprinting
+        // (sprint button held, spending suit power), units/s. HL2DM's
+        // hl2_normspeed, hl2_walkspeed and hl2_sprintspeed.
+        run_speed: 190.0,
         walk_speed: 150.0,
+        sprint_speed: 320.0,
         // How quickly the player reaches the wished speed on the ground
         // (fraction of the wished speed gained per second).
         accelerate: 10.0,
@@ -60,6 +63,17 @@ Movement(
         speed_scale: 0.8,
         // Speed the player drifts down at without input, units/s.
         sink_speed: 60.0,
+    ),
+    // The suit's auxiliary power, which sprinting spends (CHL2_Player's
+    // SuitPower_*: 100 units, 25 per second of sprinting, 12.5 per second
+    // back after half a second of rest).
+    sprint: (
+        max_power: 100.0,
+        drain: 25.0,
+        recharge: 12.5,
+        recharge_delay: 0.5,
+        // A sprint cannot be started with less power than this.
+        min_start: 10.0,
     ),
     // A prop that comes to overlap the player (landing on them, rolling into
     // them) pushes them out at up to this speed, units/s.

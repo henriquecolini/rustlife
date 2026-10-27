@@ -34,9 +34,10 @@ use crate::selector::WeaponSelector;
 use crate::settings::Bindings;
 
 /// Actions that hold a command button down.
-const ACTION_BUTTONS: [(&str, Buttons); 7] = [
+const ACTION_BUTTONS: [(&str, Buttons); 8] = [
     ("jump", Buttons::JUMP),
     ("duck", Buttons::DUCK),
+    ("sprint", Buttons::SPRINT),
     ("walk", Buttons::WALK),
     ("use", Buttons::USE),
     ("reload", Buttons::RELOAD),
@@ -179,7 +180,7 @@ mod tests {
         assert_eq!((cmd.forward, cmd.side), (1.0, -1.0));
         assert!(
             cmd.buttons
-                .contains(Buttons::JUMP | Buttons::WALK | Buttons::ATTACK2 | Buttons::RELOAD)
+                .contains(Buttons::JUMP | Buttons::SPRINT | Buttons::ATTACK2 | Buttons::RELOAD)
         );
         assert!(!cmd.buttons.contains(Buttons::DUCK));
         assert!(!cmd.buttons.contains(Buttons::ATTACK));

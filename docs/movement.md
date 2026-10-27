@@ -57,7 +57,7 @@ The tick also reports events: a jump, and a landing with the fall speed
 **Friction** removes `ground.friction` × speed per second. Below
 `ground.stop_speed` it is computed as if moving at that speed, so slow
 sliding stops completely. With the defaults (friction 4, stop speed 100), a
-player running at 320 units/s stops in about half a second.
+player running at 190 units/s stops in about 0.4 seconds.
 
 **Acceleration** adds speed along the wished direction only until the
 velocity's component *along that direction* reaches the wished speed:
@@ -68,9 +68,23 @@ gain  = min(accelerate · wish_speed · dt, add)
 velocity += gain · wish_dir
 ```
 
-On the ground, `wish_speed` is the top speed: `ground.run_speed`, or
-`ground.walk_speed` with walk held, times `duck.speed_scale` while crouched.
-After accelerating, ground speed is capped at that top speed.
+On the ground, `wish_speed` is the top speed: `ground.run_speed` (190),
+`ground.walk_speed` with walk held, or `ground.sprint_speed` (320) while
+sprinting, times `duck.speed_scale` while crouched. After accelerating,
+ground speed is capped at that top speed.
+
+## Sprinting
+
+Sprinting spends the suit's auxiliary power (the "AUX POWER" bar), as
+HL2DM's `CHL2_Player::HandleSpeedChanges` and `SuitPower_Update` do (all in
+`sprint:` of `movement.ron`). A **fresh press** of the sprint button starts
+a sprint if the power is at least `min_start` (10); otherwise the suit
+refuses (`HL2Player.SprintNoPower`). The sprint lasts while the button is
+held and the player is neither walking, crouching nor under water, and
+spends `drain` (25) power a second, so a full charge of `max_power` (100)
+lasts four seconds; when it is gone the sprint ends and the button must be
+pressed afresh. After `recharge_delay` (0.5 s) without sprinting the power
+returns at `recharge` (12.5) a second.
 
 ## Air-strafing and bunny-hopping
 

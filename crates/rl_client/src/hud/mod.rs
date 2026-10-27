@@ -50,6 +50,7 @@ impl Plugin for HudPlugin {
                 (
                     log_events,
                     vitals::update,
+                    vitals::update_aux,
                     weapons::update_ammo,
                     weapons::update_list,
                     status::update,

@@ -219,9 +219,14 @@ pub const ACTIONS: &[Action] = &[
         default: "ControlLeft",
     },
     Action {
+        id: "sprint",
+        label: "Sprint",
+        default: "ShiftLeft",
+    },
+    Action {
         id: "walk",
         label: "Walk",
-        default: "ShiftLeft",
+        default: "AltLeft",
     },
     Action {
         id: "use",

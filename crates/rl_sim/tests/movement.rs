@@ -124,8 +124,9 @@ fn running_reaches_and_holds_the_run_speed() {
 fn friction_stops_a_running_player_in_about_half_a_second() {
     let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
     sim.settle();
-    sim.state.velocity = Vec3::new(320.0, 0.0, 0.0);
-    let mut previous = 320.0;
+    let run_speed = sim.config.ground.run_speed;
+    sim.state.velocity = Vec3::new(run_speed, 0.0, 0.0);
+    let mut previous = run_speed;
     let mut stopped_after = None;
     for tick in 0..66 {
         sim.tick(&UserCmd::default());
@@ -136,11 +137,11 @@ fn friction_stops_a_running_player_in_about_half_a_second() {
             stopped_after = Some(tick + 1);
         }
     }
-    // Friction 4 takes 320 u/s down to the 100 u/s stop speed in
-    // ln(3.2) / 4 ≈ 0.29 s, then removes a constant 400 u/s² for the last
-    // 0.25 s: about 36 ticks in all.
+    // Friction 4 takes 190 u/s down to the 100 u/s stop speed in
+    // ln(1.9) / 4 ≈ 0.16 s, then removes a constant 400 u/s² for the last
+    // 0.25 s: about 27 ticks in all.
     let ticks = stopped_after.expect("came to a stop");
-    assert!((33..=39).contains(&ticks), "stopped after {ticks} ticks");
+    assert!((25..=30).contains(&ticks), "stopped after {ticks} ticks");
 }
 
 #[test]
@@ -315,7 +316,7 @@ fn walking_down_a_slope_stays_on_the_ground() {
         yaw: 180.0,
         ..UserCmd::default()
     };
-    for _ in 0..80 {
+    for _ in 0..132 {
         sim.tick(&down);
         assert!(
             sim.state.on_ground,
@@ -403,7 +404,7 @@ fn a_low_ceiling_keeps_a_crouched_player_down() {
 
     // Crawl out from under it, and the player stands.
     sim.run(
-        132,
+        200,
         &UserCmd {
             forward: 1.0,
             ..UserCmd::default()
@@ -587,4 +588,88 @@ fn grazing_a_slope_never_stops_a_slide_dead() {
         sim.tick(&away_from_ramp);
         assert!(sim.state.velocity.y > 790.0, "stopped: {:?}", sim.state);
     }
+}
+
+fn sprinting() -> UserCmd {
+    UserCmd {
+        forward: 1.0,
+        buttons: Buttons::SPRINT,
+        ..UserCmd::default()
+    }
+}
+
+#[test]
+fn sprinting_runs_faster_and_spends_suit_power() {
+    let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
+    sim.settle();
+    let started = sim.tick(&sprinting());
+    assert!(started.sprint_started);
+    // One second: a quarter of the power gone, at the sprint speed.
+    sim.run(65, &sprinting());
+    let ground = &sim.config.ground;
+    assert!((sim.state.speed_2d() - ground.sprint_speed).abs() < 1.0);
+    let power = sim.state.aux_power(&sim.config);
+    assert!((power - 75.0).abs() < 1.5, "{power} left after a second");
+    assert!(sim.state.sprinting);
+}
+
+#[test]
+fn a_sprint_ends_when_the_power_does_and_needs_a_fresh_press() {
+    let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
+    sim.settle();
+    // 100 power at 25 a second lasts four seconds.
+    sim.run(270, &sprinting());
+    assert!(!sim.state.sprinting, "out of power");
+    assert!(sim.state.aux_power(&sim.config) < 1.0);
+    // Holding the button on does not start another...
+    sim.run(30, &sprinting());
+    assert!(!sim.state.sprinting);
+    // ...a fresh press does, once the power is back to the minimum.
+    sim.run(2, &forward());
+    let denied = sim.tick(&sprinting());
+    assert!(denied.sprint_denied, "no power yet");
+    assert!(!sim.state.sprinting);
+}
+
+#[test]
+fn power_comes_back_after_a_pause() {
+    let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
+    sim.settle();
+    sim.run(132, &sprinting());
+    let low = sim.state.aux_power(&sim.config);
+    // Half a second of rest first; then 12.5 a second.
+    sim.run(33, &forward());
+    assert!((sim.state.aux_power(&sim.config) - low).abs() < 1.0);
+    sim.run(66, &forward());
+    let regained = sim.state.aux_power(&sim.config) - low;
+    assert!(
+        (regained - 12.5).abs() < 1.5,
+        "regained {regained} in a second"
+    );
+    sim.run(1000, &forward());
+    assert_eq!(
+        sim.state.aux_power(&sim.config),
+        sim.config.sprint.max_power
+    );
+}
+
+#[test]
+fn walking_or_crouching_does_not_sprint() {
+    let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
+    sim.settle();
+    let walking = UserCmd {
+        buttons: Buttons::SPRINT | Buttons::WALK,
+        ..forward()
+    };
+    sim.run(100, &walking);
+    assert!(!sim.state.sprinting);
+    assert!((sim.state.speed_2d() - sim.config.ground.walk_speed).abs() < 1.0);
+
+    let crouching = UserCmd {
+        buttons: Buttons::SPRINT | Buttons::DUCK,
+        ..forward()
+    };
+    sim.run(100, &crouching);
+    assert!(!sim.state.sprinting);
+    assert!(sim.state.speed_2d() < sim.config.ground.run_speed * 0.5);
 }

@@ -22,6 +22,10 @@ pub struct SoundsConfig {
     pub footsteps: FootstepsConfig,
     /// A landing that hurt.
     pub fall_damage: String,
+    /// The local player starting a sprint...
+    pub sprint_start: String,
+    /// ...and trying to without the power for it.
+    pub sprint_denied: String,
     /// A weapon picked up.
     pub weapon_pickup: String,
     /// A player dying.
@@ -121,6 +125,8 @@ impl SoundsConfig {
         check.range("footsteps.run_volume", steps.run_volume, 0.0, 1.0);
         check.range("footsteps.walk_volume", steps.walk_volume, 0.0, 1.0);
         named(check, "fall_damage", &self.fall_damage);
+        named(check, "sprint_start", &self.sprint_start);
+        named(check, "sprint_denied", &self.sprint_denied);
         named(check, "weapon_pickup", &self.weapon_pickup);
         named(check, "death", &self.death);
         named(check, "explosion", &self.explosion);
@@ -182,6 +188,8 @@ mod tests {
                 walk_volume: 0.2,
             },
             fall_damage: "Player.FallDamage".to_owned(),
+            sprint_start: "HL2Player.SprintStart".to_owned(),
+            sprint_denied: "HL2Player.SprintNoPower".to_owned(),
             weapon_pickup: "Player.PickupWeapon".to_owned(),
             death: "Player.Death".to_owned(),
             explosion: "BaseExplosionEffect.Sound".to_owned(),

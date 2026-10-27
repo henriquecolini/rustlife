@@ -97,12 +97,12 @@ fn a_carried_prop_does_not_block_its_holder() {
         sim.player(player).expect("player").manipulator.held(),
         Some(prop)
     );
-    // Walk forward for two seconds, carrying it.
+    // Walk forward for three seconds, carrying it.
     let walk = UserCmd {
         forward: 1.0,
         ..UserCmd::default()
     };
-    for _ in 0..132 {
+    for _ in 0..200 {
         sim.tick(&[(player, walk)]);
     }
     let state = sim.player(player).expect("player").state;

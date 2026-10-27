@@ -1,5 +1,6 @@
 //! Health and armor, bottom left: a big number and a bar that drains with a
-//! trailing ghost of what was just lost.
+//! trailing ghost of what was just lost; above them the suit's auxiliary
+//! power while it is being spent or has not yet come back.
 
 use bevy::prelude::*;
 
@@ -15,6 +16,14 @@ const ARMOR: Color = Color::srgb(0.29, 0.64, 1.0);
 const GHOST_RATE: f32 = 2.5;
 /// How fast the bars follow the value, per second.
 const BAR_RATE: f32 = 18.0;
+
+/// The whole auxiliary power readout: shown only while the power is not full.
+#[derive(Component)]
+pub(super) struct AuxPanel;
+
+/// The coloured part of the auxiliary power bar.
+#[derive(Component)]
+pub(super) struct AuxFill;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Vital {
@@ -56,6 +65,56 @@ pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
             .with_children(|row| {
                 vital(row, fonts, Vital::Health, "HEALTH", theme::TEXT);
                 vital(row, fonts, Vital::Armor, "ARMOR", ARMOR);
+            });
+        });
+    aux_power(commands, fonts);
+}
+
+/// The auxiliary power readout, just above the health card.
+fn aux_power(commands: &mut Commands, fonts: &Fonts) {
+    commands
+        .spawn(anchored(
+            JustifyContent::FlexStart,
+            AlignItems::FlexEnd,
+            UiRect::new(Val::Px(32.0), Val::Px(0.0), Val::Px(0.0), Val::Px(138.0)),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                AuxPanel,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::axes(Val::Px(18.0), Val::Px(8.0)),
+                    row_gap: Val::Px(4.0),
+                    min_width: Val::Px(200.0),
+                    border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS)),
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.62)),
+            ))
+            .with_children(|card| {
+                card.spawn(fonts.bold("AUX POWER", 14.0, theme::TEXT_DIM));
+                card.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(7.0),
+                        border_radius: BorderRadius::MAX,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
+                ))
+                .with_children(|bar| {
+                    bar.spawn((
+                        AuxFill,
+                        Node {
+                            height: Val::Percent(100.0),
+                            width: Val::Percent(100.0),
+                            border_radius: BorderRadius::MAX,
+                            ..default()
+                        },
+                        BackgroundColor(theme::ACCENT),
+                    ));
+                });
             });
         });
 }
@@ -114,6 +173,34 @@ fn vital(row: &mut ChildSpawnerCommands, fonts: &Fonts, vital: Vital, label: &st
             }
         });
     });
+}
+
+/// Shows the auxiliary power bar while the power is not full.
+pub(super) fn update_aux(
+    game: Game,
+    gameplay: Res<Gameplay>,
+    mut panels: Query<&mut Node, With<AuxPanel>>,
+    mut fills: Query<&mut Node, (With<AuxFill>, Without<AuxPanel>)>,
+) {
+    let Some(player) = game
+        .sim()
+        .zip(game.local())
+        .and_then(|(sim, local)| sim.player(local))
+    else {
+        return;
+    };
+    let movement = &gameplay.0.movement;
+    let power = player.state.aux_power(movement) / movement.sprint.max_power;
+    for mut node in &mut panels {
+        node.display = if power < 1.0 {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    for mut node in &mut fills {
+        node.width = Val::Percent(power * 100.0);
+    }
 }
 
 pub(super) fn update(

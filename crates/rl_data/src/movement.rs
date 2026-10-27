@@ -30,6 +30,8 @@ pub struct MovementConfig {
     pub water: WaterConfig,
     /// Ladder climbing.
     pub ladder: LadderConfig,
+    /// Sprinting and the suit power it spends.
+    pub sprint: SprintConfig,
     /// Fastest a player is pushed out of a prop that overlaps them, units/s.
     pub unstick_speed: f32,
 }
@@ -42,6 +44,8 @@ pub struct GroundConfig {
     pub run_speed: f32,
     /// Top speed with the walk button held, units/s.
     pub walk_speed: f32,
+    /// Top speed while sprinting, units/s.
+    pub sprint_speed: f32,
     /// Acceleration towards the wished velocity, in wished speeds per second.
     pub accelerate: f32,
     /// Fraction of the speed lost to friction per second.
@@ -149,6 +153,28 @@ pub struct LadderConfig {
     pub dismount_range: f32,
 }
 
+/// Sprinting, which spends the suit's auxiliary power.
+///
+/// Pressing the sprint button starts a sprint if the power is at least
+/// [`min_start`](Self::min_start); the power drains while it lasts and the
+/// sprint ends when the button is let go or the power runs out (then the
+/// button must be pressed afresh). The power comes back, slowly, once
+/// nothing has drawn on it for a moment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SprintConfig {
+    /// A full charge of power.
+    pub max_power: f32,
+    /// Power spent per second of sprinting.
+    pub drain: f32,
+    /// Power regained per second at rest.
+    pub recharge: f32,
+    /// Seconds after a sprint before the power starts to come back.
+    pub recharge_delay: f32,
+    /// Least power a sprint can be started with.
+    pub min_start: f32,
+}
+
 impl MovementConfig {
     /// Checks every value for sense, reporting each problem with its field
     /// path.
@@ -159,6 +185,7 @@ impl MovementConfig {
         let ground = &self.ground;
         check.positive("ground.run_speed", ground.run_speed);
         check.positive("ground.walk_speed", ground.walk_speed);
+        check.positive("ground.sprint_speed", ground.sprint_speed);
         check.positive("ground.accelerate", ground.accelerate);
         check.non_negative("ground.friction", ground.friction);
         check.non_negative("ground.stop_speed", ground.stop_speed);
@@ -194,6 +221,13 @@ impl MovementConfig {
         check.positive("ladder.mount_distance", self.ladder.mount_distance);
         check.non_negative("ladder.jump_off_speed", self.ladder.jump_off_speed);
         check.non_negative("ladder.dismount_range", self.ladder.dismount_range);
+
+        let sprint = &self.sprint;
+        check.positive("sprint.max_power", sprint.max_power);
+        check.non_negative("sprint.drain", sprint.drain);
+        check.non_negative("sprint.recharge", sprint.recharge);
+        check.non_negative("sprint.recharge_delay", sprint.recharge_delay);
+        check.range("sprint.min_start", sprint.min_start, 0.0, sprint.max_power);
     }
 }
 

@@ -156,7 +156,7 @@ fn movement(
     }
 
     if direction != Vec3::ZERO {
-        let boost = if held("walk") { 4.0 } else { 1.0 };
+        let boost = if held("sprint") { 4.0 } else { 1.0 };
         transform.translation += direction.normalize() * cam.speed * boost * time.delta_secs();
     }
 }

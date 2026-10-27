@@ -74,7 +74,7 @@ pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig, P
 pub use map_logic::{MapExplosionConfig, MapLogicConfig};
 pub use movement::{
     AirConfig, DuckConfig, GroundConfig, HullConfig, HullsConfig, JumpConfig, LadderConfig,
-    MovementConfig, WaterConfig,
+    MovementConfig, SprintConfig, WaterConfig,
 };
 pub use net::NetConfig;
 pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};

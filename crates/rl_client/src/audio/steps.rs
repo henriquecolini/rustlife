@@ -34,7 +34,7 @@ impl Plugin for StepsPlugin {
             })
             .add_systems(
                 Update,
-                (footsteps, landings).run_if(in_state(AppState::InGame)),
+                (footsteps, landings, sprints).run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -194,6 +194,34 @@ fn landings(
                 &sound.step_left
             };
             player.play(name, None, config.run_volume);
+        }
+    }
+}
+
+/// The suit's sounds when the local player starts to sprint, or tries to
+/// without the power.
+fn sprints(
+    mut ticks: MessageReader<Ticked>,
+    game: Game,
+    local: Option<Res<LocalPlayer>>,
+    mut player: SoundPlayer,
+) {
+    let (Some(sim), Some(local)) = (game.sim(), local) else {
+        ticks.clear();
+        return;
+    };
+    let sounds = &sim.data().sounds;
+    for Ticked(events) in ticks.read() {
+        for (id, moved) in &events.moves {
+            if *id != local.id {
+                continue;
+            }
+            if moved.sprint_started {
+                player.play(&sounds.sprint_start, None, 1.0);
+            }
+            if moved.sprint_denied {
+                player.play(&sounds.sprint_denied, None, 1.0);
+            }
         }
     }
 }

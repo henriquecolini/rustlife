@@ -67,6 +67,8 @@ fn preload(game: Game, surfaces: Res<Surfaces>, mut done: Local<bool>, mut playe
             &sounds.footsteps.left,
             &sounds.footsteps.right,
             &sounds.fall_damage,
+            &sounds.sprint_start,
+            &sounds.sprint_denied,
             &sounds.weapon_pickup,
             &sounds.death,
             &sounds.explosion,

@@ -61,6 +61,8 @@ impl Buttons {
     pub const ATTACK2: Self = Self(1 << 5);
     /// Reload the weapon in hand.
     pub const RELOAD: Self = Self(1 << 6);
+    /// Sprint, while the suit has power for it.
+    pub const SPRINT: Self = Self(1 << 7);
 
     /// Whether every button of `other` is held.
     #[must_use]
@@ -173,6 +175,13 @@ pub struct PlayerState {
     /// Jump is also set by a press in the air, so it must be released
     /// before the player can jump again.
     pub old_buttons: Buttons,
+    /// How much of the suit's auxiliary power is spent (0 for a full
+    /// charge); sprinting spends it.
+    pub aux_spent: f32,
+    /// Sprinting: the top speed is the sprint speed.
+    pub sprinting: bool,
+    /// Seconds since the suit last spent power, for the recharge delay.
+    pub aux_rest: f32,
 }
 
 impl PlayerState {
@@ -189,6 +198,9 @@ impl PlayerState {
             water_level: WaterLevel::None,
             ladder: None,
             old_buttons: Buttons::NONE,
+            aux_spent: 0.0,
+            sprinting: false,
+            aux_rest: 0.0,
         }
     }
 
@@ -217,6 +229,12 @@ impl PlayerState {
         standing + (ducked - standing) * eased
     }
 
+    /// The suit's auxiliary power left.
+    #[must_use]
+    pub fn aux_power(&self, config: &MovementConfig) -> f32 {
+        (config.sprint.max_power - self.aux_spent).max(0.0)
+    }
+
     /// Horizontal speed, units/s.
     #[must_use]
     pub fn speed_2d(&self) -> f32 {
@@ -243,6 +261,10 @@ pub struct Touch {
 pub struct MoveEvents {
     /// The player jumped.
     pub jumped: bool,
+    /// The player started to sprint.
+    pub sprint_started: bool,
+    /// The player tried to sprint without the power for it.
+    pub sprint_denied: bool,
     /// The player landed, falling at this speed (units/s, positive).
     pub landed: Option<f32>,
     /// Props walked or flown into (not stood on), fastest contact per
@@ -342,6 +364,7 @@ impl<W: MovementWorld> Mover<'_, W> {
         let falling_speed = (!self.state.on_ground).then_some(-self.state.velocity.z);
 
         self.update_duck();
+        self.update_sprint();
         if self.ladder_tick() {
             self.finish_buttons();
             return;
@@ -480,20 +503,72 @@ impl<W: MovementWorld> Mover<'_, W> {
         )
     }
 
-    /// Top speed this tick: running or walking, slowed while crouching.
+    /// Top speed this tick: sprinting, running or walking, slowed while
+    /// crouching.
     fn max_speed(&self) -> f32 {
         let ground = &self.config.ground;
-        let mut speed = if self.cmd.buttons.contains(Buttons::WALK) {
+        let mut speed = if self.state.sprinting {
+            ground.sprint_speed
+        } else if self.cmd.buttons.contains(Buttons::WALK) {
             ground.walk_speed
         } else {
             ground.run_speed
         };
-        let crouching =
-            self.state.ducked || (self.cmd.buttons.contains(Buttons::DUCK) && self.state.on_ground);
-        if crouching {
+        if self.crouching() {
             speed *= self.config.duck.speed_scale;
         }
         speed
+    }
+
+    /// Whether the player is crouched or crouching.
+    fn crouching(&self) -> bool {
+        self.state.ducked || (self.cmd.buttons.contains(Buttons::DUCK) && self.state.on_ground)
+    }
+
+    /// Starts, keeps and ends a sprint, and spends and regains suit power
+    /// (`CHL2_Player::HandleSpeedChanges` and `SuitPower_Update`).
+    ///
+    /// A sprint starts on a fresh press of the button, if there is power
+    /// for it, and goes on while the button is held, the player neither
+    /// walks nor crouches and their head is out of the water, until the
+    /// power runs out. Power comes back after `recharge_delay` without a
+    /// sprint.
+    fn update_sprint(&mut self) {
+        let config = &self.config.sprint;
+        let held = self.cmd.buttons.contains(Buttons::SPRINT);
+        let fresh = held && !self.state.old_buttons.contains(Buttons::SPRINT);
+        let allowed = !self.cmd.buttons.contains(Buttons::WALK)
+            && !self.crouching()
+            && self.state.water_level != WaterLevel::Eyes;
+        let power = self.state.aux_power(self.config);
+
+        if self.state.sprinting {
+            if !(held && allowed) {
+                self.state.sprinting = false;
+            }
+        } else if fresh && allowed {
+            if power >= config.min_start {
+                self.state.sprinting = true;
+                self.events.sprint_started = true;
+            } else {
+                self.events.sprint_denied = true;
+            }
+        }
+        self.state.old_buttons = self.state.old_buttons.with(Buttons::SPRINT, held);
+
+        if self.state.sprinting {
+            self.state.aux_rest = 0.0;
+            self.state.aux_spent =
+                (self.state.aux_spent + config.drain * self.dt).min(config.max_power);
+            if self.state.aux_spent >= config.max_power {
+                self.state.sprinting = false;
+            }
+        } else {
+            self.state.aux_rest += self.dt;
+            if self.state.aux_rest > config.recharge_delay {
+                self.state.aux_spent = (self.state.aux_spent - config.recharge * self.dt).max(0.0);
+            }
+        }
     }
 }
 
