@@ -47,11 +47,14 @@ impl Vitals {
     }
 
     /// Takes `damage`, armor soaking its share; returns the health lost.
+    /// Health and armor are whole numbers in HL2: what is left after a hit
+    /// is rounded down, so a hit of 4.4 costs 5 health.
     pub fn take(&mut self, damage: f32, armor: &ArmorConfig) -> f32 {
         let (health_damage, armor_used) = armor.split(damage, self.armor);
-        self.armor = (self.armor - armor_used).max(0.0);
-        self.health -= health_damage;
-        health_damage
+        self.armor = (self.armor - armor_used).max(0.0).floor();
+        let before = self.health;
+        self.health = (self.health - health_damage).floor();
+        before - self.health
     }
 
     /// Adds up to `amount` health without exceeding `max`; returns whether
@@ -222,6 +225,24 @@ mod tests {
         assert!(vitals.alive());
         vitals.take(30.0, &ARMOR);
         assert!(!vitals.alive());
+    }
+
+    #[test]
+    fn health_and_armor_are_whole_numbers() {
+        let mut vitals = Vitals {
+            health: 100.0,
+            armor: 100.0,
+        };
+        // 8 damage: armor takes 80% (6.4), health the rest (1.6).
+        let lost = vitals.take(
+            8.0,
+            &ArmorConfig {
+                absorb: 0.8,
+                ..ARMOR
+            },
+        );
+        assert_eq!((vitals.health, vitals.armor), (98.0, 93.0));
+        assert_eq!(lost, 2.0);
     }
 
     #[test]

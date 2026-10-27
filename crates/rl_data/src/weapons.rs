@@ -464,6 +464,15 @@ pub struct ExplosionConfig {
 }
 
 impl ExplosionConfig {
+    /// The speed a player is pushed away at where the blast has `scale`
+    /// strength: `knockback` at full strength, falling with it, but never
+    /// more than `knockback_cap`.
+    #[must_use]
+    pub fn push_speed(&self, scale: f32) -> f32 {
+        let speed = self.knockback * scale;
+        self.knockback_cap.map_or(speed, |cap| speed.min(cap))
+    }
+
     /// How strongly the blast reaches `distance` units from its centre:
     /// 1 at the centre, falling linearly to 0 at the radius.
     #[must_use]
@@ -865,6 +874,26 @@ mod tests {
         assert!((at - 1.6).abs() < 1e-5, "{at}");
         let (number, _) = blip.last(2.5, 2.5);
         assert_eq!(number, 6);
+    }
+
+    #[test]
+    fn pushes_stop_growing_at_the_cap() {
+        let blast = ExplosionConfig {
+            radius: 300.0,
+            damage: 150.0,
+            knockback: 529.0,
+            knockback_cap: Some(353.0),
+            force: 0.0,
+        };
+        assert_eq!(blast.push_speed(1.0), 353.0);
+        assert_eq!(blast.push_speed(0.7), 353.0, "still at the cap");
+        assert!((blast.push_speed(0.5) - 264.5).abs() < 1e-3);
+        assert_eq!(blast.push_speed(0.0), 0.0);
+        let uncapped = ExplosionConfig {
+            knockback_cap: None,
+            ..blast
+        };
+        assert!((uncapped.push_speed(1.0) - 529.0).abs() < 1e-3);
     }
 
     #[test]

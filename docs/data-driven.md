@@ -105,7 +105,8 @@ Weapon(
     )),
     secondary: None,
     deploy_time: 0.5,
-    pickup: Some((ammo: 50, respawn: 20.0, radius: 24.0)),
+    // 50 extra rounds with a new gun; 50 for someone who has one already.
+    pickup: Some((ammo: 50, owned_ammo: 50, respawn: 20.0, radius: 24.0)),
     // Players hold it with the smg1 sequences of HL2DM's player models
     // (run_smg1, cidle_smg1, ...).
     hold: Some("smg1"),
@@ -130,19 +131,28 @@ an entity class to it so maps place it (`entity_map.ron`):
 
 | Field | Choices |
 |-------|---------|
-| `clip` | `None` (fire modes take from carried ammo or need none), or `(ammo, size, reload)` with `reload` `Whole(time)` or `PerRound(start, each)` |
+| `clip` | `None` (fire modes take from carried ammo or need none), or `(ammo, size, reload)` with `reload` `Whole(time)` or `PerRound(start, each, finish)` |
+| fire mode `interval`, `other_interval` | Seconds until this mode can fire again, and until the *other* mode can (0 leaves it alone). A held mode fires on this beat exactly: the leftover of a tick carries over |
+| fire mode `click_interval` | `Some(t)`: a fresh press fires as soon as `t` seconds after the last shot, though a held button waits for `interval` (the pistol) |
+| fire mode `charge` | Seconds between the press and the shot going off, the weapon busy meanwhile; for an `on_release` mode, between letting go and the shot leaving the hand |
+| `auto_reload` | `Some(t)`: an emptied clip reloads `t` seconds after the shot whatever the buttons do (the crossbow) |
+| `pump` | `Some(t)`: after a shot's interval the weapon works its action for `t` seconds before anything fires (the shotgun) |
+| `zoom` | `Some((fov, in_time, out_time))`: the alternate button toggles a scope |
+| `reload_after_projectile`, `laser` | A launcher with one rocket in the air at a time, reloading for this long once it has burst; the alternate button toggles its laser |
+| `weight`, `auto_switch_to` | HL2's weight, which picks the weapon brought up when the one in hand runs dry (the heaviest with ammo); `false` keeps a weapon from ever being chosen |
 | fire mode `ammo` | `Unlimited`, `Clip(n)` (rounds from the clip), `Reserve(ammo, count)` (rounds from carried ammo) |
 | fire mode `on_release` | `true`: the shot goes off when the button is let go, the weapon primed while it is held (a grenade) |
 | `consumable` | `true`: the weapon is its own ammo, carried only while it has rounds and put away with the last |
 | `icon` | The letter of the weapon's icon in the HUD's icon font (`weapon_icon_font` in `hud.ron`, by default the game's `resource/halflife2.ttf`); the weapon list shows its name alone without one |
-| fire mode `shot` | `Hitscan((pellets, damage, spread, range, falloff, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
-| `falloff` | `None`, or `(start, end, min_scale)`: full damage to `start`, linear to `min_scale` at `end` |
+| fire mode `shot` | `Hitscan((pellets, damage, cone, accuracy, range, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |
+| `cone`, `accuracy` | Source's vector cone (the sine of half the angle: `0.0436` is `VECTOR_CONE_5DEGREES`), drawn per axis as the sum of two uniform draws; `accuracy` is `None` or `(min, max, per_shot, full)`, a cone that opens by `per_shot` seconds of penalty for each shot (up to `full`) and closes as the trigger rests (the pistol) |
+| projectile `missile`, `crouched` | `missile`: a laser-steered rocket `(ignite_delay, launch_forward, launch_up, steer, steer_interval, muzzle)`; `crouched`: the projectile a shot made while crouching is instead (a grenade rolled where standing it is lobbed) |
 | projectile `body` | `None`, or a rigid cylinder `(radius, height, model_center, surface, rolled, blip, mass, friction, spin, damping)`; `blip` is `None` or `(interval, fast_interval, warn_time)` |
-| projectile `explosion` | `None`, or `(radius, damage, knockback, force)` |
+| projectile `explosion` | `None`, or `(radius, damage, knockback, knockback_cap, force)`; a player is pushed at `knockback` times the blast's strength, at most `knockback_cap` |
 | `hold` | The suffix of the player-model sequences it is held with (`pistol`, `smg1`, `ar2`, `shotgun`, `crossbow`, `rpg`, `grenade`, `melee`, `gravgun`); `None` takes `player.ron`'s `default_hold` |
-| `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`, `blip` (a fuse ticking) |
+| `sounds` | Soundscript entries or files by purpose: `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`, `blip` (a fuse ticking), `empty` (the trigger on an empty clip), `pump`, `charge` |
 
-The ten built-in weapons cover every block: the Gravity Gun (a tool, the
+The eleven built-in weapons cover every block: the Gravity Gun (a tool, the
 `Manipulator` shot), the Crowbar (melee), 9MM Pistol and .357 Magnum
 (single bullets), SMG (automatic, with a reserve-fed grenade launcher),
 Pulse Rifle (with a bouncing, fused orb), Shotgun (pellets,

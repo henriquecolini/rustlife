@@ -27,29 +27,68 @@ into the kill feed, hit markers, tracers and flashes.
 
 ## Weapons
 
+Every number is HL2DM's, taken from the game's weapon scripts
+(`scripts/weapon_*.txt`: damage, clip sizes, ammo types, weights), from the
+view models' animations (draw, reload and fire lengths, read with
+`rustlife-inspect sequences models/weapons/v_smg1.mdl`) and from the code of
+the game's server library (fire rates, cones, delays, projectile speeds). The
+comments of each `data/weapons/*.ron` say which.
+
 The game data's weapons and ammo types are numbered in id order by the
 `Arsenal` (`WeaponId`, `AmmoId`), so the same data numbers them the same
 everywhere. Each player has an `Inventory`: carried weapons with their
 clips, carried ammo per type (capped by `ammo.ron`), and the weapon in hand,
-which is in one of three phases:
+which is in one of these phases:
 
 | Phase | Ends | Meanwhile |
 |-------|------|-----------|
-| Deploying | after the weapon's `deploy_time` | nothing fires |
-| Reloading | after the clip's reload time | nothing fires, except that firing interrupts a round-by-round reload (with a round loaded) |
-| Ready | — | fire modes fire once their `interval` since the last shot has passed |
+| Deploying | after the weapon's `deploy_time` (its draw animation) | nothing fires |
+| Reloading | after the reload's time (a step of it, for a shotgun) | nothing fires, except that a round-by-round reload gives way to a shot |
+| Priming | the button is let go | a grenade drawn back; nothing is used up |
+| Charging | after the mode's `charge` | a shot on its way (the energy ball building, a grenade leaving the hand) |
+| Ready | — | fire modes fire once their interval is up |
 
-A fire mode fires while its button is held (`automatic`) or on each fresh
-press. A shot spends its `ammo`: rounds from the clip, rounds straight from
-the carried ammo, or nothing. Firing with too few rounds starts a reload
-instead, and an empty clip reloads by itself; `R` reloads a partial clip.
-A whole-clip reload loads what it can after its time; a round-by-round
-reload loads one round per step until the clip is full or the ammo runs out.
+Each fire mode has its own countdown, which HL2 calls the next attack time. A
+shot adds its `interval` to it, keeping what the tick overshot (so the SMG's
+0.075 s beat is 13.3 rounds a second exactly, not 13.2 at 66 ticks), and sets
+the other mode's countdown to its `other_interval` (the SMG's grenade holds
+the gun back half a second). A held button fires on the beat; a press that
+follows a release fires at once if the mode has a `click_interval` and that
+long has passed (the pistol: held, every 0.5 s; clicked, as fast as 0.1 s).
+
+Shot by shot:
+
+- **Ammo.** A shot spends its `ammo`: rounds from the clip, rounds straight
+  from the carried ammo, or nothing. A mode that wants more rounds than the
+  clip holds fires the primary mode instead if it can (the shotgun's last
+  shell).
+- **Empty.** The first pull on an empty weapon clicks (`empty` sound,
+  `ACT_VM_DRYFIRE`); the next tick it reloads, if there is anything to load.
+  A mode that draws on carried ammo clicks and waits half a second. With no
+  button down an empty clip reloads by itself; a weapon with nothing at all
+  left gives way to the heaviest (`weight`) weapon that has ammo, never the
+  Gravity Gun.
+- **Reloading.** A whole-clip reload loads what it can when the view model's
+  reload animation is over. A round-by-round one (the shotgun) takes its
+  start animation, then puts a shell in at the beginning of each 0.4 s step,
+  then plays its finish animation; firing ends it as soon as the step in
+  progress is over and a shell is in, skipping the finish. The crossbow
+  reloads 0.667 s after a shot whatever the buttons do (`auto_reload`).
+- **Pump.** After a shot's own interval, a weapon with a `pump` is held for
+  that long again (the shotgun: 0.333 s + 0.533 s per shot).
+- **Zoom.** The alternate button of a weapon with a `zoom` toggles its scope
+  (the crossbow's 20 degrees); the client eases the field of view and
+  scales the mouse by it. Putting the weapon away ends it.
+- **Laser and launcher.** The alternate button of the RPG toggles its laser;
+  a launcher fires one rocket at a time (`reload_after_projectile`).
+- **Accuracy.** A weapon with an `accuracy` (the pistol) has a cone that
+  opens with each shot and closes while the trigger is up.
 
 The command for a tick may choose a weapon (`UserCmd::select`). The client
 resolves number keys (cycling through the weapons of a slot), `Q` (last
 weapon) and a pick from the weapon list (`Choice::Weapon`) against the
-inventory (`Inventory::choose`). Switching deploys the new weapon.
+inventory (`Inventory::choose`). Switching deploys the new weapon, and
+cancels whatever the old one was doing.
 
 The mouse wheel does not switch by itself: it opens a weapon list above the
 ammo counter and moves a cursor through the usable weapons
@@ -59,23 +98,43 @@ so the fire button fires as usual. Moving the cursor, picking and the list
 timing out each play a sound (`weapon_select` in `sounds.ron`), and each row
 shows the weapon's icon, a glyph of the game's icon font.
 
-The **Manipulator** is a weapon whose fire modes are `Shot::Manipulator`.
+The **Gravity Gun** is a weapon whose fire modes are `Shot::Manipulator`.
 The inventory never fires it: once it is deployed, the simulation runs the
 tool every tick with the buttons ([physics.md](physics.md)), and the fire
 modes' intervals are its rest after acting.
+
+### The weapons
+
+| Weapon | Slot | Clip | Primary | Secondary |
+|--------|------|------|---------|-----------|
+| Crowbar | 1 | — | 25 damage, 75 units, every 0.4 s | — |
+| Stun Baton | 1 | — | 40 damage, 75 units, every 0.8 s | — |
+| Gravity Gun | 1 | — | punt / launch | grab / pull |
+| 9MM Pistol | 2 | 18 | 8 damage, every 0.5 s held or 0.1 s clicked, 1°→6° cone | — |
+| .357 Magnum | 2 | 6 | 75 damage, every 0.75 s, no spread | — |
+| SMG | 3 | 45 | 5 damage, every 0.075 s, 5° cone | grenade: 1000 u/s, bursts on contact, 100 damage over 250 units |
+| Pulse Rifle | 3 | 30 | 11 damage, every 0.1 s, 3° cone | energy ball after 0.5 s: 1000 u/s, bounces 4 s, kills on touch |
+| Shotgun | 4 | 6 | 7 pellets × 9, 10° cone, 0.333 s + pump | 12 pellets for 2 shells |
+| Crossbow | 4 | 1 | bolt: 100 damage, 3500 u/s, auto-reload | 20° zoom |
+| RPG | 5 | — | rocket: 150 damage over 300 units, laser-guided | laser on/off |
+| Grenade | 5 | — | overhand, 1200 u/s | lob 350 u/s; rolled when crouching |
 
 ### Shots
 
 | Shot | What happens |
 |------|--------------|
-| `Hitscan` | `pellets` rays from the eyes, each turned by up to `spread` degrees (a deterministic draw seeded by the command's number, player and mode, so the shooter's prediction sprays exactly as the server does; other players are hit where the shooter saw them, see [netcode.md](netcode.md)). Each stops at the map, a prop or a player's box; a player takes `damage × falloff(distance)`, a prop an impulse of `force` along the ray. |
+| `Hitscan` | `pellets` rays from the eyes, each strayed by Source's draw within the weapon's `cone` (triangular per axis; a deterministic draw seeded by the command's number, player and mode, so the shooter's prediction sprays exactly as the server does; other players are hit where the shooter saw them, see [netcode.md](netcode.md)). Each stops at the map, a prop or a player's box; a player takes `damage` (no falloff, as in HL2) times 3 if the ray also passes through their head, a prop an impulse of `force` along the ray. |
 | `Melee` | A box of half-width `size` swept `range` units along the view: `damage` to a player, `force` to a prop. Reported as a shot, hit or miss. |
 | `Projectile` | A box of half-width `size` launched from the eyes at `speed` along the view plus `lift` upwards (see below). |
 
 Bullets and swings stop at what Source's `MASK_SHOT` stops at: solids,
 windows, props and players, not grates or clip brushes. Players are hit as
-their movement box; there are no per-limb hitboxes (models are animated
-for show only, on clients).
+their movement box, plus a head: a ray that also passes through a sphere
+(6.5 units across) at the top of the box is a headshot and does
+`player.ron`'s `head_scale` (3, HL2's `sk_player_head`) times the damage.
+There are no other hit groups (models are animated for show only, on
+clients). A player standing level with another has their head at the height
+of the other's eyes, so a level shot is a headshot, as in HL2DM.
 
 ### Projectiles
 
@@ -92,6 +151,15 @@ includes grates) and players' boxes:
   an explosion.
 - A `fuse` bursts it that many seconds after launch, wherever it is.
 - Past its `lifetime` it is gone, without a burst.
+
+A **missile** (the RPG's rocket) leaves the launcher's muzzle (offset from
+the eyes) at `launch_forward` and `launch_up`, falling under gravity until its
+motor lights `ignite_delay` seconds later; then it flies at the projectile's
+`speed` along its heading, which turns every `steer_interval` by the
+fraction `steer` of the way towards its owner's laser dot while they still
+hold the launcher with the laser on. The dot is where a trace from the
+owner's eyes along their view first meets something. While the rocket
+flies the launcher fires nothing; when it has burst the launcher reloads.
 
 ### Grenades
 
@@ -131,13 +199,15 @@ A blast's strength falls linearly from 1 at its centre to 0 at its
 reached if the map leaves a clear line from the centre to their box's
 centre or nearest point: walls shelter, props do not. Each player reached
 takes `damage × strength` and is pushed away from the centre at
-`knockback × strength` units/s; each dynamic prop within reach (measured to
-its surface) gets an impulse of `force × strength`.
+`knockback × strength` units/s, at most `knockback_cap` (HL2 pushes with
+4 units/s per point of damage that stops growing at 100, for a body of 75 kg
+set against a player's 85: 353 units/s at the most); each dynamic prop
+within reach (measured to its surface) gets an impulse of
+`force × strength`.
 
-A blast hurts its own thrower by the rules' `self_damage` factor, but
-throws them just as hard. With the shipped launcher, a rocket fired at your
-feet throws you about 640 units/s upwards for about 50 health: a rocket
-jump.
+A blast hurts its own thrower by the rules' `self_damage` factor, which is 1
+in HL2DM: a rocket fired at your feet does about 140 damage and kills you.
+There are no rocket jumps.
 
 ## Health and armor
 
@@ -256,7 +326,7 @@ rustlife --map dm_lockdown --dummies 3 --weapon launcher --shoot-for 0.3 --scree
 
 | Test | Covers |
 |------|--------|
-| `rl_data` unit tests | Schema validation per file, references between files, adding weapons by file, falloff, blast and armor arithmetic |
+| `rl_data` unit tests | Schema validation per file, references between files, adding weapons by file, accuracy cones, blast and armor arithmetic |
 | `rl_sim/src/weapons/tests.rs` | Loadouts, automatic and semi-automatic fire, reloads (whole, round by round, interrupted), reserve ammo, deploying, the Manipulator as a tool, weapon choice |
 | `rl_sim/src/weapons/projectile.rs` | Rockets ending at walls, striking players but never their thrower, grenades bouncing, settling and fusing, expiry |
 | `rl_sim/src/weapons/tests.rs` | Grenades primed while held, thrown on release, rolled with secondary, cancelled by switching away while primed, thrown one at a time, the last one retiring the weapon |

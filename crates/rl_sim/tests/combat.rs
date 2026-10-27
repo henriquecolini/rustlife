@@ -244,6 +244,122 @@ fn rockets_burst_on_impact_and_throw_players() {
 }
 
 #[test]
+fn a_rocket_is_lobbed_from_the_launcher_then_its_motor_lights() {
+    let data = data();
+    let mut arena = Arena::new(&data, 4000.0);
+    arena.arm("launcher");
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    let launched = arena.sim.projectiles()[0].clone();
+    // Out of the muzzle (12 forward, 6 right, 3 down of the eyes) at 300
+    // units/s forwards and 128 up, before the motor is lit.
+    assert!(!launched.lit);
+    assert!((launched.velocity.x - 300.0).abs() < 5.0, "{launched:?}");
+    assert!(launched.velocity.z > 60.0, "{launched:?}");
+    assert!((launched.position.x - 12.0).abs() < 8.0, "{launched:?}");
+    arena.idle(40);
+    let flying = arena.sim.projectiles()[0].clone();
+    assert!(flying.lit);
+    assert!(
+        (flying.velocity.length() - 1500.0).abs() < 1.0,
+        "{flying:?}"
+    );
+}
+
+#[test]
+fn a_rocket_follows_the_laser_of_the_one_who_fired_it() {
+    let data = data();
+    let mut arena = Arena::new(&data, 4000.0);
+    arena.arm("launcher");
+    // Looking a little down, the laser lands on the floor far ahead.
+    arena.hold(Buttons::ATTACK, 3.0, 1);
+    arena.idle(26);
+    // Turn left: the dot, and the rocket after it, go with the view.
+    let turned = UserCmd {
+        pitch: 3.0,
+        yaw: 30.0,
+        ..UserCmd::default()
+    };
+    for _ in 0..20 {
+        arena.tick(&turned);
+    }
+    let rocket = arena.sim.projectiles()[0].clone();
+    assert!(rocket.velocity.y > 100.0, "turned left: {rocket:?}");
+    assert!(
+        rocket.velocity.x > 1000.0,
+        "but still mostly ahead: {rocket:?}"
+    );
+}
+
+#[test]
+fn a_rocket_ignores_a_switched_off_laser() {
+    let data = data();
+    let mut arena = Arena::new(&data, 4000.0);
+    arena.arm("launcher");
+    // The alternate button toggles the laser off.
+    arena.hold(Buttons::ATTACK2, 3.0, 1);
+    arena.idle(5);
+    arena.hold(Buttons::ATTACK, 3.0, 1);
+    arena.idle(26);
+    let turned = UserCmd {
+        pitch: 3.0,
+        yaw: 30.0,
+        ..UserCmd::default()
+    };
+    for _ in 0..20 {
+        arena.tick(&turned);
+    }
+    let rocket = arena.sim.projectiles()[0].clone();
+    assert!(rocket.velocity.y.abs() < 1.0, "straight on: {rocket:?}");
+}
+
+#[test]
+fn the_launcher_waits_for_its_rocket_then_reloads() {
+    let data = data();
+    let mut arena = Arena::new(&data, 4000.0);
+    arena.arm("launcher");
+    let rockets = arena.sim.arsenal().find_ammo("rocket").expect("ammo");
+    let events = arena.hold(Buttons::ATTACK, 0.0, 30);
+    // Held for half a second: one rocket, not one every half second.
+    assert_eq!(events.iter().map(|e| e.fired.len()).sum::<usize>(), 1);
+    assert_eq!(arena.sim.projectiles().len(), 1);
+    let ammo = |arena: &Arena| {
+        arena
+            .sim
+            .player(arena.shooter)
+            .expect("shooter")
+            .inventory
+            .ammo(rockets)
+    };
+    let before = ammo(&arena);
+    // It flies out of the arena's floor soon enough (the arena has no walls):
+    // nothing more is fired meanwhile.
+    let mut fired_again = 0;
+    for _ in 0..400 {
+        let events = arena.hold(Buttons::ATTACK, 0.0, 1);
+        fired_again += events[0].fired.len();
+        if arena.sim.projectiles().is_empty() {
+            break;
+        }
+    }
+    assert_eq!(fired_again, 0);
+    assert_eq!(ammo(&arena), before);
+    // Once it has expired, the launcher reloads (1.667 s) before the next.
+    let mut ticks = 0;
+    let mut fired_at = None;
+    while fired_at.is_none() && ticks < 400 {
+        ticks += 1;
+        if !arena.hold(Buttons::ATTACK, 0.0, 1)[0].fired.is_empty() {
+            fired_at = Some(ticks);
+        }
+    }
+    let fired_at = fired_at.expect("fires again");
+    assert!(
+        (105..=118).contains(&fired_at),
+        "1.667 s of reloading: {fired_at}"
+    );
+}
+
+#[test]
 fn a_rocket_at_your_feet_is_no_rocket_jump_it_kills_you() {
     let data = data();
     let mut arena = Arena::new(&data, 2000.0);

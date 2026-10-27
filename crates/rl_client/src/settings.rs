@@ -366,7 +366,7 @@ fn apply_texture_detail(settings: Res<Settings>, detail: Option<Res<rl_assets::T
     }
 }
 
-fn apply_camera(
+pub(crate) fn apply_camera(
     settings: Res<Settings>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(&mut Projection, &mut Msaa, Has<FlyCam>)>,

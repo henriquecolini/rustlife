@@ -34,6 +34,7 @@ use crate::camera::FlyCam;
 use crate::net::Game;
 use crate::player::{LocalPlayer, Ticked, ViewMode};
 use crate::props::{LightAt, ModelHandles, Moving, spawn_model};
+use crate::zoom::ZoomPlugin;
 
 /// The render layer only the view model camera sees.
 pub(crate) const VIEW_LAYER: usize = 1;
@@ -49,18 +50,20 @@ pub struct ViewModelPlugin;
 
 impl Plugin for ViewModelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, add_view_camera).add_systems(
-            Update,
-            (
-                swap_view_model,
-                layer_meshes,
-                animate_view_model,
-                follow_camera,
-                light_view_model,
-            )
-                .chain()
-                .run_if(in_state(AppState::InGame)),
-        );
+        app.add_plugins(ZoomPlugin)
+            .add_systems(Update, add_view_camera)
+            .add_systems(
+                Update,
+                (
+                    swap_view_model,
+                    layer_meshes,
+                    animate_view_model,
+                    follow_camera,
+                    light_view_model,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 

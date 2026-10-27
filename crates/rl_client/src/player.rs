@@ -40,6 +40,7 @@ use crate::script::{self, InputScript};
 use crate::selector::WeaponSelector;
 use crate::settings::{Bindings, RADIANS_PER_PIXEL, Settings};
 use crate::world::StartSpawn;
+use crate::zoom::Zoom;
 
 /// Look-up/down limit, degrees (Source's default `cl_pitchup`/`down`).
 const PITCH_LIMIT: f32 = 89.0;
@@ -318,6 +319,7 @@ fn toggle_noclip(
 fn look(
     mouse: Res<AccumulatedMouseMotion>,
     settings: Res<Settings>,
+    zoom: Res<Zoom>,
     cursor: Query<&CursorOptions, With<PrimaryWindow>>,
     mut angles: ResMut<ViewAngles>,
 ) {
@@ -327,7 +329,8 @@ fn look(
     if !grabbed || mouse.delta == Vec2::ZERO {
         return;
     }
-    let degrees_per_pixel = (RADIANS_PER_PIXEL * settings.controls.sensitivity).to_degrees();
+    let degrees_per_pixel =
+        (RADIANS_PER_PIXEL * settings.controls.sensitivity).to_degrees() * zoom.sensitivity;
     let invert = if settings.controls.invert_y {
         -1.0
     } else {

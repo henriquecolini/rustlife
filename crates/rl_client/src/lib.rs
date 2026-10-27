@@ -70,6 +70,7 @@ pub mod ui;
 pub mod viewmodel;
 mod visual_world;
 pub mod world;
+pub mod zoom;
 
 /// Top-level client state.
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]

@@ -507,9 +507,7 @@ impl Simulation {
         let targets = self.targets();
         for reach in blast::players(center, explosion, &targets, &self.world) {
             if let Some(player) = self.player_mut(reach.player) {
-                let speed = explosion.knockback * reach.scale;
-                let speed = explosion.knockback_cap.map_or(speed, |cap| speed.min(cap));
-                player.state.velocity += reach.direction * speed;
+                player.state.velocity += reach.direction * explosion.push_speed(reach.scale);
             }
             if explosion.damage <= 0.0 {
                 continue;
