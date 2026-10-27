@@ -243,6 +243,30 @@ fn a_swing_that_misses_with_its_line_catches_what_its_box_reaches() {
 }
 
 #[test]
+fn the_energy_ball_kills_outright_and_dissolves_the_body() {
+    let data = data();
+    let mut arena = Arena::new(&data, 300.0);
+    arena.arm("rifle");
+    let arsenal = arena.sim.arsenal().clone();
+    let charges = arsenal.find_ammo("rifle_charge").expect("ammo");
+    let shooter = arena.shooter;
+    arena
+        .sim
+        .player_mut(shooter)
+        .expect("shooter")
+        .inventory
+        .give_ammo(&arsenal, charges, 3);
+    arena.hold(Buttons::ATTACK2, 0.0, 1);
+    let events = arena.idle(120);
+    let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
+    assert_eq!(kills.len(), 1, "{kills:?}");
+    assert!(kills[0].dissolved);
+    assert_eq!(kills[0].victim, arena.target);
+    // The ball is spent on the kill, and a bullet's kill is no dissolving.
+    assert!(arena.sim.projectiles().is_empty());
+}
+
+#[test]
 fn rockets_burst_on_impact_and_throw_players() {
     let data = data();
     let mut arena = Arena::new(&data, 400.0);

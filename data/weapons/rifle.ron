@@ -44,6 +44,7 @@ Weapon(
             fuse: Some(4.0),
             // Dissolving damage no player survives.
             hit_damage: 1000.0,
+            dissolves: true,
             explosion: None,
             lifetime: 5.0,
         )),

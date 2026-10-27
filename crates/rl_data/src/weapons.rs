@@ -340,6 +340,9 @@ pub struct ProjectileConfig {
     pub explosion: Option<ExplosionConfig>,
     /// Seconds before it disappears if nothing else ends it.
     pub lifetime: f32,
+    /// Whoever it kills dissolves (the Pulse Rifle's energy ball).
+    #[serde(default)]
+    pub dissolves: bool,
     /// A rocket that is steered by its owner's laser, if it is one.
     #[serde(default)]
     pub missile: Option<MissileConfig>,

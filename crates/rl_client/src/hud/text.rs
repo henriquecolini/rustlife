@@ -321,6 +321,7 @@ mod tests {
             victim: other,
             killer,
             cause,
+            dissolved: false,
         };
         let by_you = kill_entry(&kill(Some(you), Cause::Weapon(smg)), &names(you), &arsenal);
         assert_eq!(by_you.killer.as_deref(), Some("You"));

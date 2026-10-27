@@ -208,6 +208,7 @@ mod tests {
             hit_damage: 10.0,
             explosion: None,
             lifetime: 5.0,
+            dissolves: false,
             missile: None,
             crouched: None,
             body: None,

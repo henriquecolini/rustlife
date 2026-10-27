@@ -49,6 +49,8 @@ use crate::visual_world::{RAGDOLL_GROUP, WORLD_GROUP, build_static_world, filter
 
 /// How long a corpse lies before it is removed, seconds.
 const RAGDOLL_LIFE: f32 = 25.0;
+/// Seconds a body the energy ball dissolved lasts.
+const DISSOLVE_LIFE: f32 = 2.0;
 /// Most corpses alive at once.
 const MAX_RAGDOLLS: usize = 8;
 /// Radius of the smallest bone collider, Source units.
@@ -219,6 +221,8 @@ pub(crate) struct Ragdoll {
     /// wrong; it keeps the last pose it had.
     frozen: bool,
     pub(crate) born: f32,
+    /// Seconds the corpse lasts: a dissolved one is gone in a couple.
+    life: f32,
 }
 
 /// The part of the physical world a corpse owns.
@@ -490,6 +494,11 @@ fn spawn_ragdolls(
                         anchor,
                         frozen: false,
                         born: time.elapsed_secs(),
+                        life: if kill.dissolved {
+                            DISSOLVE_LIFE
+                        } else {
+                            RAGDOLL_LIFE
+                        },
                     },
                     Visibility::Inherited,
                 ));
@@ -1219,7 +1228,7 @@ fn simulate_ragdolls(
     };
     let mut expired = Vec::new();
     for (entity, corpse, _) in &mut corpses {
-        if now - corpse.born >= RAGDOLL_LIFE {
+        if now - corpse.born >= corpse.life {
             expired.push((entity, corpse.bodies.clone()));
         }
     }

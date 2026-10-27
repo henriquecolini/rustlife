@@ -75,6 +75,7 @@ impl Simulation {
             victim,
             killer: damage.attacker,
             cause: damage.cause,
+            dissolved: self.dissolving,
         });
         let points = self.kill_points(damage);
         if let Some(event) =

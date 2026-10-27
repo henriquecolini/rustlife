@@ -449,7 +449,9 @@ impl Simulation {
                                 attacker: Some(projectile.owner),
                                 cause: Cause::Weapon(projectile.weapon),
                             };
+                            self.dissolving = config.dissolves;
                             self.hurt(victim, damage, events);
+                            self.dissolving = false;
                         }
                         Struck::Brush(model) => self.brush_damage.push((
                             Some(projectile.owner),

@@ -190,6 +190,9 @@ pub struct Kill {
     pub killer: Option<PlayerId>,
     /// What killed them.
     pub cause: Cause,
+    /// The blow dissolved the body (the energy ball): it leaves no corpse
+    /// for long.
+    pub dissolved: bool,
 }
 
 /// A player came (back) into the game.
@@ -297,6 +300,8 @@ pub struct Simulation {
     /// Seconds since hazards last dealt a dose.
     hazard_clock: f32,
     projectiles: Vec<Projectile>,
+    /// The damage being dealt dissolves whoever it kills.
+    dissolving: bool,
     next_projectile: u32,
     /// Props players threw, punted or dropped: by whom and on which tick,
     /// so the harm they do is credited.
@@ -341,6 +346,7 @@ impl Simulation {
             mover_poses: Vec::new(),
             hazard_clock: 0.0,
             projectiles: Vec::new(),
+            dissolving: false,
             next_projectile: 0,
             thrown: Vec::new(),
             grenades: Vec::new(),
