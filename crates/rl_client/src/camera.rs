@@ -92,7 +92,44 @@ impl Plugin for FlyCamPlugin {
                 .in_set(CameraPlaced)
                 .run_if(flying)
                 .run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            PostUpdate,
+            keep_cameras_in_step.before(bevy::render::camera::camera_system),
         );
+    }
+}
+
+/// Makes every camera learn the window's new size in the same frame.
+///
+/// Bevy recomputes a camera's target size only when a window event arrives or
+/// that camera's own `Projection` changes. The field of view follows the
+/// window's shape ([`crate::settings`]), so the main camera's projection
+/// changes on its own, and the `Window` component takes a new mode or size
+/// before the compositor has resized anything. For a frame the main camera
+/// saw the new size while the view model's still had the old one. Cameras
+/// drawing to the same window share their depth and colour textures, sized
+/// by whichever camera comes first, so the two disagreed, wgpu refused the
+/// render pass ("Attachments have differing sizes") and Bevy quit; switching
+/// to or from fullscreen did it. A camera whose size lags the window is
+/// marked here, so Bevy refreshes it with the others.
+///
+/// Every camera draws to the primary window.
+fn keep_cameras_in_step(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut cameras: Query<(&Camera, &mut Projection)>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let size = window.physical_size();
+    for (camera, mut projection) in &mut cameras {
+        if camera
+            .physical_target_size()
+            .is_some_and(|target| target != size)
+        {
+            projection.set_changed();
+        }
     }
 }
 
@@ -202,7 +239,110 @@ fn movement(
 
 #[cfg(test)]
 mod tests {
+    use bevy::camera::RenderTargetInfo;
+    use bevy::window::WindowResolution;
+
     use super::*;
+
+    /// The cameras whose projection was marked changed in the last frame.
+    #[derive(Resource, Default)]
+    struct Marked(Vec<Entity>);
+
+    fn record_marked(projections: Query<(Entity, Ref<Projection>)>, mut marked: ResMut<Marked>) {
+        marked.0 = projections
+            .iter()
+            .filter(|(_, projection)| projection.is_changed())
+            .map(|(entity, _)| entity)
+            .collect();
+    }
+
+    fn app_with_window(width: u32, height: u32) -> App {
+        let mut app = App::new();
+        app.init_resource::<Marked>()
+            .add_systems(Update, (keep_cameras_in_step, record_marked).chain());
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(width, height),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    /// A camera that believes its target is `width` by `height`.
+    fn spawn_camera(app: &mut App, width: u32, height: u32) -> Entity {
+        let mut camera = Camera::default();
+        camera.computed.target_info = Some(RenderTargetInfo {
+            physical_size: UVec2::new(width, height),
+            scale_factor: 1.0,
+        });
+        app.world_mut().spawn((camera, Projection::default())).id()
+    }
+
+    /// Runs two frames: the first marks everything as new, so what the
+    /// second marks is what the system did.
+    fn marked_after_settling(app: &mut App) -> Vec<Entity> {
+        app.update();
+        app.update();
+        let mut marked = app.world().resource::<Marked>().0.clone();
+        marked.sort();
+        marked
+    }
+
+    #[test]
+    fn a_camera_that_lags_the_window_is_marked_for_a_refresh_the_others_are_not() {
+        let mut app = app_with_window(1920, 1080);
+        let current = spawn_camera(&mut app, 1920, 1080);
+        let lagging = spawn_camera(&mut app, 1280, 720);
+        assert_ne!(current, lagging);
+        assert_eq!(marked_after_settling(&mut app), [lagging]);
+    }
+
+    #[test]
+    fn cameras_that_agree_with_the_window_are_left_alone() {
+        let mut app = app_with_window(1920, 1080);
+        spawn_camera(&mut app, 1920, 1080);
+        spawn_camera(&mut app, 1920, 1080);
+        assert_eq!(marked_after_settling(&mut app), []);
+    }
+
+    #[test]
+    fn a_resized_window_marks_every_camera_and_a_refreshed_one_is_released() {
+        let mut app = app_with_window(1920, 1080);
+        let first = spawn_camera(&mut app, 1920, 1080);
+        let second = spawn_camera(&mut app, 1920, 1080);
+        assert_eq!(marked_after_settling(&mut app), []);
+
+        let mut window = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        window
+            .single_mut(app.world_mut())
+            .unwrap()
+            .resolution
+            .set_physical_resolution(1280, 720);
+        app.update();
+        let mut marked = app.world().resource::<Marked>().0.clone();
+        marked.sort();
+        let mut both = [first, second];
+        both.sort();
+        assert_eq!(marked, both);
+
+        // Bevy's `camera_system` then learns the size; they are left alone.
+        for camera in both {
+            app.world_mut()
+                .get_mut::<Camera>(camera)
+                .unwrap()
+                .computed
+                .target_info = Some(RenderTargetInfo {
+                physical_size: UVec2::new(1280, 720),
+                scale_factor: 1.0,
+            });
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Marked>().0, []);
+    }
 
     #[test]
     fn a_placed_camera_is_where_it_was_placed_before_transforms_propagate() {
