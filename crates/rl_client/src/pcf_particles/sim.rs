@@ -30,6 +30,8 @@ const DEFAULT_SEQUENCE_FRAMES: f32 = 30.0;
 const DRAG_TICK: f32 = 1.0 / 30.0;
 /// The longest step simulated at once, seconds; longer is split.
 const MAX_STEP: f32 = 0.1;
+/// Deepest chain of children followed.
+const MAX_DEPTH: usize = 8;
 
 // Attribute (field) numbers operators name their targets by.
 const FIELD_XYZ: i32 = 0;
@@ -160,8 +162,11 @@ pub enum Renderer {
         rate: f32,
         /// Whether the animation spans the particle's life.
         fit_lifetime: bool,
-        /// `0` faces the camera; others align to a control point's axes.
+        /// `0` faces the camera; `2` stands on the world's up axis; `3`
+        /// lies in the plane of a control point.
         orientation: i32,
+        /// The control point `3` lies against.
+        orientation_point: i32,
     },
     /// A streak along the particle's motion.
     SpriteTrail {
@@ -364,6 +369,7 @@ impl SystemDef {
                         rate: step.float("animation rate", 1.0),
                         fit_lifetime: step.flag("animation_fit_lifetime", false),
                         orientation: step.int("orientation_type", 0),
+                        orientation_point: step.int("orientation control point", 0),
                     }),
                     "render_sprite_trail" => Some(Renderer::SpriteTrail {
                         min_length: step.float("min length", 0.0),
@@ -538,6 +544,8 @@ fn constraint_kind(name: &str) -> Option<Constraint> {
 #[derive(Debug, Clone, Default)]
 pub struct Library {
     systems: HashMap<String, Arc<SystemDef>>,
+    /// Frames per sequence of each material's sprite sheet.
+    sheets: HashMap<String, Vec<f32>>,
 }
 
 impl Library {
@@ -579,11 +587,52 @@ impl Library {
         self.systems.is_empty()
     }
 
+    /// Records the frame count of each sequence of `material`'s sprite sheet
+    /// (see [`material_key`]); systems that take their lifetime from a
+    /// sequence need it.
+    pub fn set_sheet(&mut self, material: &str, frames: Vec<f32>) {
+        self.sheets.insert(material_key(material), frames);
+    }
+
+    /// The materials (by [`material_key`]) system `name` and its children
+    /// draw with.
+    #[must_use]
+    pub fn materials(&self, name: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        self.collect_materials(name, &mut found, 0);
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    fn collect_materials(&self, name: &str, found: &mut Vec<String>, depth: usize) {
+        let Some(def) = self.systems.get(name) else {
+            return;
+        };
+        if !def.material.is_empty() {
+            found.push(material_key(&def.material));
+        }
+        if depth < MAX_DEPTH {
+            for (child, _) in &def.children {
+                self.collect_materials(child, found, depth + 1);
+            }
+        }
+    }
+
     /// Starts the system `name` with the given control points.
     #[must_use]
     pub fn spawn(&self, name: &str, points: &[ControlPoint], seed: u64) -> Option<Instance> {
         Instance::new(self, name, points, seed)
     }
+}
+
+/// A material path as the library compares them: lower case, forward
+/// slashes, no `.vmt`, no leading `materials/`.
+#[must_use]
+pub fn material_key(path: &str) -> String {
+    let lower = path.replace('\\', "/").to_ascii_lowercase();
+    let lower = lower.strip_suffix(".vmt").unwrap_or(&lower);
+    lower.strip_prefix("materials/").unwrap_or(lower).to_owned()
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +731,11 @@ impl Instance {
             .iter()
             .filter_map(|(child, delay)| Some((*delay, library.get(child)?.clone())))
             .collect();
+        let sheet_frames = library
+            .sheets
+            .get(&material_key(&def.material))
+            .cloned()
+            .unwrap_or_default();
         let mut instance = Self {
             given: points.len(),
             carry: vec![0.0; def.emitters.len()],
@@ -692,7 +746,7 @@ impl Instance {
             age: 0.0,
             created: 0,
             rng: Rng::seeded(&[seed]),
-            sheet_frames: Vec::new(),
+            sheet_frames,
             waiting,
             children: Vec::new(),
             stopped: false,
@@ -820,8 +874,7 @@ impl Instance {
             if self.waiting[i].0 <= 0.0 {
                 let (_, def) = self.waiting.remove(i);
                 let child_seed = seed ^ (u64::from(self.created) << 20) ^ i as u64;
-                if let Some(mut child) = library.spawn(&def.name, &self.points, child_seed) {
-                    child.sheet_frames.clone_from(&self.sheet_frames);
+                if let Some(child) = library.spawn(&def.name, &self.points, child_seed) {
                     self.children.push(child);
                 }
             } else {
@@ -1892,6 +1945,61 @@ mod tests {
         assert!(!s.finished(), "alive while a child is");
         s.update(&library, 1.5, &EmptyWorld);
         assert!(s.finished());
+    }
+
+    #[test]
+    fn material_keys_ignore_case_slashes_and_extension() {
+        assert_eq!(
+            material_key("Particle\\Smoke1\\Smoke1.vmt"),
+            "particle/smoke1/smoke1"
+        );
+        assert_eq!(material_key("materials/a/b"), "a/b");
+    }
+
+    #[test]
+    fn a_sequence_sets_the_lifetime_from_its_frame_count() {
+        let mut system = burst(1.0, 1.0);
+        system.material = "Particle/Puff".into();
+        system.initializers = vec![
+            op(
+                "Sequence Random",
+                &[
+                    ("sequence_min", Value::Int(1)),
+                    ("sequence_max", Value::Int(1)),
+                ],
+            ),
+            op(
+                "lifetime from sequence",
+                &[("Frames Per Second", Value::Float(10.0))],
+            ),
+        ];
+        let mut library = Library::new();
+        library.add(&[system]);
+        library.set_sheet("particle/puff", vec![5.0, 20.0]);
+        let mut s = library.spawn("burst", &[], 1).unwrap();
+        s.update(&library, 0.01, &EmptyWorld);
+        assert!(
+            (s.particles()[0].life - 2.0).abs() < 1e-4,
+            "20 frames at 10/s"
+        );
+    }
+
+    #[test]
+    fn a_trees_materials_include_its_children() {
+        let mut parent = burst(0.0, 1.0);
+        parent.name = "parent".into();
+        parent.material = "a/one".into();
+        parent.children = vec![source_formats::pcf::Child {
+            name: "child".into(),
+            delay: 0.0,
+        }];
+        let mut child = burst(1.0, 1.0);
+        child.name = "child".into();
+        child.material = "A\\Two.vmt".into();
+        let mut library = Library::new();
+        library.add(&[parent, child]);
+        assert_eq!(library.materials("parent"), ["a/one", "a/two"]);
+        assert!(library.materials("missing").is_empty());
     }
 
     #[test]

@@ -76,6 +76,9 @@ pub struct InputScript {
     /// Stand at this point (Source space), held there every tick, looking
     /// at `(pitch, yaw)`.
     pub teleport: Option<([f32; 3], (f32, f32))>,
+    /// Play this particle system (by name) a short way in front of the view
+    /// once the map has loaded.
+    pub pcf: Option<String>,
     progress: Progress,
 }
 
@@ -124,6 +127,13 @@ impl InputScript {
     #[must_use]
     pub fn with_teleport(mut self, teleport: Option<([f32; 3], (f32, f32))>) -> Self {
         self.teleport = teleport;
+        self
+    }
+
+    /// This script, also playing particle system `name` in front of the view.
+    #[must_use]
+    pub fn with_pcf(mut self, name: Option<String>) -> Self {
+        self.pcf = name;
         self
     }
 

@@ -8,6 +8,9 @@
 //! frame is then picked by shifting the texture coordinates), and whether
 //! it is drawn additively, as most effects are.
 //!
+//! A particle texture also carries a sprite sheet: its image is one grid and
+//! [`SpriteAsset::sheet`] says which rectangle each frame of each sequence is.
+//!
 //! It is the second loader of `.vmt` files; loading a path as a
 //! [`SpriteAsset`] (rather than a material) chooses it.
 
@@ -16,6 +19,7 @@ use bevy_asset::{Asset, AssetLoader, Handle, LoadContext, ReadAssetBytesError, R
 use bevy_image::{Image, ImageSampler};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
+use source_formats::sheet::{self, Sheet};
 use source_formats::vmt::{self, VmtError};
 use source_formats::vtf::{self, VtfError};
 use thiserror::Error;
@@ -58,6 +62,12 @@ pub struct SpriteAsset {
     /// Whether it adds its colour to what is behind (`$additive`), rather
     /// than covering it by its alpha.
     pub additive: bool,
+    /// What the colour is multiplied by (`$overbrightfactor`), `1` if unset.
+    pub overbright: f32,
+    /// Where each frame of each animation lies in the image, for particle
+    /// textures that carry a sprite sheet; `None` for plain sprites, whose
+    /// frames are `frames` strips.
+    pub sheet: Option<Sheet>,
 }
 
 /// Loads a sprite material (`.vmt`) into a [`SpriteAsset`].
@@ -82,6 +92,7 @@ impl AssetLoader for SpriteLoader {
         let texture = desc.base_texture.ok_or(SpriteLoadError::NoTexture)?;
         let path = format!("{SOURCE}://materials/{}.vtf", texture.replace('\\', "/"));
         let vtf_bytes = load_context.read_asset_bytes(path).await?;
+        let sheet = sheet::parse(&vtf_bytes);
         let mut frames = vtf::decode_frames(&vtf_bytes, MAX_FRAMES)?;
         let width = frames.first().map_or(1, |frame| frame.width.max(1));
         frames.truncate((MAX_STRIP_WIDTH / width).max(1) as usize);
@@ -91,6 +102,8 @@ impl AssetLoader for SpriteLoader {
             image,
             frames: count.max(1),
             additive: is_additive(&text),
+            overbright: overbright(&text),
+            sheet,
         })
     }
 
@@ -113,7 +126,24 @@ fn is_additive(text: &str) -> bool {
             .get_str("$additive")
             .is_some_and(|value| value.trim() == "1")
             || pair.key.eq_ignore_ascii_case("sprite")
+            // A particle card that adds a copy of itself is a glowing one.
+            || (pair.key.eq_ignore_ascii_case("spritecard") && block.get_str("$addself").is_some())
     })
+}
+
+/// A material's `$overbrightfactor`, or `1`.
+fn overbright(text: &str) -> f32 {
+    let Ok(document) = source_fs::keyvalues::parse(text) else {
+        return 1.0;
+    };
+    document
+        .root
+        .iter()
+        .filter_map(|pair| pair.value.as_block())
+        .find_map(|block| block.get_str("$overbrightfactor"))
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|factor| *factor > 0.0)
+        .unwrap_or(1.0)
 }
 
 /// The frames side by side in one image (frames of differing sizes, which
@@ -180,5 +210,22 @@ mod tests {
         ));
         assert!(is_additive(r#""Sprite" { "$basetexture" "a" }"#));
         assert!(!is_additive(r#""UnlitGeneric" { "$basetexture" "a" }"#));
+    }
+
+    #[test]
+    fn particle_cards_glow_when_they_add_themselves() {
+        assert!(is_additive(
+            r#""SpriteCard" { "$basetexture" "a" "$addself" ".75" }"#
+        ));
+        assert!(!is_additive(
+            r#""SpriteCard" { "$basetexture" "a" "$translucent" "1" }"#
+        ));
+    }
+
+    #[test]
+    fn overbright_defaults_to_one() {
+        assert!((overbright(r#""SpriteCard" { "$overbrightfactor" "3.5" }"#) - 3.5).abs() < 1e-6);
+        assert!((overbright(r#""SpriteCard" { }"#) - 1.0).abs() < 1e-6);
+        assert!((overbright("garbage {") - 1.0).abs() < 1e-6);
     }
 }

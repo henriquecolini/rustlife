@@ -195,6 +195,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     app.add_plugins((
         debris::DebrisPlugin,
         particles::ParticlesPlugin,
+        pcf_particles::PcfPlugin,
         GrenadesPlugin,
         SurfacesPlugin,
         RagdollsPlugin,

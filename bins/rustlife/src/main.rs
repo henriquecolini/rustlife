@@ -60,6 +60,10 @@ struct Cli {
     /// (wherever the view points).
     #[arg(long, value_name = "SECS", hide = true)]
     fire_for: Option<f32>,
+    /// Play the particle system of this name (from the game's `.pcf` files)
+    /// in front of the view once the map has loaded.
+    #[arg(long, value_name = "NAME", hide = true)]
+    pcf: Option<String>,
 
     /// Open this menu screen at startup (`main`, `play`, `join`, `games`,
     /// `settings`, `settings-audio`, `settings-controls`, `settings-player`),
@@ -209,6 +213,7 @@ fn main() -> Result<()> {
         || visit.is_some()
         || use_mover.is_some()
         || cli.teleport.is_some()
+        || cli.pcf.is_some()
         || cli.weapon.is_some()
         || cli.all_weapons;
     let script = scripted.then(|| {
@@ -220,6 +225,7 @@ fn main() -> Result<()> {
             .with_visit(visit)
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
+            .with_pcf(cli.pcf)
     });
     let shot_secs = match (fire_at, grab_at, shoot) {
         (Some(fire), _, _) => fire + THROW_SHOT_SECS,

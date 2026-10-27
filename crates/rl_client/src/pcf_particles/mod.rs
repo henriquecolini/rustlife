@@ -5,4 +5,8 @@
 //! it steps a system's emitters, initializers, operators, forces and
 //! constraints. Drawing them is the other half.
 
+mod draw;
+mod render;
 pub mod sim;
+
+pub use render::{PcfPlugin, PcfSpawn};
