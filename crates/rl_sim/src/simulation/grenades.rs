@@ -18,7 +18,7 @@ use super::{BlastSource, PlayerId, Simulation, TickEvents};
 use crate::collision::{ConvexHull, Hull};
 use crate::combat::hitscan::{self, Struck};
 use crate::movement::view_direction;
-use crate::physics::{BodyId, Motion, PropDesc};
+use crate::physics::{BodyId, BodyPose, Motion, PropDesc};
 use crate::rng::Rng;
 use crate::scene::Scene;
 use crate::tools::manipulator::Aim;
@@ -40,6 +40,26 @@ const BEAM_START: f32 = 4.0;
 /// A grenade this far below the world is lost.
 const VOID_Z: f32 = -16384.0;
 
+/// What a stuck grenade rides on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Carrier {
+    /// A prop, whose pose the grenade keeps its offset from.
+    Prop(BodyId),
+    /// A player, whose position it keeps its offset from.
+    Player(PlayerId),
+}
+
+/// A grenade stuck to something that may move.
+#[derive(Debug, Clone, Copy)]
+struct Stuck {
+    carrier: Carrier,
+    /// Where the grenade is relative to the carrier's origin (a prop's own
+    /// frame, a player's world axes).
+    offset: Vec3,
+    /// How it is turned relative to a prop (identity for a player).
+    rotation: Quat,
+}
+
 /// A grenade in flight, on the server.
 #[derive(Debug, Clone)]
 pub(super) struct Grenade {
@@ -52,6 +72,8 @@ pub(super) struct Grenade {
     age: f32,
     /// Where a tripmine's beam ends, if it has one and is armed.
     beam_end: Option<Vec3>,
+    /// What it is stuck to, if that moves.
+    stuck: Option<Stuck>,
 }
 
 /// A grenade as clients draw it.
@@ -88,6 +110,11 @@ impl Simulation {
     ) {
         if body.fixed {
             self.place_mine(owner, weapon, mode, projectile, body, aim);
+            return;
+        }
+        if let Some(reach) = body.stick_reach
+            && self.stick_to_surface(owner, weapon, mode, projectile, body, aim, reach)
+        {
             return;
         }
         let forward = view_direction(aim.pitch, aim.yaw);
@@ -162,6 +189,7 @@ impl Simulation {
             owner,
             age: 0.0,
             beam_end: None,
+            stuck: None,
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
         self.refresh_grenade_views();
@@ -199,14 +227,110 @@ impl Simulation {
             return;
         }
         let normal = reach.normal.try_normalize().unwrap_or(Vec3::Z);
+        let handle = self.fixed_body(
+            projectile,
+            body,
+            reach.end + normal * body.height * 0.5,
+            Quat::from_rotation_arc(Vec3::Z, normal),
+        );
+        self.grenades.push(Grenade {
+            id: self.next_projectile,
+            body: handle,
+            weapon,
+            mode,
+            owner,
+            age: 0.0,
+            beam_end: None,
+            stuck: None,
+        });
+        self.next_projectile = self.next_projectile.wrapping_add(1);
+        self.refresh_grenade_views();
+    }
+
+    /// Sticks a charge to the surface the eyes look at within `reach`, upright
+    /// on it, if there is one; `false` when there is none and it should be
+    /// thrown. Stuck to a prop or a player, it goes along with them.
+    fn stick_to_surface(
+        &mut self,
+        owner: PlayerId,
+        weapon: WeaponId,
+        mode: Mode,
+        projectile: &ProjectileConfig,
+        body: &ProjectileBodyConfig,
+        aim: &Aim,
+        reach: f32,
+    ) -> bool {
+        let forward = view_direction(aim.pitch, aim.yaw);
+        let targets = self.targets();
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let hit = hitscan::trace(
+            &scene,
+            &targets,
+            owner,
+            aim.eye,
+            aim.eye + forward * reach,
+            &Hull::POINT,
+        );
+        let carrier = match hit.struck {
+            Struck::Nothing => return false,
+            Struck::World | Struck::Brush(_) => None,
+            Struck::Prop(prop) => Some(Carrier::Prop(prop)),
+            Struck::Player(player) => Some(Carrier::Player(player)),
+        };
+        let normal = hit.normal.try_normalize().unwrap_or(Vec3::Z);
+        let rotation = Quat::from_rotation_arc(Vec3::Z, normal);
+        let origin = hit.end + normal * body.height * 0.5;
+        let handle = self.fixed_body(projectile, body, origin, rotation);
+        let stuck = carrier.and_then(|carrier| {
+            let (position, frame) = match carrier {
+                Carrier::Prop(prop) => {
+                    let pose = self.physics.pose(prop)?;
+                    (pose.position, pose.rotation)
+                }
+                Carrier::Player(player) => (self.player(player)?.state.origin, Quat::IDENTITY),
+            };
+            Some(Stuck {
+                carrier,
+                offset: frame.inverse() * (origin - position),
+                rotation: frame.inverse() * rotation,
+            })
+        });
+        self.grenades.push(Grenade {
+            id: self.next_projectile,
+            body: handle,
+            weapon,
+            mode,
+            owner,
+            age: 0.0,
+            beam_end: None,
+            stuck,
+        });
+        self.next_projectile = self.next_projectile.wrapping_add(1);
+        self.refresh_grenade_views();
+        true
+    }
+
+    /// A fixed body for a charge set on a surface.
+    fn fixed_body(
+        &mut self,
+        projectile: &ProjectileConfig,
+        body: &ProjectileBodyConfig,
+        origin: Vec3,
+        rotation: Quat,
+    ) -> BodyId {
         let desc = PropDesc {
             pieces: vec![ConvexHull::cylinder(
                 body.radius,
                 body.height,
                 CYLINDER_SIDES,
             )],
-            origin: reach.end + normal * body.height * 0.5,
-            rotation: Quat::from_rotation_arc(Vec3::Z, normal),
+            origin,
+            rotation,
             motion: Motion::Fixed,
             mass: body.mass,
             material: rl_data::MaterialConfig {
@@ -223,18 +347,45 @@ impl Simulation {
             breakable: None,
             surface: body.surface.to_ascii_lowercase(),
         };
-        let handle = self.physics.add_prop(&desc);
-        self.grenades.push(Grenade {
-            id: self.next_projectile,
-            body: handle,
-            weapon,
-            mode,
-            owner,
-            age: 0.0,
-            beam_end: None,
-        });
-        self.next_projectile = self.next_projectile.wrapping_add(1);
-        self.refresh_grenade_views();
+        self.physics.add_prop(&desc)
+    }
+
+    /// Carries the grenades stuck to props and players along with them.
+    fn move_stuck_grenades(&mut self) {
+        let mut moved = false;
+        for index in 0..self.grenades.len() {
+            let Some(stuck) = self.grenades[index].stuck else {
+                continue;
+            };
+            let body = self.grenades[index].body;
+            let carried = match stuck.carrier {
+                Carrier::Prop(prop) => self
+                    .physics
+                    .pose(prop)
+                    .filter(|_| !self.physics.is_broken(prop))
+                    .map(|pose| {
+                        (
+                            pose.position + pose.rotation * stuck.offset,
+                            pose.rotation * stuck.rotation,
+                        )
+                    }),
+                Carrier::Player(player) => self
+                    .player(player)
+                    .filter(|player| player.alive())
+                    .map(|player| (player.state.origin + stuck.offset, stuck.rotation)),
+            };
+            match carried {
+                Some((position, rotation)) => {
+                    self.physics.set_pose(body, BodyPose { position, rotation });
+                    moved = true;
+                }
+                // What it was stuck to is gone: it stays where it is.
+                None => self.grenades[index].stuck = None,
+            }
+        }
+        if moved {
+            self.physics.refresh();
+        }
     }
 
     /// Gives back the ammo of a shot that was not made.
@@ -275,6 +426,7 @@ impl Simulation {
         if self.grenades.is_empty() {
             return;
         }
+        self.move_stuck_grenades();
         let arsenal = std::sync::Arc::clone(&self.arsenal);
         let targets = self.targets();
         let scene = Scene {

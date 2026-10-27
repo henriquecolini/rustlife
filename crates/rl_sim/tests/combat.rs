@@ -418,6 +418,58 @@ fn satchels_lie_until_their_thrower_detonates_them() {
     assert!(arena.sim.grenades().is_empty());
 }
 
+/// A player with the SLAM in satchel mode, standing at the origin looking
+/// along +X, with `wall` as the world.
+fn satchel_arena(data: &GameData, wall: WorldBuilder) -> Arena {
+    let mut arena = Arena::with_world(data, 2000.0, wall);
+    arena.arm("slam");
+    // The alternate button switches from tripmines to satchels.
+    arena.hold(Buttons::ATTACK2, 0.0, 1);
+    arena.idle(5);
+    arena
+}
+
+#[test]
+fn a_satchel_sticks_to_a_wall_within_reach_instead_of_being_thrown() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(100.0, -500.0, 0.0),
+        Vec3::new(120.0, 500.0, 300.0),
+    );
+    let mut arena = satchel_arena(&data, wall);
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.idle(60);
+    assert_eq!(arena.sim.grenades().len(), 1);
+    let satchel = arena.sim.grenades()[0];
+    assert!(
+        (satchel.position.x - 100.0).abs() < 8.0,
+        "on the wall's face, not fallen: {satchel:?}"
+    );
+    // It stays through the seconds a thrown one would roll in.
+    arena.idle(200);
+    assert!((arena.sim.grenades()[0].position - satchel.position).length() < 0.5);
+}
+
+#[test]
+fn a_satchel_stuck_to_a_player_goes_where_they_go() {
+    let data = data();
+    let mut arena = satchel_arena(&data, WorldBuilder::new());
+    arena
+        .sim
+        .teleport_player(arena.target, Vec3::new(80.0, 0.0, 1.0));
+    arena.idle(5);
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.idle(5);
+    let stuck = arena.sim.grenades()[0].position;
+    assert!((stuck.x - 80.0).abs() < 40.0, "on them: {stuck}");
+    arena
+        .sim
+        .teleport_player(arena.target, Vec3::new(80.0, 300.0, 1.0));
+    arena.idle(5);
+    let moved = arena.sim.grenades()[0].position;
+    assert!(moved.y > 250.0, "went with them: {moved}");
+}
+
 #[test]
 fn rockets_burst_on_impact_and_throw_players() {
     let data = data();

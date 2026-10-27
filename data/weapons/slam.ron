@@ -5,7 +5,9 @@
 //     units; armed after a couple of seconds, it goes off when anything
 //     crosses its beam;
 //   - satchel (the primary fire mode here): thrown, it lies where it lands
-//     until its thrower detonates it.
+//     until its thrower detonates it; if a surface is within 128 units it is
+//     stuck there instead, and goes along with a prop or a player it is
+//     stuck to.
 // Both do 150 damage (HL2's `sk_plr_dmg_satchel` and `_tripmine`, which the
 // game's server leaves at 0 for its skill files to set). The intervals add up
 // the view model's throw/attach animation and the draw of the next charge
@@ -44,6 +46,10 @@ Weapon(
                 model_center: (0.0, 0.0, 3.0),
                 surface: "weapon",
                 remote: true,
+                // With a wall (or a prop, or someone) within reach the SLAM
+                // sticks the satchel there instead (SatchelAttach: a trace
+                // of 128 units).
+                stick_reach: Some(128.0),
                 mass: 2.0,
                 friction: 0.8,
                 spin: 3.0,

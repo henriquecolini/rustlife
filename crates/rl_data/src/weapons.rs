@@ -472,6 +472,11 @@ pub struct ProjectileBodyConfig {
     /// on a fuse.
     #[serde(default)]
     pub remote: bool,
+    /// With a surface (the map, a prop or a player) within this distance of
+    /// the eyes along the view, it is stuck there and goes along with what
+    /// it is stuck to, instead of being thrown (a satchel).
+    #[serde(default)]
+    pub stick_reach: Option<f32>,
     /// The fuse's ticking, if it ticks.
     #[serde(default)]
     pub blip: Option<BlipConfig>,

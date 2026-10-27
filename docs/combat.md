@@ -206,8 +206,11 @@ sound (the weapon's `blip` sound) and the red dot's flash (`effects.ron`'s
 ### The SLAM
 
 A SLAM's charges are physics bodies like grenades (`GrenadeView`s). A
-**satchel** (`remote`) is thrown, lies where it lands (no sticking to walls)
-and has no fuse: it bursts when its thrower presses the alternate button.
+**satchel** (`remote`) has no fuse: it bursts when its thrower presses the
+alternate button. Thrown, it lies where it lands; but with a surface within
+`stick_reach` (128 units, `CWeapon_SLAM::SatchelAttach`) along the view it is
+stuck there instead, upright on the surface, and goes along with a prop or a
+player it is stuck to.
 A **tripmine** (`fixed`) is set where the eyes meet a wall within 128 units
 (no wall: nothing is placed and the charge is given back), never moves, and
 two seconds after being set (`beam.arm_time`) shoots a laser along its axis;
