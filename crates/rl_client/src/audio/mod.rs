@@ -36,6 +36,7 @@ use crate::world::MapScoped;
 use crate::{AppState, CurrentMap, GameVfs};
 
 mod events;
+mod gravity_gun;
 mod props;
 mod soundscape;
 mod steps;
@@ -63,6 +64,7 @@ impl Plugin for SoundPlugin {
             .add_systems(Update, (add_listener, start_emitters, apply_volumes))
             .add_plugins((
                 events::EventSoundsPlugin,
+                gravity_gun::GravityGunSoundsPlugin,
                 props::PropSoundsPlugin,
                 world::WorldSoundsPlugin,
                 steps::StepsPlugin,

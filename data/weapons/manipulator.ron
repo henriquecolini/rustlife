@@ -26,6 +26,12 @@ Weapon(
         "pickup": "Weapon_PhysCannon.Pickup",
         "drop": "Weapon_PhysCannon.Drop",
         "dryfire": "Weapon_PhysCannon.DryFire",
+        // The claws opening on something to take, and shutting when there is
+        // nothing (`OpenElements`, `CloseElements`), and the loop that hums
+        // while it holds or pulls a prop.
+        "open": "Weapon_PhysCannon.OpenClaws",
+        "close": "Weapon_PhysCannon.CloseClaws",
+        "hold": "Weapon_PhysCannon.HoldSound",
     },
     // Players hold it with the gravgun sequences of HL2DM's player models (run_gravgun, ...).
     hold: Some("gravgun"),

@@ -32,10 +32,13 @@ pub const MAX_SLOT: u8 = 9;
 /// - `blip`: a thrown projectile's fuse ticking (see [`BlipConfig`]);
 /// - `empty`: the trigger pulled on an empty clip;
 /// - `pump`: the shotgun working its action;
-/// - `charge`: a delayed shot ([`FireConfig::charge`]) beginning to build.
-pub const WEAPON_SOUNDS: [&str; 14] = [
+/// - `charge`: a delayed shot ([`FireConfig::charge`]) beginning to build;
+/// - `open`, `close`: the Manipulator's claws opening on something to take
+///   and shutting on nothing;
+/// - `hold`: the loop the Manipulator hums while it holds or pulls a prop.
+pub const WEAPON_SOUNDS: [&str; 17] = [
     "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
-    "blip", "empty", "pump", "charge",
+    "blip", "empty", "pump", "charge", "open", "close", "hold",
 ];
 
 /// For serde defaults.
