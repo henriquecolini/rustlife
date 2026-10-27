@@ -113,6 +113,11 @@ struct Cli {
     #[arg(long, value_name = "ID")]
     weapon: Option<String>,
 
+    /// Carry every weapon, fully loaded, with unlimited ammo (for trying
+    /// the weapons out).
+    #[arg(long)]
+    all_weapons: bool,
+
     /// Once the map has had time to load, go to the nearest other player
     /// and fire at them for this many seconds (for scripted captures); the
     /// shot is taken as firing ends.
@@ -204,10 +209,12 @@ fn main() -> Result<()> {
         || visit.is_some()
         || use_mover.is_some()
         || cli.teleport.is_some()
-        || cli.weapon.is_some();
+        || cli.weapon.is_some()
+        || cli.all_weapons;
     let script = scripted.then(|| {
         InputScript::new(walk, grab_at, fire_at)
             .with_weapon(cli.weapon)
+            .with_all_weapons(cli.all_weapons)
             .with_shooting(shoot)
             .with_fire_held(held_fire)
             .with_visit(visit)

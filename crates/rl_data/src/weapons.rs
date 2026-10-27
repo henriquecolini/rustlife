@@ -100,6 +100,10 @@ pub struct WeaponConfig {
     /// Gravity Gun never is).
     #[serde(default = "yes")]
     pub auto_switch_to: bool,
+    /// Whether picking up a heavier weapon switches to it while this one is
+    /// in hand (the Gravity Gun never does).
+    #[serde(default = "yes")]
+    pub auto_switch_from: bool,
     /// A zoom the alternate button toggles, if the weapon has one.
     #[serde(default)]
     pub zoom: Option<ZoomConfig>,
@@ -300,7 +304,8 @@ impl AccuracyConfig {
 pub struct MeleeConfig {
     /// Reach from the eyes, units.
     pub range: f32,
-    /// Half the width of the box swept along the view, units: a swing
+    /// Half the width of the box swept along the view when the line along it
+    /// misses, units: a swing
     /// connects with things slightly off the crosshair.
     pub size: f32,
     /// Damage dealt.
@@ -777,6 +782,7 @@ mod tests {
             laser: false,
             weight: 0,
             auto_switch_to: true,
+            auto_switch_from: true,
             zoom: None,
             icon: None,
         }

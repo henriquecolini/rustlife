@@ -35,8 +35,8 @@ Weapon(
             model: "models/items/ar2_grenade.mdl",
             speed: 1000.0,
             lift: 0.0,
-            // 400 units/s² of an 800 units/s² world.
-            gravity: 0.5,
+            // 400 units/s² of HL2DM's 600 units/s² world.
+            gravity: 0.6667,
             size: 3.0,
             bounce: None,
             fuse: None,

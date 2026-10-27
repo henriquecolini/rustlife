@@ -26,8 +26,8 @@ Weapon(
             speed: 1500.0,
             lift: 0.0,
             // A rocket whose motor has not lit falls under the world's full
-            // gravity (600 units/s² of 800).
-            gravity: 0.75,
+            // gravity.
+            gravity: 1.0,
             size: 0.0,
             bounce: None,
             fuse: None,

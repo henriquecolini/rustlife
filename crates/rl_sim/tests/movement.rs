@@ -92,10 +92,10 @@ fn falling_players_land_on_the_floor() {
         sim.state
     );
     assert_eq!(sim.state.velocity, Vec3::ZERO);
-    // From 200 units: v = √(2·g·h) ≈ 566 units/s.
+    // From 200 units: v = √(2·g·h) ≈ 490 units/s.
     let speed = landed.expect("a landing event");
     assert!(
-        (speed - (2.0 * 800.0 * 200.0f32).sqrt()).abs() < 30.0,
+        (speed - (2.0 * sim.config.gravity * 200.0f32).sqrt()).abs() < 30.0,
         "{speed}"
     );
 }
@@ -174,7 +174,7 @@ fn holding_jump_hops_only_once_without_auto_hop() {
     // Releasing and pressing again on the ground hops every time.
     let mut jumps = 0;
     let mut pressed = true;
-    for _ in 0..200 {
+    for _ in 0..300 {
         pressed = sim.state.on_ground && !pressed;
         let cmd = if pressed { hold } else { UserCmd::default() };
         jumps += usize::from(sim.tick(&cmd).jumped);
@@ -187,7 +187,7 @@ fn auto_hop_jumps_on_every_landing() {
     let mut sim = Sim::new(floor().build(), Vec3::new(0.0, 0.0, 1.0));
     sim.config.jump.auto_hop = true;
     sim.settle();
-    let jumps = (0..200)
+    let jumps = (0..300)
         .filter(|_| sim.tick(&with(Buttons::JUMP)).jumped)
         .count();
     assert!(jumps >= 5, "{jumps} hops");
@@ -449,7 +449,7 @@ fn swimming_sinks_rises_and_stays_in_the_pool() {
     let sunk = start - sim.state.origin.z;
     assert!(sunk > 10.0 && sunk < 80.0, "sank slowly: {sunk}");
 
-    sim.run(132, &with(Buttons::JUMP));
+    sim.run(90, &with(Buttons::JUMP));
     assert!(sim.state.origin.z > start, "swam up: {:?}", sim.state);
     assert!(sim.state.water_level >= WaterLevel::Feet);
 }

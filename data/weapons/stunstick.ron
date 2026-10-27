@@ -15,7 +15,7 @@ Weapon(
         interval: 0.8,
         automatic: true,
         ammo: Unlimited,
-        shot: Melee((range: 75.0, size: 8.0, damage: 40.0, force: 12000.0)),
+        shot: Melee((range: 75.0, size: 16.0, damage: 40.0, force: 12000.0)),
     )),
     secondary: None,
     deploy_time: 0.933,

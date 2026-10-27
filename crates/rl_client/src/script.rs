@@ -5,6 +5,8 @@
 //! An [`InputScript`] adjusts the local player's command each tick by app
 //! time:
 //!
+//! - **all weapons**: every tick, every weapon is carried with a full clip
+//!   and every ammo type full, which is unlimited ammo in practice;
 //! - **weapon**: from the start, take a weapon in hand (given, with plenty
 //!   of ammo, if not carried);
 //! - **walk**: hold forward for a while;
@@ -61,6 +63,8 @@ pub struct InputScript {
     pub fire_at: Option<f32>,
     /// The weapon (by id) to take in hand from the start.
     pub weapon: Option<String>,
+    /// Carry every weapon with full clips and unlimited ammo.
+    pub all_weapons: bool,
     /// From `.0` for `.1` seconds, shoot the nearest other player.
     pub shoot: Option<(f32, f32)>,
     /// From `.0` for `.1` seconds, hold primary fire wherever the view is.
@@ -85,6 +89,13 @@ impl InputScript {
             fire_at,
             ..Self::default()
         }
+    }
+
+    /// This script, also carrying every weapon with unlimited ammo.
+    #[must_use]
+    pub fn with_all_weapons(mut self, all: bool) -> Self {
+        self.all_weapons = all;
+        self
     }
 
     /// This script, also taking `weapon` in hand from the start.
@@ -210,6 +221,12 @@ pub(crate) fn apply(
         script.progress.armed = true;
         if let Some(name) = &script.weapon {
             cmd.select = arm(player, sim, name);
+        }
+    }
+    if script.all_weapons {
+        let arsenal = sim.arsenal().clone();
+        if let Some(player) = sim.player_mut(player) {
+            player.inventory.stock(&arsenal);
         }
     }
     if let Some((at, look)) = script.teleport {

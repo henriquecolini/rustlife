@@ -474,6 +474,45 @@ impl Inventory {
         taken
     }
 
+    /// A weapon was just picked up: HL2 brings it up if it is heavier than
+    /// the one in hand and the one in hand lets itself be switched away from.
+    /// Returns whether it switched.
+    pub fn switch_for_pickup(&mut self, arsenal: &Arsenal, weapon: WeaponId) -> bool {
+        let weight = |weapon: WeaponId| arsenal.weapon(weapon).map(|config| config.weight);
+        let Some(active) = self.active else {
+            return false;
+        };
+        let allowed = arsenal
+            .weapon(active)
+            .is_some_and(|config| config.auto_switch_from)
+            && arsenal
+                .weapon(weapon)
+                .is_some_and(|config| config.auto_switch_to);
+        allowed && weight(weapon) > weight(active) && self.select(arsenal, weapon)
+    }
+
+    /// Brings the inventory to everything the arsenal has: every weapon
+    /// carried, every clip full, every ammo type at its maximum. Called
+    /// every tick it makes ammo infinite (a developer's option).
+    pub fn stock(&mut self, arsenal: &Arsenal) {
+        let weapons: Vec<WeaponId> = arsenal.weapons().map(|(id, _)| id).collect();
+        for weapon in weapons {
+            self.give_weapon(arsenal, weapon);
+            let size = arsenal
+                .weapon(weapon)
+                .and_then(|config| config.clip.as_ref())
+                .map_or(0, |clip| clip.size);
+            if let Some(carried) = self.carried_mut(weapon) {
+                carried.clip = size;
+            }
+        }
+        for (index, ammo) in self.ammo.iter_mut().enumerate() {
+            *ammo = arsenal
+                .ammo(AmmoId(u16::try_from(index).unwrap_or(u16::MAX)))
+                .map_or(0, |config| config.max);
+        }
+    }
+
     /// Takes `weapon` in hand, if carried and not already in hand; it then
     /// deploys. Returns whether it switched.
     pub fn select(&mut self, arsenal: &Arsenal, weapon: WeaponId) -> bool {

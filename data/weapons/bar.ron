@@ -16,7 +16,7 @@ Weapon(
         automatic: true,
         ammo: Unlimited,
         // A melee blow pushes with 300 units of impulse per point of damage.
-        shot: Melee((range: 75.0, size: 8.0, damage: 25.0, force: 7500.0)),
+        shot: Melee((range: 75.0, size: 16.0, damage: 25.0, force: 7500.0)),
     )),
     secondary: None,
     deploy_time: 0.933,

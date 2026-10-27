@@ -6,7 +6,7 @@
 Physics(
     // Downward acceleration of props, units/s². Matches movement.ron's
     // gravity so props and players fall alike.
-    gravity: 800.0,
+    gravity: 600.0,
     // Speed limits that keep a badly tangled prop from flying off at
     // absurd speeds: units/s and degrees/s.
     max_speed: 4000.0,

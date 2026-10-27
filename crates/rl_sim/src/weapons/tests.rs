@@ -864,3 +864,40 @@ fn cycling_from_a_weapon_wraps_through_the_usable_ones() {
     assert_eq!(inventory.cycle(&arsenal, Some(bar), false), Some(frag));
     assert_eq!(inventory.cycle(&arsenal, None, true), Some(bar));
 }
+
+#[test]
+fn stocking_gives_every_weapon_full_clips_and_full_ammo() {
+    let arsenal = arsenal();
+    let mut inventory = with_weapon(&arsenal, "sidearm", 0);
+    click(&mut inventory, &arsenal, Buttons::ATTACK);
+    inventory.stock(&arsenal);
+    assert_eq!(inventory.weapons().count(), arsenal.weapons().count());
+    assert_eq!(inventory.clip(id(&arsenal, "sidearm")), Some(18));
+    assert_eq!(inventory.clip(id(&arsenal, "scattergun")), Some(6));
+    assert_eq!(inventory.ammo(ammo(&arsenal, "smg")), 225);
+    assert_eq!(inventory.ammo(ammo(&arsenal, "rocket")), 3);
+}
+
+#[test]
+fn a_heavier_weapon_picked_up_is_brought_up_unless_the_gravity_gun_is_in_hand() {
+    let arsenal = arsenal();
+    let mut inventory = with_weapon(&arsenal, "sidearm", 0);
+    let (magnum, bar, tool) = (
+        id(&arsenal, "magnum"),
+        id(&arsenal, "bar"),
+        id(&arsenal, "manipulator"),
+    );
+    inventory.give_weapon(&arsenal, bar);
+    assert!(!inventory.switch_for_pickup(&arsenal, bar), "lighter");
+    inventory.give_weapon(&arsenal, magnum);
+    assert!(inventory.switch_for_pickup(&arsenal, magnum));
+    assert_eq!(inventory.active(), Some(magnum));
+    inventory.give_weapon(&arsenal, tool);
+    inventory.select(&arsenal, tool);
+    let smg = id(&arsenal, "smg");
+    inventory.give_weapon(&arsenal, smg);
+    assert!(
+        !inventory.switch_for_pickup(&arsenal, smg),
+        "the tool stays"
+    );
+}

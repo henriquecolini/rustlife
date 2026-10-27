@@ -4,7 +4,7 @@
 // every parameter are described in docs/movement.md.
 Movement(
     // Downward acceleration, units/s².
-    gravity: 800.0,
+    gravity: 600.0,
     // No velocity component may exceed this, units/s.
     max_velocity: 3500.0,
     ground: (

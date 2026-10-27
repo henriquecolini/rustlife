@@ -9,6 +9,8 @@ Weapon(
     weight: 0,
     // The Gravity Gun is never chosen for the player when a weapon runs dry.
     auto_switch_to: false,
+    // Nor does picking up a weapon take it out of your hands.
+    auto_switch_from: false,
     view_model: Some("models/weapons/v_physcannon.mdl"),
     world_model: "models/weapons/w_physics.mdl",
     clip: None,

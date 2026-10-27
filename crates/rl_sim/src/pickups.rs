@@ -165,6 +165,9 @@ impl Pickup {
                 owned_ammo,
             } => {
                 let new = inventory.give_weapon(arsenal, *weapon);
+                if new {
+                    inventory.switch_for_pickup(arsenal, *weapon);
+                }
                 let rounds = if new { ammo } else { owned_ammo };
                 let taken = rounds
                     .is_some_and(|(ammo, count)| inventory.give_ammo(arsenal, ammo, count) > 0);

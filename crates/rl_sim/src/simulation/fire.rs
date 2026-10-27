@@ -18,6 +18,10 @@ use crate::tools::manipulator::{Aim, ToolEvent};
 use crate::weapons::projectile::{Flight, Projectile};
 use crate::weapons::{Mode, WeaponId};
 
+/// How well a swing's box hit must line up with the view to count: HL2's
+/// 0.70721, the cosine of about 45 degrees.
+const BLUDGEON_MIN_ALIGNMENT: f32 = 0.70721;
+
 /// How far a launcher's laser reaches, units: Source's longest trace.
 const LASER_RANGE: f32 = 56755.0;
 
@@ -221,8 +225,11 @@ impl Simulation {
         });
     }
 
-    /// Where a swing goes: a small box swept along the view, against other
-    /// players where the swinger saw them.
+    /// Where a swing goes, as HL2's bludgeons do it: a line along the view;
+    /// if that meets nothing, a box of half-width `size` swept along it,
+    /// whose hit on a player counts only if the player is within about
+    /// 45 degrees of the view (a graze at the edge of the box is a miss).
+    /// Other players are where the swinger saw them.
     pub(super) fn swing_trace(
         &self,
         id: PlayerId,
@@ -240,7 +247,20 @@ impl Simulation {
             others: &[],
         };
         let end = aim.eye + forward * swing.range;
-        hitscan::trace(&scene, &targets, id, aim.eye, end, &hull)
+        let line = hitscan::trace(&scene, &targets, id, aim.eye, end, &Hull::POINT);
+        if line.struck != Struck::Nothing {
+            return line;
+        }
+        let boxed = hitscan::trace(&scene, &targets, id, aim.eye, end, &hull);
+        let Struck::Player(victim) = boxed.struck else {
+            return boxed;
+        };
+        let aligned = targets
+            .iter()
+            .find(|target| target.player == victim)
+            .and_then(|target| (target.center() - aim.eye).try_normalize())
+            .is_some_and(|toward| toward.dot(forward) >= BLUDGEON_MIN_ALIGNMENT);
+        if aligned { boxed } else { line }
     }
 
     /// A bullet or swing landing: hurts a player, or shoves a prop with

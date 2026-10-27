@@ -225,6 +225,24 @@ fn swings_only_reach_so_far() {
 }
 
 #[test]
+fn a_swing_that_misses_with_its_line_catches_what_its_box_reaches() {
+    let data = data();
+    let swing_at = |x: f32, y: f32| {
+        let mut arena = Arena::new(&data, 200.0);
+        arena.arm("bar");
+        arena
+            .sim
+            .teleport_player(arena.target, Vec3::new(x, y, 1.0));
+        arena.hold(Buttons::ATTACK, 0.0, 1);
+        arena.health(arena.target) < 100.0
+    };
+    assert!(swing_at(60.0, 0.0), "the line itself");
+    assert!(swing_at(60.0, 25.0), "just off the line, in the box");
+    assert!(!swing_at(60.0, 50.0), "beyond the box");
+    assert!(!swing_at(20.0, 30.0), "a graze at the edge is a miss");
+}
+
+#[test]
 fn rockets_burst_on_impact_and_throw_players() {
     let data = data();
     let mut arena = Arena::new(&data, 400.0);
@@ -504,11 +522,11 @@ fn players_take_the_pickups_they_need() {
 fn hard_landings_hurt() {
     let data = data();
     let mut arena = Arena::new(&data, 1000.0);
-    // Drop from 300 units: about 690 units/s on landing, 25 damage.
+    // Drop from 400 units: about 690 units/s on landing, 25 damage.
     arena
         .sim
-        .teleport_player(arena.shooter, Vec3::new(0.0, 0.0, 300.0));
-    let events = arena.idle(120);
+        .teleport_player(arena.shooter, Vec3::new(0.0, 0.0, 400.0));
+    let events = arena.idle(150);
     let falls: Vec<_> = events
         .iter()
         .flat_map(|e| &e.damage)
