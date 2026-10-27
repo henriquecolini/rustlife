@@ -148,7 +148,7 @@ impl AssetLoader for SpriteLoader {
 
 /// Whether a material is drawn additively: `$additive 1`, or a `Sprite`
 /// shader (whose default render mode adds).
-fn is_additive(text: &str) -> bool {
+pub(crate) fn is_additive(text: &str) -> bool {
     let Ok(document) = source_fs::keyvalues::parse(text) else {
         return false;
     };

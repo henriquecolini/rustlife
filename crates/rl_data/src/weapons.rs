@@ -377,8 +377,7 @@ pub struct ProjectileConfig {
     /// if it embeds rather than bursts or bounces.
     #[serde(default)]
     pub stick: Option<f32>,
-    /// Drawn as additive glow sprites instead of its model (the energy
-    /// ball, whose own model needs materials the game does not ship).
+    /// Glow sprites drawn on it besides its model (the energy ball's core).
     #[serde(default)]
     pub glow: Option<GlowConfig>,
     /// Impulse it gives a prop it strikes, kg·units/s, along its flight.

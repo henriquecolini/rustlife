@@ -573,6 +573,18 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
     if let Some(fog) = source.water_fog {
         return water_from(source, fog);
     }
+    if source.additive {
+        // Energy effects: their colour added to what is behind, lit by
+        // nothing.
+        return StandardMaterial {
+            base_color_texture: source.base_color.clone(),
+            unlit: true,
+            cull_mode: None,
+            double_sided: true,
+            alpha_mode: AlphaMode::Add,
+            ..default()
+        };
+    }
     let alpha_mode = if source.translucent {
         AlphaMode::Blend
     } else if source.alpha_test.is_some() {

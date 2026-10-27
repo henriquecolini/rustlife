@@ -523,10 +523,6 @@ fn draw_projectiles(
         else {
             continue;
         };
-        if config.glow.is_some() {
-            // Drawn by `glow_projectiles`, not as a model.
-            continue;
-        }
         let entity = spawn_model(
             &mut commands,
             &mut models,

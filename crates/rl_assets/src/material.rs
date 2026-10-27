@@ -38,6 +38,9 @@ pub struct SourceMaterial {
     pub water_fog: Option<WaterFog>,
     /// `$selfillum`: the surface glows with its own colour, whatever the light.
     pub self_illum: bool,
+    /// `$additive`: the surface adds its colour to what is behind it, lit by
+    /// nothing (energy effects).
+    pub additive: bool,
 }
 
 /// Errors from [`VmtLoader`].
@@ -93,6 +96,11 @@ impl AssetLoader for VmtLoader {
             no_cull: desc.no_cull,
             water_fog: desc.water_fog,
             self_illum: desc.self_illum,
+            additive: crate::sprite::is_additive(&text)
+                && !text
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("\"sprite\""),
         })
     }
 
