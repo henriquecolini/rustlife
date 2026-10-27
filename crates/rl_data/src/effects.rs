@@ -32,9 +32,6 @@ pub struct EffectsConfig {
     pub grenade: GrenadeEffectConfig,
 }
 
-/// Most particles of one kind an explosion may ask for.
-const MAX_PARTICLES: u32 = 200;
-
 /// A muzzle flash: one of several sprites, briefly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -135,34 +132,18 @@ impl ImpactEffectConfig {
     }
 }
 
-/// An explosion, drawn as particles the client makes itself: a flash, a
-/// fireball of overlapping puffs, rising smoke, flying sparks and a
-/// shockwave, with a shake of the view for those nearby.
+/// What an explosion does to the view. The blast itself is drawn as the
+/// game draws it (see `rl_client::explosion`): its size is the game's, not a
+/// setting.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExplosionEffectConfig {
-    /// The fireball's size as a share of the blast's radius.
-    pub size_per_radius: f32,
-    /// How far above the blast its centre is drawn, as a share of its size:
-    /// fireballs rise, and one centred on a blast on the floor would be
-    /// cut in half by it.
-    pub rise: f32,
-    /// Puffs of fire.
-    pub fireballs: u32,
-    /// Puffs of smoke.
-    pub smoke: u32,
-    /// Sparks thrown out.
-    pub sparks: u32,
-    /// Seconds the fireball burns.
-    pub duration: f32,
-    /// Seconds the smoke lingers.
-    pub smoke_duration: f32,
     /// How hard the view shakes right at the blast, `0..=1`. It fades
     /// with distance, reaching nothing at three times the blast's radius.
     pub shake: f32,
-    /// The game's particle system to play instead of the particles made
-    /// here (the view still shakes and flashes); those are used when the
-    /// system is not there.
+    /// A particle system of the game's own to play instead of the blast
+    /// drawn by the client, if it has one. HL2DM draws its explosions
+    /// without one, so this is unset.
     #[serde(default)]
     pub pcf: Option<String>,
 }
@@ -241,10 +222,6 @@ impl EffectsConfig {
         check.non_negative("grenade.trail_width.1", grenade.trail_width.1);
         check.range("grenade.trail_alpha", grenade.trail_alpha, 0.0, 1.0);
         let blast = &self.explosion;
-        check.positive("explosion.size_per_radius", blast.size_per_radius);
-        check.range("explosion.rise", blast.rise, 0.0, 1.0);
-        check.positive("explosion.duration", blast.duration);
-        check.positive("explosion.smoke_duration", blast.smoke_duration);
         check.range("explosion.shake", blast.shake, 0.0, 1.0);
         if blast
             .pcf
@@ -252,15 +229,6 @@ impl EffectsConfig {
             .is_some_and(|name| name.trim().is_empty())
         {
             check.fail("explosion.pcf", "must name a particle system");
-        }
-        for (field, count) in [
-            ("explosion.fireballs", blast.fireballs),
-            ("explosion.smoke", blast.smoke),
-            ("explosion.sparks", blast.sparks),
-        ] {
-            if count > MAX_PARTICLES {
-                check.fail(field, &format!("at most {MAX_PARTICLES}"));
-            }
         }
     }
 }
@@ -305,13 +273,6 @@ mod tests {
             ]),
             blood: impact(),
             explosion: ExplosionEffectConfig {
-                size_per_radius: 1.2,
-                rise: 0.3,
-                fireballs: 8,
-                smoke: 10,
-                sparks: 24,
-                duration: 0.9,
-                smoke_duration: 3.0,
                 shake: 0.6,
                 pcf: None,
             },
@@ -346,14 +307,12 @@ mod tests {
             .expect("default impact")
             .sprites
             .clear();
-        bad.explosion.duration = -1.0;
-        bad.explosion.sparks = 5000;
-        bad.explosion.rise = 2.0;
+        bad.explosion.shake = 2.0;
         bad.grenade.flash_fade = 0.0;
         bad.explosion.pcf = Some(" ".to_owned());
         bad.blood.pcf = Some(String::new());
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 9);
+        assert_eq!(check.finish().len(), 7);
     }
 }

@@ -1,21 +1,15 @@
-//! Particles the game draws itself: blasts, fire, and the shake and flash
-//! that go with them.
+//! Particles the game draws itself: fire on burning props, and the shake and
+//! flash that go with a blast.
 //!
-//! An explosion is built from soft sprites made from textures generated
-//! here, not the mounted game's. In the first instants it is a white-hot
-//! flash and a shockwave ring; a fireball of puffs bursts out at several
-//! times the speed of sound in a game, slows as it climbs and cools from
-//! white through orange to soot; black smoke boils up behind it, dust rolls
-//! out along the floor, and sparks and embers fly, the sparks as streaks
-//! along their motion, bouncing on the map. A prop on fire gives off
-//! flames and smoke that grow as its fuse burns down.
-//!
-//! Fire, sparks, embers, flash and ring are added to what is behind them;
-//! smoke and dust are blended over it. Every particle is a quad facing the
+//! A blast's own puffs are [`crate::explosion`]'s (the engine's explosion
+//! rebuilt from its code); this module shakes the view and whitens the screen
+//! for those near one, and hands the blast over. A prop on fire gives off
+//! flames and smoke that grow as its fuse burns down, drawn as soft sprites
+//! made from textures generated here: fire and flash are added to what is
+//! behind them, smoke is blended over it. Every particle is a quad facing the
 //! camera whose size and colour change over its life (colours are HDR-ish:
-//! values above one burn to white). [`crate::effects`] asks for a `Blast`
-//! and this module does the rest; how big and how many is `effects.ron`'s
-//! `explosion`.
+//! values above one burn to white). [`crate::effects`] asks for a `Blast`;
+//! how hard it shakes is `effects.ron`'s `explosion`.
 
 use std::collections::HashMap;
 
@@ -23,13 +17,13 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use rl_assets::coords;
-use rl_data::ExplosionEffectConfig;
 use rl_sim::collision::contents::SOLID;
 use rl_sim::physics::BodyId;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::explosion::Explosion;
 use crate::net::Game;
 use crate::player::Ticked;
 use crate::world::MapScoped;
@@ -50,8 +44,6 @@ const SPARK_LIFT: f32 = 0.01;
 const STREAK_SECONDS: f32 = 0.035;
 /// The longest a spark streak gets, metres.
 const STREAK_MAX: f32 = 1.2;
-/// Gravity, metres/s².
-const GRAVITY: f32 = 9.8;
 /// A blast shakes the view out to this many of its radii.
 const SHAKE_REACH: f32 = 3.0;
 /// How fast the shake dies away, per second.
@@ -62,9 +54,6 @@ const SHAKE_ANGLE: f32 = 0.09;
 const FLASH_REACH: f32 = 1.4;
 /// How fast the white fades, per second.
 const FLASH_DECAY: f32 = 3.2;
-/// How far below a blast the floor is looked for, in blast radii, for the
-/// dust it kicks up.
-const DUST_REACH: f32 = 0.8;
 /// Where along its life a particle's gradient passes its middle colour.
 const MIDDLE: f32 = 0.35;
 
@@ -177,19 +166,17 @@ fn show_flash(
 enum Kind {
     Fire,
     Smoke,
-    Dust,
     /// A streak along its motion.
     Spark,
     /// A glowing speck that drifts.
     Ember,
-    Ring,
     Flash,
 }
 
 impl Kind {
     /// Whether it is added to what is behind it rather than blended over.
     fn glows(self) -> bool {
-        !matches!(self, Self::Smoke | Self::Dust)
+        !matches!(self, Self::Smoke)
     }
 }
 
@@ -245,16 +232,14 @@ pub(crate) struct Looks {
     /// A bright point with a soft halo.
     pub(crate) dot: Handle<Image>,
     streak: Handle<Image>,
-    ring: Handle<Image>,
 }
 
 impl Looks {
     fn texture(&self, kind: Kind) -> Handle<Image> {
         match kind {
-            Kind::Fire | Kind::Smoke | Kind::Dust => self.puff.clone(),
+            Kind::Fire | Kind::Smoke => self.puff.clone(),
             Kind::Ember | Kind::Flash => self.dot.clone(),
             Kind::Spark => self.streak.clone(),
-            Kind::Ring => self.ring.clone(),
         }
     }
 }
@@ -269,7 +254,6 @@ fn make_looks(
         puff: images.add(texture(puff_shade)),
         dot: images.add(texture(dot_shade)),
         streak: images.add(texture(streak_shade)),
-        ring: images.add(texture(ring_shade)),
     });
 }
 
@@ -367,15 +351,6 @@ fn streak_shade(x: f32, y: f32) -> (f32, f32) {
     (1.0, across * along)
 }
 
-/// A thin soft ring.
-fn ring_shade(x: f32, y: f32) -> (f32, f32) {
-    let distance = x.hypot(y);
-    (
-        1.0,
-        (-((distance - 0.8) / 0.08).powi(2)).exp() * smooth(1.0, 0.9, distance),
-    )
-}
-
 /// How opaque a particle `t` (`0..=1`) of the way through its life is: it
 /// comes in at once and is gone by its end.
 fn envelope(t: f32) -> f32 {
@@ -402,23 +377,6 @@ const FIRE: Gradient = [
     [0.3, 0.03, 0.0, 0.0],
 ];
 
-/// A random direction, leaning up by `lift` (`0` is any way at all).
-fn direction(rng: &mut Rng, lift: f32) -> Vec3 {
-    loop {
-        let v = Vec3::new(
-            rng.unit() * 2.0 - 1.0,
-            rng.unit() * 2.0 - 1.0,
-            rng.unit() * 2.0 - 1.0,
-        );
-        let length = v.length();
-        if (0.05..=1.0).contains(&length) {
-            let mut up = v / length;
-            up.y = up.y.abs() * lift + up.y * (1.0 - lift);
-            return up.normalize_or_zero();
-        }
-    }
-}
-
 /// Between `low` and `high`.
 fn between(rng: &mut Rng, low: f32, high: f32) -> f32 {
     low + (high - low) * rng.unit()
@@ -439,220 +397,6 @@ fn base(kind: Kind) -> Spec {
         color: [[0.0; 4]; 3],
         spin: 0.0,
     }
-}
-
-/// The particles of a blast of `radius` metres; `floor` is how far below it
-/// the floor is, if there is one close enough to kick up dust.
-fn blast_particles(
-    config: &ExplosionEffectConfig,
-    radius: f32,
-    floor: Option<f32>,
-    rng: &mut Rng,
-) -> Vec<Spec> {
-    let fireball = radius * config.size_per_radius;
-    // Fireballs rise, and one centred on a blast at the floor would be cut
-    // in half by it, so it is lifted: but only as far as the floor is near.
-    // A blast on a wall or in mid-air is centred where it is.
-    let near_floor = floor.map_or(0.0, |drop| 1.0 - smooth(0.0, fireball * 0.8, drop));
-    let rise = Vec3::Y * fireball * config.rise * near_floor;
-    let mut specs = vec![
-        // The white-hot instant.
-        Spec {
-            offset: rise,
-            life: 0.12,
-            size: (fireball * 1.1, fireball * 2.4),
-            color: [
-                [3.0, 2.6, 1.8, 1.0],
-                [2.0, 1.2, 0.5, 0.8],
-                [1.0, 0.4, 0.1, 0.0],
-            ],
-            ..base(Kind::Flash)
-        },
-        // The shockwave.
-        Spec {
-            offset: rise * 0.4,
-            life: 0.32,
-            size: (fireball * 0.3, fireball * 4.2),
-            color: [
-                [1.6, 1.2, 0.8, 0.8],
-                [1.0, 0.7, 0.4, 0.4],
-                [0.6, 0.4, 0.2, 0.0],
-            ],
-            ..base(Kind::Ring)
-        },
-    ];
-    let shape = Shape {
-        radius,
-        fireball,
-        rise,
-    };
-    specs.extend(fireball_specs(config, &shape, rng));
-    specs.extend(smoke_specs(config, &shape, rng));
-    if let Some(drop) = floor {
-        specs.extend(dust_specs(config, &shape, drop, rng));
-    }
-    specs.extend(spark_specs(config, &shape, rng));
-    specs
-}
-
-/// How big a blast is, for working out its parts.
-#[derive(Clone, Copy)]
-struct Shape {
-    /// Its radius, metres.
-    radius: f32,
-    /// The fireball's size, metres.
-    fireball: f32,
-    /// How far it is lifted off where it happened.
-    rise: Vec3,
-}
-
-/// The fireball: puffs flung out hard that brake quickly and climb.
-fn fireball_specs(config: &ExplosionEffectConfig, shape: &Shape, rng: &mut Rng) -> Vec<Spec> {
-    let Shape {
-        radius,
-        fireball,
-        rise,
-    } = *shape;
-    let mut specs = Vec::new();
-    for index in 0..config.fireballs {
-        let heading = direction(rng, 0.15);
-        let late = index >= config.fireballs / 2;
-        specs.push(Spec {
-            offset: rise + heading * fireball * 0.12 * rng.unit(),
-            velocity: heading * radius * between(rng, 2.0, 5.5)
-                + if late {
-                    Vec3::Y * radius * 1.2
-                } else {
-                    Vec3::ZERO
-                },
-            gravity: -3.0,
-            drag: 4.5,
-            delay: if late { between(rng, 0.03, 0.12) } else { 0.0 },
-            life: config.duration * between(rng, 0.5, 1.0),
-            size: (
-                fireball * between(rng, 0.3, 0.5),
-                fireball * between(rng, 0.8, 1.35),
-            ),
-            color: FIRE,
-            spin: between(rng, -2.0, 2.0),
-            ..base(Kind::Fire)
-        });
-    }
-    specs
-}
-
-/// Smoke boiling up behind it: hot brown at first, then black soot, then
-/// grey and gone.
-fn smoke_specs(config: &ExplosionEffectConfig, shape: &Shape, rng: &mut Rng) -> Vec<Spec> {
-    let Shape {
-        radius,
-        fireball,
-        rise,
-    } = *shape;
-    let mut specs = Vec::new();
-    for _ in 0..config.smoke {
-        let heading = direction(rng, 0.7);
-        let soot = between(rng, 0.03, 0.1);
-        specs.push(Spec {
-            offset: rise * 0.6 + heading * fireball * 0.25 * rng.unit(),
-            velocity: heading * radius * between(rng, 0.6, 2.2)
-                + Vec3::Y * radius * between(rng, 0.2, 0.7),
-            gravity: -0.5,
-            drag: 1.7,
-            delay: between(rng, 0.06, 0.4),
-            life: config.smoke_duration * between(rng, 0.6, 1.0),
-            size: (
-                fireball * between(rng, 0.45, 0.7),
-                fireball * between(rng, 1.5, 2.4),
-            ),
-            color: [
-                [0.5, 0.3, 0.15, 0.7],
-                [soot, soot * 0.95, soot * 0.9, 0.8],
-                [soot * 3.0, soot * 3.0, soot * 3.0, 0.0],
-            ],
-            spin: between(rng, -0.7, 0.7),
-            ..base(Kind::Smoke)
-        });
-    }
-    specs
-}
-
-/// Dust rolling out along a floor `drop` metres below the blast.
-fn dust_specs(
-    config: &ExplosionEffectConfig,
-    shape: &Shape,
-    drop: f32,
-    rng: &mut Rng,
-) -> Vec<Spec> {
-    let Shape {
-        radius, fireball, ..
-    } = *shape;
-    let mut specs = Vec::new();
-    for _ in 0..(config.smoke / 2).max(6) {
-        let around = between(rng, 0.0, std::f32::consts::TAU);
-        let outward = Vec3::new(around.cos(), 0.0, around.sin());
-        let tan = between(rng, 0.25, 0.42);
-        specs.push(Spec {
-            offset: Vec3::Y * (0.15 - drop),
-            velocity: outward * radius * between(rng, 2.0, 4.0) + Vec3::Y * 0.6,
-            gravity: -0.2,
-            drag: 3.2,
-            delay: between(rng, 0.0, 0.08),
-            life: between(rng, 1.1, 1.9),
-            size: (fireball * 0.25, fireball * between(rng, 0.9, 1.4)),
-            color: [
-                [tan, tan * 0.85, tan * 0.65, 0.65],
-                [tan * 0.8, tan * 0.7, tan * 0.55, 0.45],
-                [tan * 0.8, tan * 0.7, tan * 0.55, 0.0],
-            ],
-            spin: between(rng, -0.8, 0.8),
-            ..base(Kind::Dust)
-        });
-    }
-    specs
-}
-
-/// Sparks flung out as streaks, and embers that drift up and settle.
-fn spark_specs(config: &ExplosionEffectConfig, shape: &Shape, rng: &mut Rng) -> Vec<Spec> {
-    let Shape { radius, rise, .. } = *shape;
-    let mut specs = Vec::new();
-    for _ in 0..config.sparks {
-        let heading = direction(rng, 0.55);
-        specs.push(Spec {
-            offset: rise * 0.5,
-            velocity: heading * radius * between(rng, 3.0, 9.0),
-            gravity: GRAVITY,
-            drag: 0.2,
-            life: between(rng, 0.6, 1.7),
-            size: (0.05, 0.03),
-            color: [
-                [3.0, 2.2, 1.0, 1.0],
-                [2.0, 0.9, 0.25, 1.0],
-                [0.8, 0.15, 0.03, 0.0],
-            ],
-            ..base(Kind::Spark)
-        });
-    }
-    // Embers drifting up and settling.
-    for _ in 0..(config.sparks / 2) {
-        let heading = direction(rng, 0.8);
-        specs.push(Spec {
-            offset: rise * 0.7,
-            velocity: heading * radius * between(rng, 0.8, 2.4),
-            gravity: -0.4,
-            drag: 1.4,
-            delay: between(rng, 0.0, 0.2),
-            life: between(rng, 1.5, 3.2),
-            size: (0.07, 0.025),
-            color: [
-                [2.4, 1.3, 0.4, 1.0],
-                [1.4, 0.4, 0.08, 0.8],
-                [0.4, 0.06, 0.0, 0.0],
-            ],
-            ..base(Kind::Ember)
-        });
-    }
-    specs
 }
 
 /// Fire and smoke off a burning prop, `intensity` from `0` to about `1.5`
@@ -730,26 +474,21 @@ fn flame_particles(rng: &mut Rng, puffs: u32, intensity: f32) -> Vec<Spec> {
     specs
 }
 
-/// Turns asked-for blasts into particles and shakes the view.
+/// Shakes the view for each blast, and hands the ones with nothing of the
+/// game's own playing to [`crate::explosion`] to draw.
 fn spawn_blasts(
-    mut commands: Commands,
     mut blasts: MessageReader<Blast>,
     game: Game,
-    looks: Option<Res<Looks>>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
-    live: Query<(), With<Particle>>,
     mut shake: ResMut<Shake>,
     mut flash: ResMut<ScreenFlash>,
-    mut rng: Local<Option<Rng>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut explosions: MessageWriter<Explosion>,
 ) {
-    let (Some(sim), Some(looks)) = (game.sim(), looks) else {
+    let Some(sim) = game.sim() else {
         blasts.clear();
         return;
     };
     let config = &sim.data().effects.explosion;
-    let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x0062_6c61_7374]));
-    let mut room = MAX_PARTICLES.saturating_sub(live.iter().count());
     for blast in blasts.read() {
         if let Ok(camera) = camera.single() {
             let distance = camera.translation().distance(blast.at);
@@ -759,30 +498,13 @@ fn spawn_blasts(
             shake.add(config.shake * nearness(SHAKE_REACH));
             flash.0 = flash.0.max(nearness(FLASH_REACH).powi(2));
         }
-        let radius = blast.radius * coords::METERS_PER_UNIT;
-        let floor = floor_below(sim.world(), blast.at, radius * DUST_REACH);
-        let specs = if blast.procedural {
-            blast_particles(config, radius, floor, rng)
-        } else {
-            Vec::new()
-        };
-        for spec in specs {
-            if room == 0 {
-                break;
-            }
-            room -= 1;
-            spawn_particle(&mut commands, &looks, &mut materials, rng, blast.at, &spec);
+        if blast.procedural {
+            explosions.write(Explosion {
+                at: blast.at,
+                normal: crate::explosion::open_side(sim.world(), blast.at),
+            });
         }
     }
-}
-
-/// How far below `at` (Bevy space) the map is, if within `reach` metres.
-fn floor_below(world: &rl_sim::collision::CollisionWorld, at: Vec3, reach: f32) -> Option<f32> {
-    let source = Vec3::from(coords::to_source_position(at));
-    let down = Vec3::Z * reach / coords::METERS_PER_UNIT;
-    let trace = world.trace_ray(source, source - down, SOLID);
-    (trace.hit() && !trace.start_solid)
-        .then_some((source.z - trace.end.z) * coords::METERS_PER_UNIT)
 }
 
 /// Makes the particle `spec` at `at`.
@@ -991,108 +713,16 @@ fn bounce(
 mod tests {
     use super::*;
 
-    fn config() -> ExplosionEffectConfig {
-        ExplosionEffectConfig {
-            size_per_radius: 0.8,
-            rise: 0.35,
-            fireballs: 9,
-            smoke: 12,
-            sparks: 28,
-            duration: 0.8,
-            smoke_duration: 3.5,
-            shake: 0.7,
-            pcf: None,
-        }
-    }
-
     fn count(specs: &[Spec], kind: Kind) -> usize {
         specs.iter().filter(|spec| spec.kind == kind).count()
     }
 
     #[test]
-    fn a_blast_makes_what_its_config_asks_for() {
-        let specs = blast_particles(&config(), 6.5, None, &mut Rng::seeded(&[1]));
-        assert_eq!(count(&specs, Kind::Flash), 1);
-        assert_eq!(count(&specs, Kind::Ring), 1);
-        assert_eq!(count(&specs, Kind::Fire), 9);
-        assert_eq!(count(&specs, Kind::Smoke), 12);
-        assert_eq!(count(&specs, Kind::Spark), 28);
-        assert_eq!(count(&specs, Kind::Ember), 14);
-        assert_eq!(count(&specs, Kind::Dust), 0, "no floor, no dust");
-        assert!(
-            specs
-                .iter()
-                .all(|spec| spec.life > 0.0 && spec.delay >= 0.0)
-        );
-    }
-
-    #[test]
-    fn only_a_blast_near_the_floor_is_lifted_off_it() {
-        let flash_height = |floor| {
-            blast_particles(&config(), 6.5, floor, &mut Rng::seeded(&[1]))
-                .iter()
-                .find(|spec| spec.kind == Kind::Flash)
-                .map(|spec| spec.offset.y)
-                .expect("a flash")
-        };
-        assert!(flash_height(Some(0.0)) > 1.0, "on the floor");
-        assert_eq!(flash_height(None), 0.0, "on a wall, centred");
-        assert!(flash_height(Some(2.0)) < flash_height(Some(0.2)));
-    }
-
-    #[test]
-    fn a_floor_close_below_kicks_up_dust_along_it() {
-        let specs = blast_particles(&config(), 6.5, Some(1.0), &mut Rng::seeded(&[1]));
-        let dust: Vec<_> = specs
-            .iter()
-            .filter(|spec| spec.kind == Kind::Dust)
-            .collect();
-        assert!(dust.len() >= 6);
-        for spec in dust {
-            assert!(spec.offset.y < 0.0, "at the floor, below the blast");
-            assert!(spec.velocity.y.abs() < spec.velocity.xz().length());
-        }
-    }
-
-    #[test]
-    fn the_fireball_bursts_out_fast_and_is_gone_before_the_smoke() {
-        let specs = blast_particles(&config(), 6.5, None, &mut Rng::seeded(&[2]));
-        let longest = |kind| {
-            specs
-                .iter()
-                .filter(|spec| spec.kind == kind)
-                .map(|spec| spec.life)
-                .fold(0.0, f32::max)
-        };
-        assert!(longest(Kind::Smoke) > 2.0 * longest(Kind::Fire));
-        // Fast: a fireball puff covers a radius's worth in its first moments.
-        let fastest = specs
-            .iter()
-            .filter(|spec| spec.kind == Kind::Fire)
-            .map(|spec| spec.velocity.length())
-            .fold(0.0, f32::max);
-        assert!(fastest > 6.5 * 2.0, "{fastest}");
-        assert!(
-            specs
-                .iter()
-                .filter(|spec| spec.kind == Kind::Fire)
-                .all(|spec| spec.life < 0.85),
-            "snappy"
-        );
-    }
-
-    #[test]
-    fn glowing_kinds_add_and_smoke_and_dust_blend() {
-        for kind in [
-            Kind::Fire,
-            Kind::Spark,
-            Kind::Ember,
-            Kind::Ring,
-            Kind::Flash,
-        ] {
+    fn glowing_kinds_add_and_smoke_blends() {
+        for kind in [Kind::Fire, Kind::Spark, Kind::Ember, Kind::Flash] {
             assert!(kind.glows(), "{kind:?}");
         }
-        assert!(!Kind::Smoke.glows() && !Kind::Dust.glows());
+        assert!(!Kind::Smoke.glows());
     }
 
     #[test]
@@ -1118,7 +748,6 @@ mod tests {
         assert!(dot_shade(0.0, 0.0).1 > 0.99 && dot_shade(1.0, 0.0).1 < 0.01);
         assert!(streak_shade(0.0, 0.0).1 > 0.99 && streak_shade(0.5, 0.0).1 < 0.1);
         assert!(streak_shade(0.0, 1.0).1 < 0.01, "pointed at the ends");
-        assert!(ring_shade(0.8, 0.0).1 > 0.95 && ring_shade(0.0, 0.0).1 < 0.01);
         let image = texture(puff_shade);
         let pixels = (TEXTURE_SIZE * TEXTURE_SIZE * 4) as usize;
         assert_eq!(image.data.as_ref().map(Vec::len), Some(pixels));
@@ -1176,16 +805,6 @@ mod tests {
             .filter(|spec| matches!(spec.kind, Kind::Fire | Kind::Smoke))
         {
             assert!(spec.velocity.y > 0.0 && spec.gravity < 0.0, "{spec:?}");
-        }
-    }
-
-    #[test]
-    fn random_directions_are_unit_and_can_lean_up() {
-        let mut rng = Rng::seeded(&[3]);
-        for _ in 0..50 {
-            let heading = direction(&mut rng, 1.0);
-            assert!((heading.length() - 1.0).abs() < 1e-4);
-            assert!(heading.y >= 0.0);
         }
     }
 }

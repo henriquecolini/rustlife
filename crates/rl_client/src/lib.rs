@@ -50,6 +50,7 @@ pub mod content;
 pub mod debris;
 pub mod decals;
 pub mod effects;
+pub mod explosion;
 pub mod fog;
 pub mod grenades;
 pub mod hud;
@@ -195,6 +196,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     app.add_plugins((
         debris::DebrisPlugin,
         particles::ParticlesPlugin,
+        explosion::ExplosionPlugin,
         pcf_particles::PcfPlugin,
         GrenadesPlugin,
         SurfacesPlugin,

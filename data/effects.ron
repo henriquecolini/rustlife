@@ -142,23 +142,14 @@ Effects(
         decal_life: 35.0,
         pcf: Some("blood_impact_red_01"),
     ),
-    // A blast, drawn as particles the game makes itself: a fireball of
-    // overlapping puffs (its size a share of the blast's radius, its centre
-    // lifted by a share of its size, since fireballs rise and the floor
-    // would cut one centred on it in half), smoke, sparks and a shockwave.
-    // The view shakes for those near it, `shake` right at the blast down to
-    // nothing at three times its radius.
+    // A blast is drawn as HL2DM draws it (the client's `explosion` module, from
+    // the game's own code: fixed-size puffs of effects/fire_cloud and
+    // fire_embers), so only what it does to the view is set here: the view
+    // shakes for those near it, `shake` right at the blast down to nothing at
+    // three times its radius. HL2DM plays no particle system of its own for
+    // it, so there is no `pcf`.
     explosion: (
-        size_per_radius: 0.8,
-        rise: 0.35,
-        fireballs: 14,
-        smoke: 16,
-        sparks: 44,
-        duration: 0.7,
-        smoke_duration: 4.5,
         shake: 0.85,
-        // HL2DM draws its explosions with the old FX_Explosion sprites
-        // (effects/fire_cloud), not a particle system, so there is no `pcf`.
     ),
     // A thrown grenade: a red dot on its top that flashes with each tick of
     // its fuse (the dot's size at the flash, how bright it stays between
