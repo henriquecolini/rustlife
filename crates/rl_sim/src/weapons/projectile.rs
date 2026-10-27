@@ -15,7 +15,7 @@
 //! - past its **lifetime** it is simply gone.
 
 use glam::Vec3;
-use rl_data::ProjectileConfig;
+use rl_data::{MissileConfig, ProjectileConfig};
 use serde::{Deserialize, Serialize};
 
 use super::{Mode, WeaponId};
@@ -55,6 +55,13 @@ pub struct Projectile {
     pub age: f32,
     /// Lying still on a floor (bouncing projectiles only).
     pub resting: bool,
+    /// The way a missile is pointed: the direction it flies once its motor
+    /// is lit.
+    pub heading: Vec3,
+    /// A missile's motor is lit.
+    pub lit: bool,
+    /// Seconds since the missile last steered.
+    pub steer_clock: f32,
 }
 
 /// How a projectile's tick ended.
@@ -82,7 +89,9 @@ pub enum Flight {
 
 impl Projectile {
     /// Advances the projectile by one tick of `dt` seconds under `gravity`
-    /// (the world's, units/s²), through `scene` and the players' boxes.
+    /// (the world's, units/s²), through `scene` and the players' boxes. A
+    /// missile steers towards `dot`, where its owner's laser is, if there
+    /// is one.
     pub fn advance(
         &mut self,
         config: &ProjectileConfig,
@@ -90,8 +99,12 @@ impl Projectile {
         dt: f32,
         scene: &Scene,
         targets: &[Target],
+        dot: Option<Vec3>,
     ) -> Flight {
         self.age += dt;
+        if let Some(missile) = &config.missile {
+            self.fly_missile(missile, config.speed, dt, dot);
+        }
         if config.fuse.is_some_and(|fuse| self.age >= fuse) {
             return Flight::Fused;
         }
@@ -101,7 +114,9 @@ impl Projectile {
         if self.resting {
             return Flight::Flying;
         }
-        self.velocity.z -= gravity * config.gravity * dt;
+        if !self.lit {
+            self.velocity.z -= gravity * config.gravity * dt;
+        }
         let start = self.position;
         let end = start + self.velocity * dt;
         let hull = Hull::new(Vec3::splat(-config.size), Vec3::splat(config.size));
@@ -147,6 +162,28 @@ impl Projectile {
         }
         Flight::Bounced
     }
+
+    /// A missile's motor and steering: before the motor lights it only
+    /// falls; once lit it flies along its heading at `speed`, which bends
+    /// towards the laser dot by the missile's `steer` fraction every
+    /// `steer_interval`.
+    fn fly_missile(&mut self, missile: &MissileConfig, speed: f32, dt: f32, dot: Option<Vec3>) {
+        if self.age < missile.ignite_delay {
+            return;
+        }
+        self.lit = true;
+        self.steer_clock += dt;
+        while self.steer_clock >= missile.steer_interval {
+            self.steer_clock -= missile.steer_interval;
+            if let Some(dot) = dot
+                && let Some(towards) = (dot - self.position).try_normalize()
+            {
+                let bent = self.heading * (1.0 - missile.steer) + towards * missile.steer;
+                self.heading = bent.try_normalize().unwrap_or(self.heading);
+            }
+        }
+        self.velocity = self.heading * speed;
+    }
 }
 
 #[cfg(test)]
@@ -171,6 +208,8 @@ mod tests {
             hit_damage: 10.0,
             explosion: None,
             lifetime: 5.0,
+            missile: None,
+            crouched: None,
             body: None,
         }
     }
@@ -207,6 +246,9 @@ mod tests {
             velocity,
             age: 0.0,
             resting: false,
+            heading: velocity.normalize_or_zero(),
+            lit: false,
+            steer_clock: 0.0,
         }
     }
 
@@ -218,7 +260,7 @@ mod tests {
         ticks: usize,
     ) -> Vec<Flight> {
         (0..ticks)
-            .map(|_| projectile.advance(config, 800.0, DT, scene, targets))
+            .map(|_| projectile.advance(config, 800.0, DT, scene, targets, None))
             .collect()
     }
 

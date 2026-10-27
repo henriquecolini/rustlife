@@ -15,7 +15,7 @@ use rl_sim::combat::hitscan::Struck;
 use rl_sim::pickups::Gives;
 use rl_sim::simulation::{MapEvent, PlayerId, Simulation, TickEvents};
 use rl_sim::tools::manipulator::ToolEvent;
-use rl_sim::weapons::{Mode, WeaponId};
+use rl_sim::weapons::{Mode, Noise, WeaponId};
 use source_formats::entities::MapEntity;
 
 use super::SoundPlayer;
@@ -209,6 +209,18 @@ fn weapon_sounds(
     }
     for &(who, weapon) in &events.reloads {
         play(player, who, weapon, "reload");
+    }
+    for &(who, weapon, noise) in &events.noises {
+        play(
+            player,
+            who,
+            weapon,
+            match noise {
+                Noise::Dry => "empty",
+                Noise::Pump => "pump",
+                Noise::Charge => "charge",
+            },
+        );
     }
     for &(who, weapon) in &events.deploys {
         play(player, who, weapon, "deploy");

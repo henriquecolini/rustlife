@@ -171,7 +171,7 @@ impl Simulation {
         match arsenal.fire(weapon, mode).map(|fire| &fire.shot) {
             Some(Shot::Hitscan(bullets)) => {
                 prediction.shots = self
-                    .bullets(id, mode, bullets, &aim, cmd)
+                    .bullets(id, mode, bullets, &aim, cmd, prediction.weapon.penalty)
                     .into_iter()
                     .map(|bullet| shot(bullet.trace))
                     .collect();

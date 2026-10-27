@@ -141,6 +141,7 @@ mod tests {
         radius: 200.0,
         damage: 100.0,
         knockback: 500.0,
+        knockback_cap: None,
         force: 1000.0,
     };
 

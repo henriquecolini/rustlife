@@ -103,6 +103,13 @@ pub struct Damage {
     pub cause: Cause,
 }
 
+/// Radius of the sphere a bullet must pass through to hit a player's head,
+/// units.
+pub const HEAD_RADIUS: f32 = 6.5;
+/// How far the head's centre sits below the top of a player's box, units:
+/// a standing player's head is about the height of their eyes.
+pub const HEAD_BELOW_TOP: f32 = 6.0;
+
 /// A player's box in the world, as shots see it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
@@ -125,6 +132,25 @@ impl Target {
     #[must_use]
     pub fn nearest_point(&self, point: Vec3) -> Vec3 {
         point.clamp(self.mins, self.maxs)
+    }
+
+    /// Whether the line `start → end` passes through the player's head, a
+    /// sphere at the top of the box. Players are hit as boxes, but a bullet
+    /// that also goes through the head does [extra damage](rl_data::PlayerConfig::head_scale).
+    #[must_use]
+    pub fn hits_head(&self, start: Vec3, end: Vec3) -> bool {
+        let center = Vec3::new(
+            f32::midpoint(self.mins.x, self.maxs.x),
+            f32::midpoint(self.mins.y, self.maxs.y),
+            self.maxs.z - HEAD_BELOW_TOP,
+        );
+        let delta = end - start;
+        let length_squared = delta.length_squared();
+        if length_squared <= f32::EPSILON {
+            return center.distance(start) <= HEAD_RADIUS;
+        }
+        let along = ((center - start).dot(delta) / length_squared).clamp(0.0, 1.0);
+        center.distance(start + delta * along) <= HEAD_RADIUS
     }
 
     /// Where a box of half-size `extents` moving from `start` to `end`
@@ -253,6 +279,22 @@ mod tests {
             None,
             "starts inside"
         );
+    }
+
+    #[test]
+    fn bullets_through_the_head_are_headshots() {
+        let target = Target {
+            player: PlayerId::from_index(0),
+            mins: Vec3::new(10.0, -16.0, 0.0),
+            maxs: Vec3::new(42.0, 16.0, 72.0),
+        };
+        // The head is the top of the box, 66 units up, in the middle.
+        let at = |z: f32, y: f32| target.hits_head(Vec3::new(0.0, y, z), Vec3::new(100.0, y, z));
+        assert!(at(66.0, 0.0));
+        assert!(at(70.0, 4.0));
+        assert!(!at(36.0, 0.0), "the chest");
+        assert!(!at(66.0, 12.0), "beside the head");
+        assert!(!at(50.0, 0.0), "the neck");
     }
 
     #[test]

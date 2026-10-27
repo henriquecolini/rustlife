@@ -1,9 +1,9 @@
-// A rocket.
+// Rocket.
 Item(
     name: "Rocket",
     model: "models/weapons/w_missile_closed.mdl",
     gives: Ammo({"rocket": 1}),
-    // Seconds before it comes back once taken.
+    // Seconds before it comes back once taken (sv_hl2mp_item_respawn_time).
     respawn: 30.0,
     // Taken by a player whose box comes within this many units of it.
     radius: 24.0,

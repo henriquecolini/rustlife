@@ -1,22 +1,25 @@
-// A heavy steel bar for close work.
+// The Crowbar. HL2DM's numbers: a swing reaches 75 units with a 16-unit-wide
+// sweep, does 25 damage and can be repeated every 0.4 seconds; the view
+// model's draw takes 0.933 s (`models/weapons/v_crowbar.mdl`, ACT_VM_DRAW).
 Weapon(
     name: "Crowbar",
     slot: 1,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('c'),
-    position: 1,
+    position: 0,
+    weight: 0,
     view_model: Some("models/weapons/v_crowbar.mdl"),
     world_model: "models/weapons/w_crowbar.mdl",
     clip: None,
     primary: Some((
-        interval: 0.45,
+        interval: 0.4,
         automatic: true,
         ammo: Unlimited,
-        // Reaches 72 units, with a 16-unit-wide sweep.
-        shot: Melee((range: 72.0, size: 8.0, damage: 30.0, force: 3000.0)),
+        // A melee blow pushes with 300 units of impulse per point of damage.
+        shot: Melee((range: 75.0, size: 8.0, damage: 25.0, force: 7500.0)),
     )),
     secondary: None,
-    deploy_time: 0.3,
+    deploy_time: 0.933,
     pickup: Some((ammo: 0, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Crowbar.Single", "hit": "Weapon_Crowbar.Melee_Hit"},
     // Players hold it with the melee sequences of HL2DM's player models (run_melee, ...).

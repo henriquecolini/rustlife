@@ -26,6 +26,9 @@ fn data() -> GameData {
     let mut data = GameData::builtin().expect("builtin data");
     // Matches start the moment the players are there.
     data.rules.warmup = 0.0;
+    // Players stand eye to eye here, so a level shot is a headshot; the
+    // scenarios that are not about headshots count plain hits.
+    data.player.head_scale = 1.0;
     data
 }
 
@@ -99,7 +102,8 @@ impl Arena {
             ..UserCmd::default()
         };
         self.tick(&select);
-        self.idle(66);
+        // Long enough for the slowest to come up (the grenade's 1.267 s).
+        self.idle(100);
     }
 
     fn tick(&mut self, cmd: &UserCmd) -> TickEvents {
@@ -111,11 +115,24 @@ impl Arena {
     /// released.
     fn throw(&mut self, buttons: Buttons, pitch: f32, held: usize) -> TickEvents {
         self.hold(buttons, pitch, held);
+        self.release(Buttons::NONE, pitch)
+    }
+
+    /// Lets go of the button, keeping `buttons` down, until the grenade
+    /// leaves the hand (a few ticks): the events of that tick.
+    fn release(&mut self, buttons: Buttons, pitch: f32) -> TickEvents {
         let release = UserCmd {
             pitch,
+            buttons,
             ..UserCmd::default()
         };
-        self.tick(&release)
+        for _ in 0..8 {
+            let events = self.tick(&release);
+            if !events.fired.is_empty() {
+                return events;
+            }
+        }
+        TickEvents::default()
     }
 
     fn idle(&mut self, ticks: usize) -> Vec<TickEvents> {
@@ -179,14 +196,14 @@ fn armor_takes_its_share() {
         .armor = 100.0;
     arena.hold(Buttons::ATTACK, 0.0, 1);
     let target = arena.sim.player(arena.target).expect("target");
-    // 70 damage: armor takes 60% (42), health the rest.
+    // 75 damage: armor takes 80% (60), health the rest.
     assert!(
-        (target.vitals.health - 72.0).abs() < 1e-3,
+        (target.vitals.health - 85.0).abs() < 1e-3,
         "{:?}",
         target.vitals
     );
     assert!(
-        (target.vitals.armor - 58.0).abs() < 1e-3,
+        (target.vitals.armor - 40.0).abs() < 1e-3,
         "{:?}",
         target.vitals
     );
@@ -198,7 +215,7 @@ fn swings_only_reach_so_far() {
     let mut near = Arena::new(&data, 60.0);
     near.arm("bar");
     near.hold(Buttons::ATTACK, 0.0, 1);
-    assert_eq!(near.health(near.target), 70.0);
+    assert_eq!(near.health(near.target), 75.0);
 
     let mut far = Arena::new(&data, 200.0);
     far.arm("bar");
@@ -227,33 +244,18 @@ fn rockets_burst_on_impact_and_throw_players() {
 }
 
 #[test]
-fn a_rocket_at_your_feet_is_a_rocket_jump() {
+fn a_rocket_at_your_feet_is_no_rocket_jump_it_kills_you() {
     let data = data();
     let mut arena = Arena::new(&data, 2000.0);
     arena.arm("launcher");
     let events = arena.hold(Buttons::ATTACK | Buttons::JUMP, 89.0, 1);
     assert_eq!(events[0].fired.len(), 1);
-    let mut highest: f32 = 0.0;
-    let mut events = Vec::new();
-    for _ in 0..90 {
-        events.push(arena.tick(&UserCmd::default()));
-        let origin = arena
-            .sim
-            .player(arena.shooter)
-            .expect("shooter")
-            .state
-            .origin;
-        highest = highest.max(origin.z);
-    }
-    assert!(
-        highest > 150.0,
-        "thrown well above a plain jump's 45 units: {highest}"
-    );
-    let health = arena.health(arena.shooter);
-    // Half damage to yourself: about 50 of a rocket's 110.
-    assert!((35.0..80.0).contains(&health), "{health}");
-    let scores = arena.sim.game().score(arena.shooter);
-    assert_eq!(scores.kills, 0);
+    // HL2DM gives no mercy for your own blast: 150 damage at the feet.
+    let events = arena.idle(60);
+    assert!(!arena.alive(arena.shooter), "dead of their own rocket");
+    let kills: Vec<_> = events.iter().flat_map(|events| &events.kills).collect();
+    assert_eq!(kills.len(), 1);
+    assert_eq!(arena.sim.game().score(arena.shooter).kills, 0);
 }
 
 #[test]
@@ -993,6 +995,13 @@ fn a_frag_thrown_at_someone_kills_them_for_the_thrower() {
         .expect("target")
         .vitals
         .health = 20.0;
+    // The thrower can take their own blast (all of it: HL2DM spares nobody).
+    arena
+        .sim
+        .player_mut(arena.shooter)
+        .expect("shooter")
+        .vitals
+        .health = 1000.0;
     // Dropped at the thrower's feet, it skitters about and goes off within
     // reach of both.
     arena.throw(Buttons::ATTACK, 85.0, 1);
@@ -1028,7 +1037,7 @@ fn a_grenade_is_only_thrown_when_the_button_is_let_go() {
         player.inventory.phase(),
         rl_sim::weapons::Phase::Priming(rl_sim::weapons::Mode::Primary)
     );
-    let events = arena.tick(&UserCmd::default());
+    let events = arena.release(Buttons::NONE, 0.0);
     assert_eq!(
         events.fired,
         [(arena.shooter, frag, rl_sim::weapons::Mode::Primary)]
@@ -1079,11 +1088,14 @@ fn a_grenade_comes_to_rest_lying_on_its_side_not_balanced_on_a_point() {
 }
 
 #[test]
-fn the_secondary_button_rolls_a_grenade_gently_along_the_floor() {
+fn the_secondary_button_rolls_a_grenade_along_the_floor_when_crouching() {
     let data = data();
     let mut arena = Arena::new(&data, 3000.0);
     arena.arm("frag");
-    let events = arena.throw(Buttons::ATTACK2, -20.0, 5);
+    let crouch = Buttons::DUCK;
+    arena.hold(crouch, -20.0, 40);
+    arena.hold(Buttons::ATTACK2 | crouch, -20.0, 5);
+    let events = arena.release(crouch, -20.0);
     assert_eq!(events.fired.len(), 1);
     assert_eq!(events.fired[0].2, rl_sim::weapons::Mode::Secondary);
     let start = arena.sim.grenades()[0];
@@ -1092,15 +1104,53 @@ fn the_secondary_button_rolls_a_grenade_gently_along_the_floor() {
     let mut highest = 0.0_f32;
     let mut farthest = 0.0_f32;
     for _ in 0..60 {
-        arena.idle(1);
+        arena.tick(&UserCmd {
+            buttons: crouch,
+            ..UserCmd::default()
+        });
         let grenade = arena.sim.grenades()[0];
         highest = highest.max(grenade.position.z);
         farthest = farthest.max(grenade.position.x - origin.x);
     }
     // Looking down, it still goes along the floor, forward, and rolls far
-    // (an overhand throw at 900 u/s would be metres up and away).
+    // (an overhand throw at 1200 u/s would be metres up and away).
     assert!(highest < 12.0, "never leaves the floor: {highest}");
-    assert!((100.0..400.0).contains(&farthest), "{farthest}");
+    assert!((100.0..700.0).contains(&farthest), "{farthest}");
+}
+
+#[test]
+fn the_secondary_button_lobs_a_grenade_when_standing() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.arm("frag");
+    arena.hold(Buttons::ATTACK2, 0.0, 5);
+    let events = arena.release(Buttons::NONE, 0.0);
+    assert_eq!(events.fired[0].2, rl_sim::weapons::Mode::Secondary);
+    let start = arena.sim.grenades()[0];
+    assert!(start.position.z > 40.0, "from the hand: {}", start.position);
+    let mut highest = 0.0_f32;
+    for _ in 0..30 {
+        arena.idle(1);
+        highest = highest.max(arena.sim.grenades()[0].position.z);
+    }
+    assert!(highest > start.position.z, "it rises a little first");
+}
+
+#[test]
+fn headshots_do_triple_damage() {
+    let mut data = data();
+    data.player.head_scale = 3.0;
+    let mut arena = Arena::new(&data, 200.0);
+    arena.arm("sidearm");
+    // Level with the target's eyes: through the head.
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    assert_eq!(arena.health(arena.target), 100.0 - 3.0 * 8.0);
+    arena.idle(40);
+    // Aimed at the knees (36 units below the eyes over 200 units): the
+    // body.
+    let pitch = (36.0_f32 / 200.0).atan().to_degrees();
+    arena.hold(Buttons::ATTACK, pitch, 1);
+    assert_eq!(arena.health(arena.target), 100.0 - 3.0 * 8.0 - 8.0);
 }
 
 #[test]
@@ -1119,9 +1169,9 @@ fn the_last_grenade_thrown_leaves_nothing_in_hand() {
         ..UserCmd::default()
     };
     arena.tick(&select);
-    arena.idle(66);
+    arena.idle(100);
     arena.throw(Buttons::ATTACK, 0.0, 3);
-    let after = arena.idle(120);
+    let after = arena.idle(240);
     let retired = after
         .iter()
         .flat_map(|events| &events.deploys)

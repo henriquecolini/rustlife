@@ -1,49 +1,62 @@
-// An energy rifle: accurate at range, with a bouncing charge orb that
-// shatters whoever it touches.
+// The Pulse Rifle (HL2's AR2). HL2DM's numbers: 30 rounds of 11 damage every
+// 0.1 s in a 3-degree cone, reloaded in the view model's 1.567 s, drawn in
+// 0.833 s. The alternate fire charges for half a second and launches an
+// energy ball at 1000 units/s that bounces about without losing speed for
+// four seconds and kills whoever it touches outright; the rifle is then
+// busy for a second.
 Weapon(
     name: "Pulse Rifle",
     slot: 3,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('l'),
     position: 1,
+    weight: 5,
     view_model: Some("models/weapons/v_irifle.mdl"),
     world_model: "models/weapons/w_irifle.mdl",
-    clip: Some((ammo: "rifle", size: 30, reload: Whole(time: 1.6))),
+    clip: Some((ammo: "rifle", size: 30, reload: Whole(time: 1.567))),
     primary: Some((
         interval: 0.1,
         automatic: true,
         ammo: Clip(1),
         shot: Hitscan((
             pellets: 1,
-            damage: 13.0,
-            spread: 2.0,
-            range: 8192.0,
-            falloff: Some((start: 1536.0, end: 4096.0, min_scale: 0.6)),
-            force: 1200.0,
+            damage: 11.0,
+            cone: 0.02618,
+            range: 56755.0,
+            force: 667.0,
         )),
     )),
-    // The orb flies straight, bounces off everything without losing speed
-    // and bursts after 3 seconds or on touching a player.
     secondary: Some((
-        interval: 1.5,
-        automatic: false,
+        interval: 1.0,
+        other_interval: 1.0,
+        charge: 0.5,
+        automatic: true,
         ammo: Reserve(ammo: "rifle_charge", count: 1),
         shot: Projectile((
             model: "models/effects/combineball.mdl",
-            speed: 1100.0,
+            speed: 1000.0,
             lift: 0.0,
             gravity: 0.0,
-            size: 8.0,
+            // sk_weapon_ar2_alt_fire_radius.
+            size: 10.0,
             bounce: Some(1.0),
-            fuse: Some(3.0),
-            hit_damage: 100.0,
-            explosion: Some((radius: 128.0, damage: 30.0, knockback: 400.0, force: 40000.0)),
-            lifetime: 4.0,
+            // sk_weapon_ar2_alt_fire_duration.
+            fuse: Some(4.0),
+            // Dissolving damage no player survives.
+            hit_damage: 1000.0,
+            explosion: None,
+            lifetime: 5.0,
         )),
     )),
-    deploy_time: 0.5,
-    pickup: Some((ammo: 30, respawn: 20.0, radius: 24.0)),
-    sounds: {"fire": "Weapon_AR2.Single", "fire2": "Weapon_IRifle.Single", "reload": "Weapon_AR2.Reload"},
+    deploy_time: 0.833,
+    pickup: Some((ammo: 30, owned_ammo: 60, respawn: 20.0, radius: 24.0)),
+    sounds: {
+        "fire": "Weapon_AR2.Single",
+        "fire2": "Weapon_IRifle.Single",
+        "reload": "Weapon_AR2.Reload",
+        "empty": "Weapon_AR2.Empty",
+        "charge": "Weapon_AR2.Special1",
+    },
     // Players hold it with the ar2 sequences of HL2DM's player models (run_ar2, ...).
     hold: Some("ar2"),
 )

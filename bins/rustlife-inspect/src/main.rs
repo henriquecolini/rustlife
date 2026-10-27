@@ -64,6 +64,11 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
+    /// List a model's sequences: label, activity, frame rate, length and events.
+    Sequences {
+        /// Virtual path of the model, e.g. `models/weapons/v_pistol.mdl`.
+        model: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -155,6 +160,50 @@ fn run(command: &Command, game: &MountedGame) -> Result<()> {
                 "wrote {} bytes to {}",
                 data.len(),
                 destination.display()
+            )?;
+        }
+        Command::Sequences { model } => sequences(game, model, &mut out)?,
+    }
+    Ok(())
+}
+
+/// Prints each sequence of `model` with its length in seconds.
+fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()> {
+    let mdl = read(game, model)?;
+    let ani = read(game, &model.replace(".mdl", ".ani")).ok();
+    let animation = source_formats::anim::read(&mdl, ani.as_deref())?;
+    for sequence in &animation.sequences {
+        let clip = sequence
+            .blends
+            .first()
+            .and_then(|&index| animation.animations.get(index));
+        let (fps, length) = clip.map_or((0.0, 0.0), |clip| {
+            let steps = clip.frames.saturating_sub(1) as f32;
+            (
+                clip.fps,
+                if clip.fps > 0.0 {
+                    steps / clip.fps
+                } else {
+                    0.0
+                },
+            )
+        });
+        writeln!(
+            out,
+            "{:<28} {:<28} {fps:>5.1}fps {length:>6.3}s {}",
+            sequence.label,
+            sequence.activity,
+            if sequence.looping { "loop" } else { "" }
+        )?;
+        for event in &sequence.events {
+            writeln!(
+                out,
+                "    @{:.3} ({:.3}s) event {} {} {}",
+                event.cycle,
+                event.cycle * length,
+                event.event,
+                event.name,
+                event.options
             )?;
         }
     }

@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::validate::Validator;
 
+/// For serde defaults.
+fn one() -> f32 {
+    1.0
+}
+
 /// Everything about a player that is not movement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "Player", deny_unknown_fields)]
@@ -13,6 +18,10 @@ pub struct PlayerConfig {
     pub health: HealthConfig,
     /// Armor.
     pub armor: ArmorConfig,
+    /// What a bullet that hits a player's head deals, as a multiple of its
+    /// damage (HL2's `sk_player_head`).
+    #[serde(default = "one")]
+    pub head_scale: f32,
     /// Models players are drawn with; each player gets one in turn.
     pub models: Vec<String>,
     /// How player models are animated.
@@ -97,6 +106,7 @@ impl PlayerConfig {
         check.non_negative("armor.max", self.armor.max);
         check.range("armor.absorb", self.armor.absorb, 0.0, 1.0);
         check.positive("armor.cost", self.armor.cost);
+        check.positive("head_scale", self.head_scale);
         if self.models.is_empty() {
             check.fail("models", "needs at least one model");
         }

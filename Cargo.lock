@@ -5621,6 +5621,7 @@ dependencies = [
  "anyhow",
  "clap",
  "rl_config",
+ "source_formats",
  "source_fs",
  "tracing",
  "tracing-subscriber",

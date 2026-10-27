@@ -84,9 +84,9 @@ pub use simulation::SimulationConfig;
 pub use sounds::{FootstepsConfig, PropSoundsConfig, SoundsConfig, WeaponSelectSounds};
 pub use validate::Problem;
 pub use weapons::{
-    BlipConfig, ClipConfig, ExplosionConfig, Falloff, FireAmmo, FireConfig, HitscanConfig,
-    MeleeConfig, ProjectileBodyConfig, ProjectileConfig, Reload, Shot, WEAPON_SOUNDS, WeaponConfig,
-    WeaponPickupConfig,
+    AccuracyConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig, HitscanConfig,
+    MeleeConfig, MissileConfig, ProjectileBodyConfig, ProjectileConfig, Reload, Shot,
+    WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
 };
 
 /// File name of the movement data.
@@ -151,20 +151,25 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "weapons/scattergun.ron",
     "weapons/sidearm.ron",
     "weapons/smg.ron",
+    "weapons/stunstick.ron",
     "items/armor_station.ron",
     "items/battery.ron",
     "items/bolts.ron",
     "items/health_station.ron",
     "items/health_vial.ron",
     "items/magnum_rounds.ron",
+    "items/magnum_rounds_large.ron",
     "items/medkit.ron",
     "items/pistol_rounds.ron",
+    "items/pistol_rounds_large.ron",
     "items/rifle_cells.ron",
+    "items/rifle_cells_large.ron",
     "items/rifle_charges.ron",
     "items/rockets.ron",
     "items/shells.ron",
     "items/smg_grenades.ron",
     "items/smg_rounds.ron",
+    "items/smg_rounds_large.ron",
 ];
 
 /// Errors from loading gameplay data. Each names the file it concerns.

@@ -1,37 +1,44 @@
-// A fragmentation grenade. It is a literal grenade, not a weapon with ammo:
-// the weapon is carried while there are grenades to throw and is put away
-// with the last one.
-//
-// Holding the button primes it (the pin is pulled and the arm drawn back);
-// letting go throws it: primary overhand, secondary a gentle roll along the
-// floor. Once thrown it is a physics body — a metal cylinder that tumbles and
-// bounces like any prop (and is shoved by blasts) — that ticks like the
-// original (a red dot flashing in step with each tick, a red trail behind
-// it) and bursts 2.5 seconds after leaving the hand.
+// The Grenade. HL2DM's numbers: 150 damage over 250 units, two and a half
+// seconds of fuse. Holding a button draws the arm back; letting go throws
+// (the grenade leaves the hand a few frames into the animation):
+//   - primary: overhand, 1200 units/s added to the thrower's own velocity,
+//     tilted a tenth upwards; the arm is back for the view model's 0.55 s
+//     throw, then the next grenade is drawn (1.267 s);
+//   - secondary: a lob at 350 units/s and 50 upwards, or, crouching, a roll
+//     along the floor at 700 units/s on its side.
+// Once thrown it is a physics body — a metal cylinder that tumbles and
+// bounces like any prop — that ticks (a red dot flashing in step with each
+// tick, a red trail behind it): every second, then every 0.3 s for the last
+// 1.5 s.
 Weapon(
     name: "Grenade",
     slot: 5,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('k'),
-    position: 1,
+    position: 0,
+    weight: 1,
     view_model: Some("models/weapons/v_grenade.mdl"),
     world_model: "models/weapons/w_grenade.mdl",
     clip: None,
     primary: Some((
-        interval: 1.0,
-        automatic: false,
+        // From the moment the grenade leaves the hand: the rest of the
+        // throw animation (0.55 - 0.05) and the draw of the next (1.267).
+        interval: 1.767,
+        other_interval: 1.767,
+        charge: 0.05,
+        automatic: true,
         ammo: Reserve(ammo: "frag", count: 1),
         on_release: true,
         shot: Projectile((
             model: "models/weapons/w_grenade.mdl",
-            speed: 900.0,
-            lift: 150.0,
+            speed: 1200.0,
+            lift: 120.0,
             gravity: 1.0,
             size: 3.0,
-            bounce: Some(0.45),
+            bounce: Some(0.2),
             fuse: Some(2.5),
             hit_damage: 0.0,
-            explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
+            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
             lifetime: 3.0,
             body: Some((
                 // The collision model of the game's grenade: a cylinder
@@ -52,39 +59,64 @@ Weapon(
         )),
     )),
     secondary: Some((
-        interval: 1.0,
-        automatic: false,
+        interval: 1.867,
+        other_interval: 1.867,
+        charge: 0.1,
+        automatic: true,
         ammo: Reserve(ammo: "frag", count: 1),
         on_release: true,
         shot: Projectile((
             model: "models/weapons/w_grenade.mdl",
-            speed: 340.0,
-            lift: 0.0,
+            speed: 350.0,
+            lift: 50.0,
             gravity: 1.0,
             size: 3.0,
-            bounce: Some(0.45),
+            bounce: Some(0.2),
             fuse: Some(2.5),
             hit_damage: 0.0,
-            explosion: Some((radius: 240.0, damage: 125.0, knockback: 600.0, force: 80000.0)),
+            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
             lifetime: 3.0,
             body: Some((
                 radius: 1.75,
                 height: 9.0,
                 model_center: (0.0, 0.0, 4.5),
                 surface: "grenade",
-                // Leaves the hand at the feet, rolling on its side.
-                rolled: true,
                 blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
                 mass: 0.9,
                 friction: 0.7,
-                spin: 0.0,
+                spin: 6.0,
                 damping: 0.1,
+            )),
+            // Crouching, it is rolled instead, leaving the hand at the feet.
+            crouched: Some((
+                model: "models/weapons/w_grenade.mdl",
+                speed: 700.0,
+                lift: 0.0,
+                gravity: 1.0,
+                size: 3.0,
+                bounce: Some(0.2),
+                fuse: Some(2.5),
+                hit_damage: 0.0,
+                explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+                lifetime: 3.0,
+                body: Some((
+                    radius: 1.75,
+                    height: 9.0,
+                    model_center: (0.0, 0.0, 4.5),
+                    surface: "grenade",
+                    rolled: true,
+                    blip: Some((interval: 1.0, fast_interval: 0.3, warn_time: 1.5)),
+                    mass: 0.9,
+                    friction: 0.7,
+                    spin: 0.0,
+                    damping: 0.1,
+                )),
             )),
         )),
     )),
     consumable: true,
-    deploy_time: 0.4,
-    pickup: Some((ammo: 1, respawn: 15.0, radius: 24.0)),
+    deploy_time: 1.267,
+    pickup: Some((ammo: 1, owned_ammo: 1, respawn: 20.0, radius: 24.0)),
     sounds: {
         "fire": "WeaponFrag.Throw",
         "fire2": "WeaponFrag.Roll",

@@ -1,0 +1,11 @@
+// Large box of rifle cells.
+Item(
+    name: "Large box of rifle cells",
+    model: "models/items/combine_rifle_cartridge01.mdl",
+    gives: Ammo({"rifle": 100}),
+    // Seconds before it comes back once taken (sv_hl2mp_item_respawn_time).
+    respawn: 30.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+    sounds: {"pickup": "BaseCombatCharacter.AmmoPickup"},
+)

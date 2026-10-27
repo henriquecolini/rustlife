@@ -1,33 +1,43 @@
-// A rail crossbow: one fast, slightly dropping bolt that kills outright.
+// The Crossbow. HL2DM's numbers: one bolt in the clip, 100 damage, 3500
+// units/s under almost no gravity (30 units/s²). A shot holds the weapon for
+// 0.75 s; once the firing animation is over (0.667 s) the next bolt is
+// loaded, which takes the view model's 1.833 s, so a bolt leaves about every
+// 2.5 s. Drawing it takes 1.0 s. The alternate button toggles a scope that
+// narrows the field of view to 20 degrees.
 Weapon(
     name: "Crossbow",
     slot: 4,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('g'),
     position: 1,
+    weight: 6,
     view_model: Some("models/weapons/v_crossbow.mdl"),
     world_model: "models/weapons/w_crossbow.mdl",
-    clip: Some((ammo: "bolt", size: 1, reload: Whole(time: 1.9))),
+    clip: Some((ammo: "bolt", size: 1, reload: Whole(time: 1.833))),
+    auto_reload: Some(0.667),
+    zoom: Some((fov: 20.0, in_time: 0.1, out_time: 0.2)),
     primary: Some((
-        interval: 0.4,
-        automatic: false,
+        interval: 0.75,
+        other_interval: 0.75,
+        automatic: true,
         ammo: Clip(1),
         shot: Projectile((
             model: "models/crossbow_bolt.mdl",
             speed: 3500.0,
             lift: 0.0,
-            gravity: 0.05,
-            size: 1.0,
+            // 30 units/s² of an 800 units/s² world.
+            gravity: 0.0375,
+            size: 0.3,
             bounce: None,
             fuse: None,
             hit_damage: 100.0,
             explosion: None,
-            lifetime: 5.0,
+            lifetime: 10.0,
         )),
     )),
     secondary: None,
-    deploy_time: 0.6,
-    pickup: Some((ammo: 6, respawn: 30.0, radius: 24.0)),
+    deploy_time: 1.0,
+    pickup: Some((ammo: 4, owned_ammo: 5, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_Crossbow.Single", "reload": "Weapon_Crossbow.Reload"},
     // Players hold it with the crossbow sequences of HL2DM's player models (run_crossbow, ...).
     hold: Some("crossbow"),

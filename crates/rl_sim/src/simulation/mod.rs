@@ -56,7 +56,7 @@ use crate::rules::{Match, MatchEvent};
 use crate::scene::{PlayerBox, Scene};
 use crate::tools::manipulator::{Manipulator, ToolEvent};
 use crate::weapons::projectile::Projectile;
-use crate::weapons::{Arsenal, Inventory, Mode, WeaponId};
+use crate::weapons::{Arsenal, Inventory, Mode, Noise, WeaponId};
 
 mod breakables;
 mod fire;
@@ -217,6 +217,8 @@ pub struct TickEvents {
     pub reloads: Vec<(PlayerId, WeaponId)>,
     /// Weapons brought up: who took which in hand.
     pub deploys: Vec<(PlayerId, WeaponId)>,
+    /// What weapons did besides shooting: who, with which weapon.
+    pub noises: Vec<(PlayerId, WeaponId, Noise)>,
     /// Bullets and swings.
     pub shots: Vec<ShotEvent>,
     /// Explosions.

@@ -11,7 +11,9 @@
 //! predicted events: `ACT_VM_DRAW` when the weapon comes up,
 //! `ACT_VM_PRIMARYATTACK` / `ACT_VM_SECONDARYATTACK` (a swing:
 //! `ACT_VM_HITCENTER` / `ACT_VM_MISSCENTER`) when it fires, `ACT_VM_RELOAD`
-//! when it reloads, and `ACT_VM_IDLE` once any of those is over. A weapon
+//! when it reloads (a shotgun's start, each shell and finish), `ACT_VM_DRYFIRE`
+//! on an empty click, `ACT_SHOTGUN_PUMP` when it is pumped, `ACT_VM_FIDGET`
+//! while a shot charges, and `ACT_VM_IDLE` once any of those is over. A weapon
 //! that goes off on release (a grenade) is drawn back while its button is
 //! held (`ACT_VM_PULLBACK_HIGH` for the overhand throw, `ACT_VM_PULLBACK_LOW`
 //! for the roll), holding the pose until it is let go, then thrown
@@ -24,7 +26,7 @@ use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::prelude::*;
 use rl_data::{FireConfig, Shot};
 use rl_sim::combat::hitscan::Struck;
-use rl_sim::weapons::{Mode, Phase, WeaponId};
+use rl_sim::weapons::{Arsenal, Inventory, Mode, Phase, ReloadStep, WeaponId};
 
 use crate::AppState;
 use crate::animation::{Animated, SequencePlayer};
@@ -77,6 +79,14 @@ pub(crate) struct ViewModel {
     /// The weapon was just thrown: when that ends the next one is drawn
     /// rather than the weapon idling.
     thrown: bool,
+    /// How many reload steps, empty clicks and pumps the inventory had
+    /// counted when they were last looked at: a change plays the animation.
+    reloads: u8,
+    dries: u8,
+    pumps: u8,
+    /// A shot charging (or a grenade being let go) has started its
+    /// animation.
+    charging: bool,
 }
 
 /// Gives the main camera a child camera for the view model.
@@ -166,6 +176,10 @@ fn swap_view_model(
             drawn: false,
             primed: None,
             thrown: false,
+            reloads: 0,
+            dries: 0,
+            pumps: 0,
+            charging: false,
         },
         Moving,
         // Lit from where the eyes are from the first frame: a model that
@@ -226,10 +240,17 @@ fn prime_activity(mode: Mode) -> &'static str {
     }
 }
 
-/// The activity a fire mode's shot plays.
-fn fire_activity(fire: &FireConfig, mode: Mode, struck: Option<Struck>) -> &'static str {
+/// The activity a fire mode's shot plays. A grenade let go of crouching is
+/// rolled (`ducked`), standing it is lobbed.
+fn fire_activity(
+    fire: &FireConfig,
+    mode: Mode,
+    struck: Option<Struck>,
+    ducked: bool,
+) -> &'static str {
     match (&fire.shot, mode) {
         (_, Mode::Primary) if fire.on_release => "ACT_VM_THROW",
+        (_, Mode::Secondary) if fire.on_release && !ducked => "ACT_VM_HAULBACK",
         (Shot::Melee(_), _) => match struck {
             Some(Struck::Nothing) | None => "ACT_VM_MISSCENTER",
             Some(_) => "ACT_VM_HITCENTER",
@@ -237,6 +258,55 @@ fn fire_activity(fire: &FireConfig, mode: Mode, struck: Option<Struck>) -> &'sta
         (_, Mode::Primary) => "ACT_VM_PRIMARYATTACK",
         (_, Mode::Secondary) => "ACT_VM_SECONDARYATTACK",
     }
+}
+
+/// The activity a reload step plays.
+fn reload_activity(step: ReloadStep) -> &'static str {
+    match step {
+        ReloadStep::Whole | ReloadStep::Round => "ACT_VM_RELOAD",
+        ReloadStep::Start => "ACT_SHOTGUN_RELOAD_START",
+        ReloadStep::Finish => "ACT_SHOTGUN_RELOAD_FINISH",
+    }
+}
+
+/// The activity the inventory's state calls for: a new reload step, an empty
+/// click or a pump (counted by the inventory since last looked at), a shot
+/// charging, or a grenade let go of.
+fn inventory_activity(
+    view: &mut ViewModel,
+    inventory: &Inventory,
+    arsenal: &Arsenal,
+    ducked: bool,
+) -> Option<&'static str> {
+    let mut wanted = None;
+    if inventory.reload_count() != view.reloads {
+        view.reloads = inventory.reload_count();
+        wanted = Some(reload_activity(inventory.reload_step()));
+    }
+    if inventory.dry_count() != view.dries {
+        view.dries = inventory.dry_count();
+        wanted = Some("ACT_VM_DRYFIRE");
+    }
+    if inventory.pump_count() != view.pumps {
+        view.pumps = inventory.pump_count();
+        wanted = Some("ACT_SHOTGUN_PUMP");
+    }
+    match inventory.phase() {
+        Phase::Charging(mode, _) if !view.charging => {
+            view.charging = true;
+            if let Some(fire) = arsenal.fire(view.weapon, mode) {
+                view.thrown = fire.on_release;
+                wanted = Some(if fire.on_release {
+                    fire_activity(fire, mode, None, ducked)
+                } else {
+                    "ACT_VM_FIDGET"
+                });
+            }
+        }
+        Phase::Charging(..) => {}
+        _ => view.charging = false,
+    }
+    wanted
 }
 
 /// Plays the view model's activities as the local player acts.
@@ -255,10 +325,21 @@ fn animate_view_model(
         return;
     };
     let mut wanted: Option<&str> = None;
+    let local_player = sim.player(local.id);
+    let inventory = local_player.map(|player| &player.inventory);
+    let ducked = local_player.is_some_and(|player| player.state.ducked);
     if !view.drawn {
         view.drawn = true;
         player.fade = VIEW_FADE_SECS;
         wanted = Some("ACT_VM_DRAW");
+        if let Some(inventory) = inventory {
+            view.reloads = inventory.reload_count();
+            view.dries = inventory.dry_count();
+            view.pumps = inventory.pump_count();
+        }
+    }
+    if let Some(inventory) = inventory {
+        wanted = inventory_activity(&mut view, inventory, sim.arsenal(), ducked).or(wanted);
     }
     // A weapon drawn back keeps its pose for as long as it is held.
     let primed = sim
@@ -275,9 +356,6 @@ fn animate_view_model(
     }
     for Ticked(events) in ticks.read() {
         let mine = |id| id == local.id;
-        if events.reloads.iter().any(|&(id, _)| mine(id)) {
-            wanted = Some("ACT_VM_RELOAD");
-        }
         for &(id, weapon, mode) in &events.fired {
             if !mine(id) || weapon != view.weapon {
                 continue;
@@ -290,8 +368,12 @@ fn animate_view_model(
                 .iter()
                 .find(|shot| mine(shot.player))
                 .map(|shot| shot.trace.struck);
-            view.thrown = fire.on_release;
-            wanted = Some(fire_activity(fire, mode, struck));
+            // A grenade's throw began when the button was let go.
+            if fire.on_release {
+                view.thrown = true;
+                continue;
+            }
+            wanted = Some(fire_activity(fire, mode, struck, ducked));
         }
         if events.tools.iter().any(|&(id, _)| mine(id)) && wanted.is_none() {
             wanted = Some("ACT_VM_PRIMARYATTACK");
@@ -366,6 +448,9 @@ mod tests {
     fn fire(shot: Shot, on_release: bool) -> FireConfig {
         FireConfig {
             interval: 1.0,
+            other_interval: 0.0,
+            click_interval: None,
+            charge: 0.0,
             automatic: false,
             ammo: rl_data::FireAmmo::Unlimited,
             shot,
@@ -385,11 +470,11 @@ mod tests {
             false,
         );
         assert_eq!(
-            fire_activity(&swing, Mode::Primary, Some(Struck::World)),
+            fire_activity(&swing, Mode::Primary, Some(Struck::World), false),
             "ACT_VM_HITCENTER"
         );
         assert_eq!(
-            fire_activity(&swing, Mode::Primary, Some(Struck::Nothing)),
+            fire_activity(&swing, Mode::Primary, Some(Struck::Nothing), false),
             "ACT_VM_MISSCENTER"
         );
     }
@@ -402,10 +487,17 @@ mod tests {
         let roll = frag.secondary.as_ref().expect("secondary");
         assert_eq!(prime_activity(Mode::Primary), "ACT_VM_PULLBACK_HIGH");
         assert_eq!(prime_activity(Mode::Secondary), "ACT_VM_PULLBACK_LOW");
-        assert_eq!(fire_activity(overhand, Mode::Primary, None), "ACT_VM_THROW");
         assert_eq!(
-            fire_activity(roll, Mode::Secondary, None),
+            fire_activity(overhand, Mode::Primary, None, false),
+            "ACT_VM_THROW"
+        );
+        assert_eq!(
+            fire_activity(roll, Mode::Secondary, None, true),
             "ACT_VM_SECONDARYATTACK"
+        );
+        assert_eq!(
+            fire_activity(roll, Mode::Secondary, None, false),
+            "ACT_VM_HAULBACK"
         );
     }
 }

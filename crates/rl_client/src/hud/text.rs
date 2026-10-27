@@ -350,8 +350,9 @@ mod tests {
         let arsenal = arsenal();
         let data = GameData::builtin().expect("builtin");
         let mut inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+        inventory.select(&arsenal, arsenal.find_weapon("smg").expect("smg"));
         let smg = ammo(&inventory, &arsenal);
-        assert_eq!((smg.main, smg.reserve), (Some(45), Some(90)));
+        assert_eq!((smg.main, smg.reserve), (Some(45), Some(45)));
         assert_eq!(smg.secondary, "SMG grenades: 0");
         assert_eq!(smg.weapon, "SMG");
         assert!(!smg.empty && !smg.reloading);
@@ -372,10 +373,10 @@ mod tests {
         let data = GameData::builtin().expect("builtin");
         let inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
         let slots = weapon_slots(&inventory, &arsenal);
-        assert_eq!(slots.first().map(|s| s.name.as_str()), Some("Gravity Gun"));
+        assert_eq!(slots.first().map(|s| s.name.as_str()), Some("Crowbar"));
         let active: Vec<_> = slots.iter().filter(|s| s.active).collect();
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].name, "SMG");
+        assert_eq!(active[0].name, "Gravity Gun");
         assert!(slots.windows(2).all(|pair| pair[0].slot <= pair[1].slot));
     }
 
@@ -431,7 +432,7 @@ mod tests {
             ..UserCmd::default()
         };
         sim.tick(&[(you, select)]);
-        for _ in 0..40 {
+        for _ in 0..80 {
             sim.tick(&[(you, UserCmd::default())]);
         }
         let fire = UserCmd {
@@ -473,7 +474,8 @@ mod tests {
         let status = status(&sim, you);
         assert_eq!(status.points, 12);
         assert_eq!(status.limit, Some(250));
-        assert_eq!(status.clock, "10:00");
+        // The magnum took a second and a half to come up.
+        assert_eq!(status.clock, "9:59");
         assert!(status.phase.is_empty());
     }
 

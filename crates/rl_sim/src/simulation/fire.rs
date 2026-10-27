@@ -10,13 +10,16 @@ use super::breakables::Blow;
 use super::{BlastSource, ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEvents};
 use crate::collision::Hull;
 use crate::combat::hitscan::{self, ShotTrace, Struck};
-use crate::combat::{Cause, Damage, blast};
+use crate::combat::{Cause, Damage, Target, blast};
 use crate::movement::{UserCmd, view_direction};
 use crate::rng::Rng;
 use crate::scene::Scene;
 use crate::tools::manipulator::{Aim, ToolEvent};
 use crate::weapons::projectile::{Flight, Projectile};
 use crate::weapons::{Mode, WeaponId};
+
+/// How far a launcher's laser reaches, units: Source's longest trace.
+const LASER_RANGE: f32 = 56755.0;
 
 /// One bullet of a hitscan shot.
 #[derive(Debug, Clone, Copy)]
@@ -25,7 +28,7 @@ pub(super) struct Bullet {
     pub(super) direction: Vec3,
     /// Where it went.
     pub(super) trace: ShotTrace,
-    /// The damage it deals, after falloff.
+    /// The damage it deals, a headshot's multiplier included.
     pub(super) damage: f32,
 }
 
@@ -46,6 +49,9 @@ impl Simulation {
             }
             if pulled.reloading {
                 events.reloads.push((id, weapon));
+            }
+            if let Some(noise) = pulled.noise {
+                events.noises.push((id, weapon, noise));
             }
         }
         let aim = Aim {
@@ -100,7 +106,7 @@ impl Simulation {
             };
             match &fire.shot {
                 Shot::Hitscan(bullets) => {
-                    self.fire_bullets(id, weapon, mode, bullets, &aim, cmd, events);
+                    self.fire_bullets(id, weapon, mode, bullets, &aim, cmd, pulled.penalty, events);
                 }
                 Shot::Melee(swing) => self.swing(id, weapon, swing, &aim, cmd, events),
                 Shot::Projectile(projectile) => {
@@ -120,9 +126,10 @@ impl Simulation {
         bullets: &HitscanConfig,
         aim: &Aim,
         cmd: &UserCmd,
+        penalty: f32,
         events: &mut TickEvents,
     ) {
-        for bullet in self.bullets(id, mode, bullets, aim, cmd) {
+        for bullet in self.bullets(id, mode, bullets, aim, cmd, penalty) {
             self.strike(
                 id,
                 weapon,
@@ -143,10 +150,10 @@ impl Simulation {
     }
 
     /// Where a hitscan shot's bullets go, each with its own spread, and the
-    /// damage each deals after falloff. The spread is drawn from the
-    /// command's number, so a client predicting its own shot sees the same
-    /// bullets the server fires; other players are where the shooter saw
-    /// them.
+    /// damage each deals (tripled for a headshot). The spread is drawn from
+    /// the command's number, so a client predicting its own shot sees the
+    /// same bullets the server fires; other players are where the shooter
+    /// saw them. `penalty` is the shooter's accuracy penalty as they fired.
     pub(super) fn bullets(
         &self,
         id: PlayerId,
@@ -154,7 +161,12 @@ impl Simulation {
         bullets: &HitscanConfig,
         aim: &Aim,
         cmd: &UserCmd,
+        penalty: f32,
     ) -> Vec<Bullet> {
+        let cone = bullets
+            .accuracy
+            .map_or(bullets.cone, |accuracy| accuracy.cone(penalty));
+        let head_scale = self.data.player.head_scale;
         let targets = self.targets_seen(cmd.view_tick);
         let forward = view_direction(aim.pitch, aim.yaw);
         let mut rng = Rng::seeded(&[u64::from(cmd.number), id.index() as u64, mode as u64]);
@@ -166,16 +178,14 @@ impl Simulation {
         };
         (0..bullets.pellets)
             .map(|_| {
-                let direction = hitscan::spread(forward, bullets.spread, &mut rng);
+                let direction = hitscan::spread(forward, cone, &mut rng);
                 let end = aim.eye + direction * bullets.range;
                 let trace = hitscan::trace(&scene, &targets, id, aim.eye, end, &Hull::POINT);
-                let falloff = bullets
-                    .falloff
-                    .map_or(1.0, |falloff| falloff.scale(aim.eye.distance(trace.end)));
+                let scale = if trace.head { head_scale } else { 1.0 };
                 Bullet {
                     direction,
                     trace,
-                    damage: bullets.damage * falloff,
+                    damage: bullets.damage * scale,
                 }
             })
             .collect()
@@ -264,7 +274,9 @@ impl Simulation {
         }
     }
 
-    /// Launches a projectile from the eyes along the view.
+    /// Launches a projectile from the eyes along the view. A shot made
+    /// while crouching may be a different projectile (a grenade rolled
+    /// instead of lobbed).
     fn launch(
         &mut self,
         id: PlayerId,
@@ -273,22 +285,70 @@ impl Simulation {
         projectile: &ProjectileConfig,
         aim: &Aim,
     ) {
+        let ducked = self.player(id).is_some_and(|player| player.state.ducked);
+        let projectile = match &projectile.crouched {
+            Some(crouched) if ducked => crouched.as_ref(),
+            _ => projectile,
+        };
         if let Some(body) = &projectile.body {
             self.throw_grenade(id, weapon, mode, projectile, body, aim);
             return;
         }
         let forward = view_direction(aim.pitch, aim.yaw);
+        let (position, velocity) = match &projectile.missile {
+            Some(missile) => {
+                // Source's right-hand vector: forward × up.
+                let right = forward
+                    .cross(Vec3::Z)
+                    .try_normalize()
+                    .unwrap_or(Vec3::NEG_Y);
+                let [ahead, aside, up] = missile.muzzle;
+                (
+                    aim.eye + forward * ahead + right * aside + Vec3::Z * up,
+                    forward * missile.launch_forward + Vec3::Z * missile.launch_up,
+                )
+            }
+            None => (
+                aim.eye,
+                forward * projectile.speed + Vec3::Z * projectile.lift,
+            ),
+        };
         self.projectiles.push(Projectile {
             id: self.next_projectile,
             weapon,
             mode,
             owner: id,
-            position: aim.eye,
-            velocity: forward * projectile.speed + Vec3::Z * projectile.lift,
+            position,
+            velocity,
             age: 0.0,
             resting: false,
+            heading: forward,
+            lit: false,
+            steer_clock: 0.0,
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
+    }
+
+    /// Where the laser of a missile's owner points: along their view from
+    /// their eyes to the first thing it meets, if they still hold the
+    /// launcher with its laser on.
+    fn laser_dot(&self, projectile: &Projectile, targets: &[Target]) -> Option<Vec3> {
+        let player = self.player(projectile.owner)?;
+        let inventory = &player.inventory;
+        if !player.alive() || inventory.active() != Some(projectile.weapon) || !inventory.laser() {
+            return None;
+        }
+        let eye = self.eye_position(projectile.owner)?;
+        let (pitch, yaw) = player.look;
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let end = eye + view_direction(pitch, yaw) * LASER_RANGE;
+        let trace = hitscan::trace(&scene, targets, projectile.owner, eye, end, &Hull::POINT);
+        (trace.struck != Struck::Nothing).then_some(trace.end)
     }
 
     /// Flies every projectile one tick; those that strike, burst or expire
@@ -299,6 +359,11 @@ impl Simulation {
         }
         let arsenal = Arc::clone(&self.arsenal);
         let targets = self.targets();
+        let dots: Vec<Option<Vec3>> = self
+            .projectiles
+            .iter()
+            .map(|projectile| self.laser_dot(projectile, &targets))
+            .collect();
         let scene = Scene {
             world: &self.world,
             physics: &self.physics,
@@ -306,14 +371,23 @@ impl Simulation {
             others: &[],
         };
         let mut ended = Vec::new();
+        let mut dots = dots.into_iter();
         self.projectiles.retain_mut(|projectile| {
+            let dot = dots.next().flatten();
             let Some(Shot::Projectile(config)) = arsenal
                 .fire(projectile.weapon, projectile.mode)
                 .map(|fire| &fire.shot)
             else {
                 return false;
             };
-            match projectile.advance(config, self.data.physics.gravity, self.dt, &scene, &targets) {
+            match projectile.advance(
+                config,
+                self.data.physics.gravity,
+                self.dt,
+                &scene,
+                &targets,
+                dot,
+            ) {
                 Flight::Flying | Flight::Bounced => true,
                 flight => {
                     ended.push((projectile.clone(), flight));
@@ -322,6 +396,11 @@ impl Simulation {
             }
         });
         for (projectile, flight) in ended {
+            if let Some(player) = self.player_mut(projectile.owner) {
+                player
+                    .inventory
+                    .projectile_ended(&arsenal, projectile.weapon);
+            }
             let Some(Shot::Projectile(config)) = arsenal
                 .fire(projectile.weapon, projectile.mode)
                 .map(|fire| &fire.shot)
@@ -428,7 +507,9 @@ impl Simulation {
         let targets = self.targets();
         for reach in blast::players(center, explosion, &targets, &self.world) {
             if let Some(player) = self.player_mut(reach.player) {
-                player.state.velocity += reach.direction * explosion.knockback * reach.scale;
+                let speed = explosion.knockback * reach.scale;
+                let speed = explosion.knockback_cap.map_or(speed, |cap| speed.min(cap));
+                player.state.velocity += reach.direction * speed;
             }
             if explosion.damage <= 0.0 {
                 continue;

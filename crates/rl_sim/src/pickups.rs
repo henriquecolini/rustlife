@@ -28,8 +28,11 @@ pub enum Gives {
     Weapon {
         /// The weapon.
         weapon: WeaponId,
-        /// Rounds of its main ammo type, if it has one.
+        /// Rounds of its main ammo type given with a weapon the player
+        /// did not have, if it has one.
         ammo: Option<(AmmoId, u32)>,
+        /// The rounds given instead to a player who already has the weapon.
+        owned_ammo: Option<(AmmoId, u32)>,
     },
     /// Health, up to the player's maximum.
     Health(f32),
@@ -156,11 +159,16 @@ impl Pickup {
             return false;
         }
         let used = match &self.gives {
-            Gives::Weapon { weapon, ammo } => {
+            Gives::Weapon {
+                weapon,
+                ammo,
+                owned_ammo,
+            } => {
                 let new = inventory.give_weapon(arsenal, *weapon);
-                let rounds =
-                    ammo.is_some_and(|(ammo, count)| inventory.give_ammo(arsenal, ammo, count) > 0);
-                new || rounds
+                let rounds = if new { ammo } else { owned_ammo };
+                let taken = rounds
+                    .is_some_and(|(ammo, count)| inventory.give_ammo(arsenal, ammo, count) > 0);
+                new || taken
             }
             Gives::Health(amount) => vitals.heal(*amount, player.health.max),
             Gives::Armor(amount) => vitals.add_armor(*amount, player.armor.max),
@@ -214,17 +222,18 @@ pub fn from_entities(entities: &[MapEntity], data: &GameData, arsenal: &Arsenal)
 fn weapon_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup> {
     let config = data.weapons.get(id)?;
     let pickup = config.pickup.as_ref()?;
-    let ammo = config
-        .ammo_type()
-        .and_then(|ammo| arsenal.find_ammo(ammo))
-        .map(|ammo| (ammo, pickup.ammo))
-        .filter(|&(_, count)| count > 0);
+    let main = config.ammo_type().and_then(|ammo| arsenal.find_ammo(ammo));
+    let rounds = |count: u32| {
+        main.map(|ammo| (ammo, count))
+            .filter(|&(_, count)| count > 0)
+    };
     Some(Pickup {
         id: id.to_owned(),
         name: config.name.clone(),
         gives: Gives::Weapon {
             weapon: arsenal.find_weapon(id)?,
-            ammo,
+            ammo: rounds(pickup.ammo),
+            owned_ammo: rounds(pickup.owned_ammo),
         },
         model: config.world_model.clone(),
         origin: Vec3::ZERO,
@@ -312,7 +321,8 @@ mod tests {
             pickups[1].gives,
             Gives::Weapon {
                 weapon: arsenal.find_weapon("scattergun").expect("weapon"),
-                ammo: Some((arsenal.find_ammo("buckshot").expect("ammo"), 12)),
+                ammo: None,
+                owned_ammo: Some((arsenal.find_ammo("buckshot").expect("ammo"), 6)),
             }
         );
     }
@@ -335,7 +345,7 @@ mod tests {
             !medkit.take(&mut hurt, &mut inventory, &arsenal, &data.player),
             "gone until it respawns"
         );
-        let ticks = (20.0 * 66.0) as usize;
+        let ticks = (30.0 * 66.0) as usize;
         let back = (0..=ticks).filter(|_| medkit.tick(1.0 / 66.0)).count();
         assert_eq!(back, 1);
         assert!(medkit.available());
@@ -348,10 +358,10 @@ mod tests {
         let mut inventory = Inventory::empty(&arsenal);
         let shells = arsenal.find_ammo("buckshot").expect("ammo");
         assert!(pickups[0].take(&mut vitals, &mut inventory, &arsenal, &data.player));
-        assert_eq!(inventory.ammo(shells), 12);
+        assert_eq!(inventory.ammo(shells), 0, "a new shotgun just has its clip");
         pickups[0].away = 0.0;
         assert!(pickups[0].take(&mut vitals, &mut inventory, &arsenal, &data.player));
-        assert_eq!(inventory.ammo(shells), 24);
+        assert_eq!(inventory.ammo(shells), 6);
         inventory.give_ammo(&arsenal, shells, 100);
         pickups[0].away = 0.0;
         assert!(

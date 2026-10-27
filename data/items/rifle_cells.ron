@@ -1,10 +1,10 @@
-// A rifle energy cell.
+// Rifle cells.
 Item(
     name: "Rifle cells",
     model: "models/items/combine_rifle_cartridge01.mdl",
-    gives: Ammo({"rifle": 30}),
-    // Seconds before it comes back once taken.
-    respawn: 20.0,
+    gives: Ammo({"rifle": 20}),
+    // Seconds before it comes back once taken (sv_hl2mp_item_respawn_time).
+    respawn: 30.0,
     // Taken by a player whose box comes within this many units of it.
     radius: 24.0,
     sounds: {"pickup": "BaseCombatCharacter.AmmoPickup"},

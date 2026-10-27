@@ -771,7 +771,8 @@ fn a_thrown_grenade_is_seen_by_every_client_until_it_bursts() {
             ..UserCmd::default()
         })
     });
-    game.run(60, UserCmd::default());
+    // (The grenade takes 1.267 s to come up.)
+    game.run(100, UserCmd::default());
     game.step_with(|index, _| {
         (index == a).then(|| UserCmd {
             buttons: Buttons::ATTACK,

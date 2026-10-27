@@ -43,13 +43,15 @@ Rules(
     ),
     // Everyone spawns with these, the active one in hand and full clips.
     loadout: (
-        weapons: ["manipulator", "bar", "sidearm", "smg", "frag"],
-        active: "smg",
-        ammo: {"pistol": 45, "smg": 90, "frag": 1},
+        // HL2DM's: the Stun Baton, pistol, SMG, grenade, Gravity Gun and
+        // Crowbar, with the Gravity Gun in hand; 255 pistol rounds (the cap
+        // keeps 150), 45 SMG, a grenade, 6 shells and 6 magnum rounds.
+        weapons: ["stunstick", "sidearm", "smg", "frag", "manipulator", "bar"],
+        active: "manipulator",
+        ammo: {"pistol": 255, "smg": 45, "frag": 1, "buckshot": 6, "magnum": 6},
     ),
-    // Your own blasts hurt you this much (they still throw you as hard:
-    // rocket jumps cost about 50 health).
-    self_damage: 0.5,
+    // Your own blasts hurt you this much: as much as anyone's, in HL2DM.
+    self_damage: 1.0,
     // Points lost for dying by your own hand, a fall or the map.
     suicide_penalty: 5,
     // A prop thrown, punted or dropped by a player is theirs for this long:

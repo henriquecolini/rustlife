@@ -1,9 +1,9 @@
-// A bundle of bolts.
+// Bolts.
 Item(
     name: "Bolts",
     model: "models/items/crossbowrounds.mdl",
-    gives: Ammo({"bolt": 4}),
-    // Seconds before it comes back once taken.
+    gives: Ammo({"bolt": 6}),
+    // Seconds before it comes back once taken (sv_hl2mp_item_respawn_time).
     respawn: 30.0,
     // Taken by a player whose box comes within this many units of it.
     radius: 24.0,

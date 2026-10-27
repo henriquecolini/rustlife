@@ -64,6 +64,8 @@ fn crate_desc(data: &GameData, origin: Vec3) -> PropDesc {
 /// Gives `player` the weapon `name` with plenty of ammo, in hand and
 /// ready.
 fn arm(sim: &mut Simulation, player: PlayerId, name: &str) {
+    // The match starts on the first tick and deals everyone the loadout.
+    idle(sim, player, 2);
     let arsenal = sim.arsenal().clone();
     let weapon = arsenal.find_weapon(name).expect("weapon");
     let ammo = arsenal
@@ -80,7 +82,8 @@ fn arm(sim: &mut Simulation, player: PlayerId, name: &str) {
         ..UserCmd::default()
     };
     sim.tick(&[(player, select)]);
-    idle(sim, player, 66);
+    // Long enough for any weapon to come up (the slowest takes 1.3 s).
+    idle(sim, player, 100);
 }
 
 /// Runs `ticks` ticks with `player` standing still (their weapon deploys

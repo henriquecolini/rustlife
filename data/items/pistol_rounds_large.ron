@@ -1,0 +1,11 @@
+// Large box of pistol rounds.
+Item(
+    name: "Large box of pistol rounds",
+    model: "models/items/boxsrounds.mdl",
+    gives: Ammo({"pistol": 100}),
+    // Seconds before it comes back once taken (sv_hl2mp_item_respawn_time).
+    respawn: 30.0,
+    // Taken by a player whose box comes within this many units of it.
+    radius: 24.0,
+    sounds: {"pickup": "BaseCombatCharacter.AmmoPickup"},
+)

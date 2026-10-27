@@ -9,10 +9,12 @@ Player(
         spawn: 0.0,
         max: 100.0,
         // While it lasts, armor takes this share of every hit...
-        absorb: 0.6,
+        absorb: 0.8,
         // ...losing this many points per point of damage it takes.
         cost: 1.0,
     ),
+    // A bullet through the head does this many times its damage.
+    head_scale: 3.0,
     // Each player is drawn with the next model of this list.
     models: [
         "models/humans/group03/male_07.mdl",

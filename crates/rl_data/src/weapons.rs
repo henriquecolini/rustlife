@@ -29,11 +29,19 @@ pub const MAX_SLOT: u8 = 9;
 /// - `pickup`, `drop`, `launch`, `punt`, `dryfire`: the Manipulator
 ///   picking a prop up, letting it go, throwing it, knocking one away, or
 ///   finding nothing to throw;
-/// - `blip`: a thrown projectile's fuse ticking (see [`BlipConfig`]).
-pub const WEAPON_SOUNDS: [&str; 11] = [
+/// - `blip`: a thrown projectile's fuse ticking (see [`BlipConfig`]);
+/// - `empty`: the trigger pulled on an empty clip;
+/// - `pump`: the shotgun working its action;
+/// - `charge`: a delayed shot ([`FireConfig::charge`]) beginning to build.
+pub const WEAPON_SOUNDS: [&str; 14] = [
     "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
-    "blip",
+    "blip", "empty", "pump", "charge",
 ];
+
+/// For serde defaults.
+fn yes() -> bool {
+    true
+}
 
 /// One weapon.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,11 +80,57 @@ pub struct WeaponConfig {
     /// last one.
     #[serde(default)]
     pub consumable: bool,
+    /// Seconds after a shot that empties the clip before it is reloaded
+    /// whatever the buttons do (the crossbow, which reloads once its firing
+    /// animation is over); by default an empty clip reloads when the weapon
+    /// next gets the chance.
+    #[serde(default)]
+    pub auto_reload: Option<f32>,
+    /// Seconds the weapon spends working its action after a shot, once the
+    /// shot's own interval is over, before anything fires again (the
+    /// shotgun's pump).
+    #[serde(default)]
+    pub pump: Option<f32>,
+    /// How HL2 ranks the weapon when one has to be chosen for the player:
+    /// the heaviest weapon that has ammo is brought up when the weapon in
+    /// hand has none left.
+    #[serde(default)]
+    pub weight: i32,
+    /// Whether this weapon may be brought up by that automatic choice (the
+    /// Gravity Gun never is).
+    #[serde(default = "yes")]
+    pub auto_switch_to: bool,
+    /// A zoom the alternate button toggles, if the weapon has one.
+    #[serde(default)]
+    pub zoom: Option<ZoomConfig>,
+    /// The weapon holds one rocket in the air at a time (HL2's RPG): while
+    /// the last one flies nothing fires, and once it is gone the launcher
+    /// reloads for this many seconds before it can fire again.
+    #[serde(default)]
+    pub reload_after_projectile: Option<f32>,
+    /// The alternate button toggles a laser (which steers the weapon's
+    /// [missiles](MissileConfig)), on at first.
+    #[serde(default)]
+    pub laser: bool,
     /// The glyph of the weapon's icon in the HUD's icon font (see
     /// [`HudConfig::weapon_icon_font`](crate::HudConfig::weapon_icon_font));
     /// the weapon list shows only its name without one.
     #[serde(default)]
     pub icon: Option<char>,
+}
+
+/// A scope: the field of view narrows while the alternate button's toggle is
+/// on. It ends when the weapon is put away or the player dies.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoomConfig {
+    /// Vertical-equivalent field of view while zoomed, degrees (HL2's FOV is
+    /// horizontal on a 4:3 screen; the client converts).
+    pub fov: f32,
+    /// Seconds to zoom in.
+    pub in_time: f32,
+    /// Seconds to zoom out.
+    pub out_time: f32,
 }
 
 /// A weapon's magazine.
@@ -100,13 +154,18 @@ pub enum Reload {
         /// Seconds to reload.
         time: f32,
     },
-    /// One round at a time: `start` seconds to begin, then one round every
-    /// `each` seconds. Firing interrupts it with whatever is loaded.
+    /// One round at a time, as HL2's shotgun does: a `start` animation, then
+    /// a round goes in at the beginning of every `each`-second step, then a
+    /// `finish` animation once the clip is full or the ammo has run out.
+    /// Firing during a step ends the reload as soon as that step is over,
+    /// skipping the finish.
     PerRound {
-        /// Seconds before the first round goes in.
+        /// Seconds the reload takes to begin, before the first round goes in.
         start: f32,
         /// Seconds per round.
         each: f32,
+        /// Seconds the closing animation takes; nothing fires during it.
+        finish: f32,
     },
 }
 
@@ -114,8 +173,25 @@ pub enum Reload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FireConfig {
-    /// Seconds between shots (or, for the Manipulator, between actions).
+    /// Seconds before this fire mode can go off again (or, for the
+    /// Manipulator, between actions). A mode that is held fires on this
+    /// beat, exactly: the remainder of a tick carries over, so a gun
+    /// firing faster than the tick fires more than one round in some
+    /// ticks.
     pub interval: f32,
+    /// Seconds before the *other* fire mode can go off after this one has
+    /// (HL2's weapons set both attack times; 0 leaves the other alone).
+    #[serde(default)]
+    pub other_interval: f32,
+    /// A fresh press may fire this soon after the last shot, though a held
+    /// button waits for the whole `interval`: HL2's pistol, which fires as
+    /// fast as it can be clicked.
+    #[serde(default)]
+    pub click_interval: Option<f32>,
+    /// Seconds between the press and the shot going off, during which the
+    /// weapon is busy (the Pulse Rifle's energy ball charges first).
+    #[serde(default)]
+    pub charge: f32,
     /// Keeps firing while the button is held; otherwise every shot needs a
     /// fresh press.
     pub automatic: bool,
@@ -169,43 +245,52 @@ pub enum Shot {
 pub struct HitscanConfig {
     /// Bullets per shot, each with its own spread.
     pub pellets: u32,
-    /// Damage per bullet, before falloff.
+    /// Damage per bullet. Bullets lose none over distance, as in HL2.
     pub damage: f32,
-    /// Largest angle between a bullet and the view, degrees.
-    pub spread: f32,
+    /// How far a bullet strays, as Source gives it: a vector cone whose
+    /// value is the sine of half the cone's angle (`0.0436` is the
+    /// engine's `VECTOR_CONE_5DEGREES`). Each bullet is turned sideways and
+    /// upwards by a draw in `-cone..=cone` per axis, triangularly
+    /// distributed (the sum of two uniform draws, so aimed shots cluster
+    /// towards the middle).
+    pub cone: f32,
+    /// A cone that widens with firing, instead of `cone`, if set.
+    #[serde(default)]
+    pub accuracy: Option<AccuracyConfig>,
     /// Farthest a bullet reaches, units.
     pub range: f32,
-    /// Damage loss over distance, if any.
-    pub falloff: Option<Falloff>,
     /// Impulse a bullet gives the prop it hits, kg·units/s.
     pub force: f32,
 }
 
-/// Damage falling off linearly with distance.
+/// A cone that opens as shots are fired and closes as the trigger rests:
+/// HL2's pistol. Each shot adds `per_shot` seconds of penalty (up to
+/// `full` of them); the penalty drains at one second per second while the
+/// button is up and the weapon is ready again; the cone is `min` with no
+/// penalty and `max` with `full` seconds of it, in between linearly.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Falloff {
-    /// Full damage up to this distance, units...
-    pub start: f32,
-    /// ...falling linearly to `min_scale` of it at this distance and
-    /// beyond.
-    pub end: f32,
-    /// Fraction of the damage left at `end`.
-    pub min_scale: f32,
+pub struct AccuracyConfig {
+    /// The cone of a rested weapon.
+    pub min: f32,
+    /// The cone at full penalty.
+    pub max: f32,
+    /// Seconds of penalty each shot adds.
+    pub per_shot: f32,
+    /// Seconds of penalty at which the cone is widest.
+    pub full: f32,
 }
 
-impl Falloff {
-    /// The damage multiplier at `distance` units.
+impl AccuracyConfig {
+    /// The cone at `penalty` seconds of penalty.
     #[must_use]
-    pub fn scale(&self, distance: f32) -> f32 {
-        if distance <= self.start {
-            return 1.0;
-        }
-        if distance >= self.end || self.end <= self.start {
-            return self.min_scale;
-        }
-        let t = (distance - self.start) / (self.end - self.start);
-        1.0 + (self.min_scale - 1.0) * t
+    pub fn cone(&self, penalty: f32) -> f32 {
+        let widening = if self.full > 0.0 {
+            (penalty / self.full).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.min + (self.max - self.min) * widening
     }
 }
 
@@ -250,11 +335,41 @@ pub struct ProjectileConfig {
     pub explosion: Option<ExplosionConfig>,
     /// Seconds before it disappears if nothing else ends it.
     pub lifetime: f32,
+    /// A rocket that is steered by its owner's laser, if it is one.
+    #[serde(default)]
+    pub missile: Option<MissileConfig>,
+    /// What a shot made while the shooter is crouching is instead (a
+    /// grenade rolled along the floor, where standing it is lobbed).
+    #[serde(default)]
+    pub crouched: Option<Box<ProjectileConfig>>,
     /// Simulated as a rigid body like any prop — it tumbles, rolls, bounces
     /// off players and can be shoved by blasts — instead of flying as a
     /// small box. Grenades are.
     #[serde(default)]
     pub body: Option<ProjectileBodyConfig>,
+}
+
+/// A rocket in the manner of HL2's RPG: it leaves the launcher slowly,
+/// lobbed a little upwards, lights its motor after `ignite_delay` seconds
+/// and then flies at the projectile's `speed`, bending towards the laser
+/// dot of whoever fired it, if their launcher is in hand and its laser on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MissileConfig {
+    /// Seconds the motor takes to light.
+    pub ignite_delay: f32,
+    /// Speed forwards before the motor lights, units/s...
+    pub launch_forward: f32,
+    /// ...and upwards.
+    pub launch_up: f32,
+    /// How far the heading turns towards the laser dot at each steering
+    /// step: the fraction of the way.
+    pub steer: f32,
+    /// Seconds between steering steps.
+    pub steer_interval: f32,
+    /// Where it leaves the launcher relative to the eyes: forwards, right
+    /// and up, units.
+    pub muzzle: [f32; 3],
 }
 
 /// A projectile that is a physics body.
@@ -338,6 +453,12 @@ pub struct ExplosionConfig {
     pub damage: f32,
     /// Speed given to a player at the centre, units/s, away from it.
     pub knockback: f32,
+    /// The most speed a player is given, units/s, wherever they are.
+    /// HL2 pushes with a force of 4 units/s per point of damage that stops
+    /// growing at 100: a blast pushes about as hard at 100 damage as at
+    /// 150.
+    #[serde(default)]
+    pub knockback_cap: Option<f32>,
     /// Impulse given to a prop at the centre, kg·units/s.
     pub force: f32,
 }
@@ -359,8 +480,13 @@ impl ExplosionConfig {
 #[serde(deny_unknown_fields)]
 pub struct WeaponPickupConfig {
     /// Carried ammo of the weapon's [main type](WeaponConfig::ammo_type)
-    /// given with it (a new weapon also comes with a full clip).
+    /// given with a weapon the player did not have (it also comes with a
+    /// full clip).
     pub ammo: u32,
+    /// The ammo given instead to a player who already has the weapon: HL2
+    /// takes the picked-up weapon's clip off it, its `default_clip`.
+    #[serde(default)]
+    pub owned_ammo: u32,
     /// Seconds before the pickup comes back.
     pub respawn: f32,
     /// A player touches it when it is within this distance of their box,
@@ -416,15 +542,34 @@ impl WeaponConfig {
             check.fail("world_model", "must name a model");
         }
         check.non_negative("deploy_time", self.deploy_time);
+        if let Some(auto) = self.auto_reload {
+            check.non_negative("auto_reload", auto);
+        }
+        if let Some(pump) = self.pump {
+            check.non_negative("pump", pump);
+        }
+        if let Some(reload) = self.reload_after_projectile {
+            check.positive("reload_after_projectile", reload);
+        }
+        if let Some(zoom) = &self.zoom {
+            check.range("zoom.fov", zoom.fov, 1.0, 179.0);
+            check.non_negative("zoom.in_time", zoom.in_time);
+            check.non_negative("zoom.out_time", zoom.out_time);
+        }
         if let Some(clip) = &self.clip {
             if clip.size == 0 {
                 check.fail("clip.size", "must hold at least one round");
             }
             match clip.reload {
                 Reload::Whole { time } => check.non_negative("clip.reload.time", time),
-                Reload::PerRound { start, each } => {
+                Reload::PerRound {
+                    start,
+                    each,
+                    finish,
+                } => {
                     check.non_negative("clip.reload.start", start);
                     check.positive("clip.reload.each", each);
+                    check.non_negative("clip.reload.finish", finish);
                 }
             }
         }
@@ -458,6 +603,11 @@ impl WeaponConfig {
 
     fn validate_fire(&self, check: &mut Validator, field: &str, fire: &FireConfig) {
         check.positive(&format!("{field}.interval"), fire.interval);
+        check.non_negative(&format!("{field}.other_interval"), fire.other_interval);
+        check.non_negative(&format!("{field}.charge"), fire.charge);
+        if let Some(click) = fire.click_interval {
+            check.positive(&format!("{field}.click_interval"), click);
+        }
         match &fire.ammo {
             FireAmmo::Unlimited => {}
             FireAmmo::Clip(count) => {
@@ -503,23 +653,14 @@ fn validate_hitscan(check: &mut Validator, field: &str, hitscan: &HitscanConfig)
         check.fail(&format!("{field}.pellets"), "must fire at least one bullet");
     }
     check.non_negative(&format!("{field}.damage"), hitscan.damage);
-    check.range(&format!("{field}.spread"), hitscan.spread, 0.0, 90.0);
+    check.range(&format!("{field}.cone"), hitscan.cone, 0.0, 1.0);
     check.positive(&format!("{field}.range"), hitscan.range);
     check.non_negative(&format!("{field}.force"), hitscan.force);
-    if let Some(falloff) = &hitscan.falloff {
-        check.non_negative(&format!("{field}.falloff.start"), falloff.start);
-        if falloff.end < falloff.start {
-            check.fail(
-                &format!("{field}.falloff.end"),
-                "must not be nearer than start",
-            );
-        }
-        check.range(
-            &format!("{field}.falloff.min_scale"),
-            falloff.min_scale,
-            0.0,
-            1.0,
-        );
+    if let Some(accuracy) = &hitscan.accuracy {
+        check.range(&format!("{field}.accuracy.min"), accuracy.min, 0.0, 1.0);
+        check.range(&format!("{field}.accuracy.max"), accuracy.max, 0.0, 1.0);
+        check.non_negative(&format!("{field}.accuracy.per_shot"), accuracy.per_shot);
+        check.positive(&format!("{field}.accuracy.full"), accuracy.full);
     }
 }
 
@@ -564,6 +705,16 @@ fn validate_projectile(check: &mut Validator, field: &str, projectile: &Projecti
             );
         }
     }
+    if let Some(missile) = &projectile.missile {
+        let field = format!("{field}.missile");
+        check.non_negative(&format!("{field}.ignite_delay"), missile.ignite_delay);
+        check.non_negative(&format!("{field}.launch_forward"), missile.launch_forward);
+        check.range(&format!("{field}.steer"), missile.steer, 0.0, 1.0);
+        check.positive(&format!("{field}.steer_interval"), missile.steer_interval);
+    }
+    if let Some(crouched) = &projectile.crouched {
+        validate_projectile(check, &format!("{field}.crouched"), crouched);
+    }
     if let Some(explosion) = &projectile.explosion {
         check.positive(&format!("{field}.explosion.radius"), explosion.radius);
         check.non_negative(&format!("{field}.explosion.damage"), explosion.damage);
@@ -595,11 +746,14 @@ mod tests {
                 shot: Shot::Hitscan(HitscanConfig {
                     pellets: 1,
                     damage: 10.0,
-                    spread: 1.0,
+                    cone: 0.01,
+                    accuracy: None,
                     range: 4096.0,
-                    falloff: None,
                     force: 100.0,
                 }),
+                other_interval: 0.0,
+                click_interval: None,
+                charge: 0.0,
                 on_release: false,
             }),
             secondary: None,
@@ -608,6 +762,13 @@ mod tests {
             sounds: BTreeMap::new(),
             hold: None,
             consumable: false,
+            auto_reload: None,
+            pump: None,
+            reload_after_projectile: None,
+            laser: false,
+            weight: 0,
+            auto_switch_to: true,
+            zoom: None,
             icon: None,
         }
     }
@@ -642,20 +803,11 @@ mod tests {
         weapon.slot = 0;
         if let Some(Shot::Hitscan(hitscan)) = weapon.primary.as_mut().map(|fire| &mut fire.shot) {
             hitscan.pellets = 0;
-            hitscan.falloff = Some(Falloff {
-                start: 100.0,
-                end: 50.0,
-                min_scale: 2.0,
-            });
+            hitscan.cone = 2.0;
         }
         assert_eq!(
             problems(&weapon),
-            [
-                "slot",
-                "primary.shot.pellets",
-                "primary.shot.falloff.end",
-                "primary.shot.falloff.min_scale"
-            ]
+            ["slot", "primary.shot.pellets", "primary.shot.cone"]
         );
     }
 
@@ -667,15 +819,18 @@ mod tests {
     }
 
     #[test]
-    fn falloff_is_linear_between_its_ends() {
-        let falloff = Falloff {
-            start: 100.0,
-            end: 300.0,
-            min_scale: 0.5,
+    fn accuracy_widens_with_penalty_up_to_its_limit() {
+        let accuracy = AccuracyConfig {
+            min: 0.01,
+            max: 0.05,
+            per_shot: 0.2,
+            full: 1.5,
         };
-        assert_eq!(falloff.scale(50.0), 1.0);
-        assert_eq!(falloff.scale(200.0), 0.75);
-        assert_eq!(falloff.scale(1000.0), 0.5);
+        assert_eq!(accuracy.cone(0.0), 0.01);
+        assert!((accuracy.cone(0.75) - 0.03).abs() < 1e-6);
+        assert!((accuracy.cone(1.5) - 0.05).abs() < 1e-6);
+        assert!((accuracy.cone(9.0) - 0.05).abs() < 1e-6, "capped");
+        assert_eq!(accuracy.cone(-1.0), 0.01, "never negative");
     }
 
     #[test]
@@ -718,6 +873,7 @@ mod tests {
             radius: 200.0,
             damage: 100.0,
             knockback: 0.0,
+            knockback_cap: None,
             force: 0.0,
         };
         assert_eq!(blast.scale(0.0), 1.0);

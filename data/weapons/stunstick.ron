@@ -1,0 +1,25 @@
+// The Stun Baton: HL2DM's second melee weapon, slower and harder than the
+// Crowbar. A swing reaches 75 units, does 40 damage and can be repeated every
+// 0.8 seconds; drawing it takes 0.933 s (`models/weapons/v_stunstick.mdl`).
+Weapon(
+    name: "Stun Baton",
+    slot: 1,
+    // The letter of this weapon's icon in the game's HL2 icon font.
+    icon: Some('n'),
+    position: 1,
+    weight: 0,
+    view_model: Some("models/weapons/v_stunstick.mdl"),
+    world_model: "models/weapons/w_stunbaton.mdl",
+    clip: None,
+    primary: Some((
+        interval: 0.8,
+        automatic: true,
+        ammo: Unlimited,
+        shot: Melee((range: 75.0, size: 8.0, damage: 40.0, force: 12000.0)),
+    )),
+    secondary: None,
+    deploy_time: 0.933,
+    pickup: Some((ammo: 0, respawn: 20.0, radius: 24.0)),
+    sounds: {"fire": "Weapon_StunStick.Swing", "hit": "Weapon_StunStick.Melee_Hit"},
+    hold: Some("melee"),
+)

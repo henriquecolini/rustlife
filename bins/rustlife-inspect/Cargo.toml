@@ -12,6 +12,7 @@ anyhow.workspace = true
 clap.workspace = true
 rl_config.workspace = true
 source_fs.workspace = true
+source_formats.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

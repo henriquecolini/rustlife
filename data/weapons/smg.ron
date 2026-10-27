@@ -1,10 +1,16 @@
-// A fast-firing submachine gun with an underslung grenade launcher.
+// The SMG. HL2DM's numbers: 45 rounds of 5 damage at 13.3 rounds a second
+// (every 0.075 s) in a 5-degree cone, reloaded in the view model's 1.5 s,
+// drawn in 0.833 s. The alternate fire throws a grenade at 1000 units/s
+// under 400 units/s² of gravity that bursts on whatever it touches, 100
+// damage over 250 units; it holds the SMG back for half a second and itself
+// for a second.
 Weapon(
     name: "SMG",
     slot: 3,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('a'),
     position: 0,
+    weight: 3,
     view_model: Some("models/weapons/v_smg1.mdl"),
     world_model: "models/weapons/w_smg1.mdl",
     clip: Some((ammo: "smg", size: 45, reload: Whole(time: 1.5))),
@@ -14,37 +20,38 @@ Weapon(
         ammo: Clip(1),
         shot: Hitscan((
             pellets: 1,
-            damage: 9.0,
-            spread: 3.0,
-            range: 8192.0,
-            falloff: Some((start: 768.0, end: 2048.0, min_scale: 0.5)),
-            force: 800.0,
+            damage: 5.0,
+            cone: 0.04362,
+            range: 56755.0,
+            force: 667.0,
         )),
     )),
-    // A contact grenade: arcs under full gravity and bursts where it lands.
     secondary: Some((
         interval: 1.0,
-        automatic: false,
+        other_interval: 0.5,
+        automatic: true,
         ammo: Reserve(ammo: "smg_grenade", count: 1),
         shot: Projectile((
             model: "models/items/ar2_grenade.mdl",
             speed: 1000.0,
             lift: 0.0,
-            gravity: 1.0,
-            size: 2.0,
+            // 400 units/s² of an 800 units/s² world.
+            gravity: 0.5,
+            size: 3.0,
             bounce: None,
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 220.0, damage: 100.0, knockback: 600.0, force: 60000.0)),
+            explosion: Some((radius: 250.0, damage: 100.0, knockback: 353.0, knockback_cap: Some(353.0), force: 60000.0)),
             lifetime: 10.0,
         )),
     )),
-    deploy_time: 0.5,
-    pickup: Some((ammo: 45, respawn: 20.0, radius: 24.0)),
+    deploy_time: 0.833,
+    pickup: Some((ammo: 0, owned_ammo: 45, respawn: 20.0, radius: 24.0)),
     sounds: {
         "fire": "Weapon_SMG1.Single",
         "fire2": "Weapon_SMG1.Double",
         "reload": "Weapon_SMG1.Reload",
+        "empty": "Weapon_SMG1.Empty",
     },
     // Players hold it with the smg1 sequences of HL2DM's player models (run_smg1, ...).
     hold: Some("smg1"),

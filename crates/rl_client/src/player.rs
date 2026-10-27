@@ -434,6 +434,11 @@ fn predicted_events(
             .collect(),
         reloads: with_active(prediction.weapon.reloading),
         deploys: with_active(prediction.weapon.switched),
+        noises: active
+            .zip(prediction.weapon.noise)
+            .map(|(weapon, noise)| (player, weapon, noise))
+            .into_iter()
+            .collect(),
         shots: prediction.shots.clone(),
         moves: vec![(player, prediction.moved)],
         ..TickEvents::default()

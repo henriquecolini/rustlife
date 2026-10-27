@@ -524,6 +524,7 @@ impl Simulation {
                 radius,
                 damage,
                 knockback: tuning.explosion_knockback,
+                knockback_cap: None,
                 force: tuning.explosion_force,
             };
             self.explode(attacker, BlastSource::Prop, position, &explosion, events);

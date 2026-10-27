@@ -1,34 +1,52 @@
-// A rocket launcher. Rockets fly straight and burst on contact; one under
-// your own feet throws you about 640 units/s upwards.
+// The RPG. HL2DM's numbers: a rocket does 150 damage over a radius of twice
+// that, 300 units. It leaves the launcher at 300 units/s lobbed upwards,
+// lights its motor after 0.3 s and flies at 1500 units/s, steering towards
+// the laser dot the launcher draws while it is in hand. Only one rocket
+// flies at a time: once it has burst, the launcher reloads for the view
+// model's 1.667 s. The alternate button toggles the laser. Drawing takes
+// 1.1 s.
 Weapon(
     name: "RPG",
     slot: 5,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('i'),
-    position: 0,
+    position: 1,
+    weight: 0,
     view_model: Some("models/weapons/v_rpg.mdl"),
     world_model: "models/weapons/w_rocket_launcher.mdl",
     clip: None,
+    reload_after_projectile: Some(1.667),
+    laser: true,
     primary: Some((
-        interval: 1.2,
-        automatic: false,
+        interval: 0.5,
+        automatic: true,
         ammo: Reserve(ammo: "rocket", count: 1),
         shot: Projectile((
             model: "models/weapons/w_missile.mdl",
-            speed: 1200.0,
+            speed: 1500.0,
             lift: 0.0,
-            gravity: 0.0,
-            size: 3.0,
+            // A rocket whose motor has not lit falls under the world's full
+            // gravity (600 units/s² of 800).
+            gravity: 0.75,
+            size: 0.0,
             bounce: None,
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 200.0, damage: 110.0, knockback: 750.0, force: 80000.0)),
-            lifetime: 8.0,
+            explosion: Some((radius: 300.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            lifetime: 20.0,
+            missile: Some((
+                ignite_delay: 0.3,
+                launch_forward: 300.0,
+                launch_up: 128.0,
+                steer: 0.125,
+                steer_interval: 0.1,
+                muzzle: (12.0, 6.0, -3.0),
+            )),
         )),
     )),
     secondary: None,
-    deploy_time: 0.6,
-    pickup: Some((ammo: 3, respawn: 30.0, radius: 24.0)),
+    deploy_time: 1.1,
+    pickup: Some((ammo: 3, owned_ammo: 3, respawn: 20.0, radius: 24.0)),
     sounds: {"fire": "Weapon_RPG.Single"},
     // Players hold it with the rpg sequences of HL2DM's player models (run_rpg, ...).
     hold: Some("rpg"),

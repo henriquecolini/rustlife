@@ -27,6 +27,9 @@ use serde::{Deserialize, Serialize};
 use crate::movement::{Buttons, UserCmd};
 use crate::tools::manipulator::Intervals;
 
+/// Seconds a trigger pulled on an empty weapon waits before it clicks again.
+const EMPTY_CLICK_WAIT: f32 = 0.5;
+
 pub mod projectile;
 
 /// A weapon of the [`Arsenal`].
@@ -186,16 +189,45 @@ pub enum Choice {
 /// What the weapon in hand is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Phase {
-    /// Ready to fire (once the fire interval has passed).
+    /// Ready to fire (once the fire modes' intervals have passed).
     Ready,
     /// Being brought up after a switch; this many seconds left.
     Deploying(f32),
-    /// Reloading; this many seconds until the clip (or the next round)
-    /// goes in.
+    /// Reloading; this many seconds until the clip (or the current step of
+    /// a round-by-round reload) is done. See [`Inventory::reload_step`].
     Reloading(f32),
     /// Primed, a fire mode that [goes off on release](rl_data::FireConfig::on_release)
     /// held: a grenade drawn back, to be thrown when its button is let go.
     Priming(Mode),
+    /// A shot on its way: the fire mode, and the seconds until it goes off
+    /// (a [charge](rl_data::FireConfig::charge) after the press, or for
+    /// a primed mode the time the arm takes after the button is let go).
+    Charging(Mode, f32),
+}
+
+/// Which part of a reload is playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReloadStep {
+    /// The whole clip is swapped.
+    Whole,
+    /// A round-by-round reload getting started.
+    Start,
+    /// One round going in.
+    Round,
+    /// A round-by-round reload closing.
+    Finish,
+}
+
+/// Something a weapon does that is heard (and seen in its animation) apart
+/// from its shots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Noise {
+    /// The trigger pulled on an empty weapon.
+    Dry,
+    /// The shotgun's pump.
+    Pump,
+    /// A delayed shot building up (the Pulse Rifle's ball).
+    Charge,
 }
 
 /// A carried weapon and its clip.
@@ -206,7 +238,7 @@ struct Carried {
 }
 
 /// What a player's weapon did during a tick.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct WeaponTick {
     /// The trigger was pulled: the shot of this weapon's fire mode goes
     /// off (its ammo is already spent).
@@ -217,8 +249,25 @@ pub struct WeaponTick {
     pub reloading: bool,
     /// A fire mode that goes off on release began to be held.
     pub primed: Option<(WeaponId, Mode)>,
+    /// Something besides a shot that is heard.
+    pub noise: Option<Noise>,
     /// A consumable weapon that ran out was put away.
     pub retired: Option<WeaponId>,
+    /// The scope was turned on or off: the new state.
+    pub zoom: Option<bool>,
+    /// The accuracy penalty the shot fired was subject to, seconds.
+    pub penalty: f32,
+}
+
+/// What the weapon in hand is waiting on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct Latches {
+    /// It has to work its action before it fires again.
+    pump_due: bool,
+    /// The trigger was pulled on an empty weapon and not let go since.
+    fire_on_empty: bool,
+    /// A rocket it fired is still in the air.
+    projectile_out: bool,
 }
 
 /// One player's weapons and ammo.
@@ -232,10 +281,33 @@ pub struct Inventory {
     /// The weapon in hand before the current one.
     last: Option<WeaponId>,
     phase: Phase,
-    /// Seconds until the weapon in hand may fire again.
-    cooldown: f32,
+    /// Seconds until each fire mode may go off (`<= 0`: ready), primary
+    /// then secondary. A shot adds its interval to what is left, so the
+    /// little time a tick overshot a shot's moment carries over (at most
+    /// one tick's worth).
+    next: [f32; 2],
+    /// Seconds since the weapon in hand last fired.
+    since_shot: f32,
     /// Buttons held last tick, for semi-automatic fire and reload presses.
     old_buttons: Buttons,
+    /// The step of the reload in progress.
+    reload: ReloadStep,
+    /// The pistol's accuracy penalty, seconds (see [`rl_data::AccuracyConfig`]).
+    penalty: f32,
+    /// Seconds until an emptied clip reloads of its own accord.
+    reload_due: Option<f32>,
+    /// Seconds until the trigger may click again.
+    empty_wait: f32,
+    /// Conditions the weapon in hand is waiting on.
+    latch: Latches,
+    /// The scope is on.
+    zoomed: bool,
+    /// The laser is on.
+    laser: bool,
+    /// Counts clicks and pumps, for views to notice them: wraps.
+    dry_count: u8,
+    pump_count: u8,
+    reload_count: u8,
 }
 
 impl Inventory {
@@ -248,8 +320,19 @@ impl Inventory {
             active: None,
             last: None,
             phase: Phase::Ready,
-            cooldown: 0.0,
+            next: [0.0; 2],
+            since_shot: f32::MAX,
             old_buttons: Buttons::NONE,
+            reload: ReloadStep::Whole,
+            penalty: 0.0,
+            latch: Latches::default(),
+            reload_due: None,
+            empty_wait: 0.0,
+            zoomed: false,
+            laser: true,
+            dry_count: 0,
+            pump_count: 0,
+            reload_count: 0,
         }
     }
 
@@ -284,6 +367,56 @@ impl Inventory {
     #[must_use]
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// The step of the reload in progress (or the last one, once over).
+    #[must_use]
+    pub fn reload_step(&self) -> ReloadStep {
+        self.reload
+    }
+
+    /// How many reload steps have begun, wrapping: a view compares it with
+    /// what it saw to notice a new step.
+    #[must_use]
+    pub fn reload_count(&self) -> u8 {
+        self.reload_count
+    }
+
+    /// How many times the trigger has clicked on an empty weapon, wrapping.
+    #[must_use]
+    pub fn dry_count(&self) -> u8 {
+        self.dry_count
+    }
+
+    /// How many times the weapon has worked its action, wrapping.
+    #[must_use]
+    pub fn pump_count(&self) -> u8 {
+        self.pump_count
+    }
+
+    /// Whether the laser is on.
+    #[must_use]
+    pub fn laser(&self) -> bool {
+        self.laser
+    }
+
+    /// Whether the scope is on.
+    #[must_use]
+    pub fn zoomed(&self) -> bool {
+        self.zoomed
+    }
+
+    /// The accuracy penalty, seconds: how much firing has widened the
+    /// weapon's cone.
+    #[must_use]
+    pub fn penalty(&self) -> f32 {
+        self.penalty
+    }
+
+    /// Seconds until a fire mode may go off (zero or less when ready).
+    #[must_use]
+    pub fn until_ready(&self, mode: Mode) -> f32 {
+        self.next[mode as usize]
     }
 
     /// Every carried weapon, in arsenal order.
@@ -352,13 +485,26 @@ impl Inventory {
             .map_or(0.0, |config| config.deploy_time);
         self.last = self.active;
         self.active = Some(weapon);
+        self.put_away();
         self.phase = if deploy > 0.0 {
             Phase::Deploying(deploy)
         } else {
             Phase::Ready
         };
-        self.cooldown = 0.0;
+        self.next = [deploy; 2];
         true
+    }
+
+    /// Forgets what the weapon in hand was in the middle of.
+    fn put_away(&mut self) {
+        self.since_shot = f32::MAX;
+        self.reload = ReloadStep::Whole;
+        self.penalty = 0.0;
+        self.latch.pump_due = false;
+        self.reload_due = None;
+        self.latch.fire_on_empty = false;
+        self.zoomed = false;
+        self.laser = true;
     }
 
     /// The weapon in hand before the current one, if still carried.
@@ -468,16 +614,34 @@ impl Inventory {
 
     /// Advances the weapon in hand by one tick of `dt` seconds under `cmd`:
     /// switching, deploying, reloading and pulling the trigger.
+    ///
+    /// The order is HL2's `ItemPostFrame`: a weapon that has to work its
+    /// action (a pump) does that first; the alternate fire has priority over
+    /// the primary; a trigger pulled on an empty weapon clicks, then reloads;
+    /// with no button down an empty weapon reloads (or, with nothing left to
+    /// fire, gives way to the best weapon with ammo).
     pub fn tick(&mut self, arsenal: &Arsenal, cmd: &UserCmd, dt: f32) -> WeaponTick {
+        let reloads = self.reload_count;
+        let mut result = self.run(arsenal, cmd, dt);
+        // Every step of a reload counts as a reload begun.
+        result.reloading |= self.reload_count != reloads;
+        result
+    }
+
+    fn run(&mut self, arsenal: &Arsenal, cmd: &UserCmd, dt: f32) -> WeaponTick {
         let mut result = WeaponTick::default();
         let pressed = Buttons::from_bits(cmd.buttons.bits() & !self.old_buttons.bits());
-        self.old_buttons = cmd.buttons;
-        self.cooldown = (self.cooldown - dt).max(0.0);
-        // Switching away from a weapon drawn back cancels the throw.
+        let held = cmd.buttons;
+        self.old_buttons = held;
+        for next in &mut self.next {
+            *next = (*next - dt).max(-dt);
+        }
+        self.since_shot += dt;
+        self.empty_wait = (self.empty_wait - dt).max(0.0);
         if let Some(weapon) = cmd.select {
             result.switched = self.select(arsenal, weapon);
         }
-        self.advance_phase(arsenal, dt);
+        self.advance_phase(arsenal, dt, &mut result);
         if let Some(retired) = self.retire_spent(arsenal) {
             result.retired = Some(retired);
             result.switched = true;
@@ -492,58 +656,277 @@ impl Inventory {
         if is_tool(config) || matches!(self.phase, Phase::Deploying(_)) {
             return result;
         }
+        self.drain_penalty(config, held, dt);
         if let Phase::Priming(mode) = self.phase {
             return self.release(arsenal, weapon, mode, cmd, result);
         }
-        let wanted = |fire: &Option<FireConfig>, button: Buttons| {
-            fire.as_ref().is_some_and(|fire| {
-                cmd.buttons.contains(button) && (fire.automatic || pressed.contains(button))
-            })
-        };
-        let primary = wanted(&config.primary, Buttons::ATTACK);
-        let secondary = wanted(&config.secondary, Buttons::ATTACK2);
-
-        // Firing interrupts a round-by-round reload with what is loaded.
-        if matches!(self.phase, Phase::Reloading(_))
-            && matches!(
-                config.clip.as_ref().map(|clip| clip.reload),
-                Some(Reload::PerRound { .. })
-            )
-            && (primary || secondary)
-            && self.clip(weapon).is_some_and(|clip| clip > 0)
-        {
-            self.phase = Phase::Ready;
-        }
-        if self.phase != Phase::Ready || self.cooldown > 0.0 {
+        if matches!(self.phase, Phase::Charging(..)) {
             return result;
         }
-
-        for (mode, wanted) in [(Mode::Primary, primary), (Mode::Secondary, secondary)] {
-            if !wanted {
+        if pressed.contains(Buttons::ATTACK2) {
+            if config.zoom.is_some() {
+                self.zoomed = !self.zoomed;
+                result.zoom = Some(self.zoomed);
+            }
+            if config.laser {
+                self.laser = !self.laser;
+            }
+        }
+        if let Some(due) = self.reload_due.as_mut() {
+            *due -= dt;
+            if *due <= 0.0 {
+                self.reload_due = None;
+                if self.phase == Phase::Ready {
+                    result.reloading = self.start_reload(arsenal);
+                }
+            }
+        }
+        self.interrupt_reload(arsenal, weapon, held);
+        if self.phase != Phase::Ready {
+            return result;
+        }
+        if self.latch.pump_due && self.next[0] <= 0.0 {
+            return self.pump(config, result);
+        }
+        // The pistol fires as fast as it can be clicked.
+        if let Some(click) = config.primary.as_ref().and_then(|fire| fire.click_interval)
+            && !held.contains(Buttons::ATTACK)
+            && self.since_shot >= click
+        {
+            self.next[0] = self.next[0].min(0.0);
+        }
+        for (mode, button) in [
+            (Mode::Secondary, Buttons::ATTACK2),
+            (Mode::Primary, Buttons::ATTACK),
+        ] {
+            let Some(fire) = arsenal.fire(weapon, mode) else {
+                continue;
+            };
+            let wanted = held.contains(button) && (fire.automatic || pressed.contains(button));
+            if !wanted || self.next[mode as usize] > 0.0 {
                 continue;
             }
-            if arsenal
-                .fire(weapon, mode)
-                .is_some_and(|fire| fire.on_release)
-            {
-                if self.affords(arsenal, weapon, mode) {
-                    self.phase = Phase::Priming(mode);
-                    result.primed = Some((weapon, mode));
-                }
-            } else if self.spend(arsenal, weapon, mode) {
-                if let Some(fire) = arsenal.fire(weapon, mode) {
-                    self.cooldown = fire.interval;
-                }
-                result.fired = Some((weapon, mode));
-            } else {
-                result.reloading = self.start_reload(arsenal);
-            }
-            return result;
+            return self.pull_trigger(arsenal, weapon, mode, result);
         }
-        if pressed.contains(Buttons::RELOAD) || self.clip(weapon) == Some(0) {
+        if !held.contains(Buttons::ATTACK) && !held.contains(Buttons::ATTACK2) {
+            self.latch.fire_on_empty = false;
+        }
+        let nothing_held = !held.contains(Buttons::ATTACK)
+            && !held.contains(Buttons::ATTACK2)
+            && !held.contains(Buttons::RELOAD);
+        if pressed.contains(Buttons::RELOAD) {
             result.reloading = self.start_reload(arsenal);
+        } else if nothing_held {
+            self.reload_or_switch(arsenal, weapon, &mut result);
         }
         result
+    }
+
+    /// The trigger of `mode` is pulled and the mode is ready: fire, prime,
+    /// start charging, or click.
+    fn pull_trigger(
+        &mut self,
+        arsenal: &Arsenal,
+        weapon: WeaponId,
+        mode: Mode,
+        mut result: WeaponTick,
+    ) -> WeaponTick {
+        let Some(fire) = arsenal.fire(weapon, mode) else {
+            return result;
+        };
+        // A launcher that has a rocket out fires nothing until it is gone.
+        if self.latch.projectile_out
+            && arsenal
+                .weapon(weapon)
+                .is_some_and(|config| config.reload_after_projectile.is_some())
+        {
+            return result;
+        }
+        // An alternate fire that wants more rounds than are left fires the
+        // single shot instead (the shotgun's last shell).
+        if mode == Mode::Secondary
+            && matches!(fire.ammo, FireAmmo::Clip(_))
+            && !self.affords(arsenal, weapon, mode)
+            && self.affords(arsenal, weapon, Mode::Primary)
+            && self.clip(weapon).is_some_and(|clip| clip > 0)
+            && self.next[0] <= 0.0
+        {
+            return self.pull_trigger(arsenal, weapon, Mode::Primary, result);
+        }
+        if !self.affords(arsenal, weapon, mode) {
+            self.fire_empty(arsenal, weapon, mode, &mut result);
+            return result;
+        }
+        self.latch.fire_on_empty = false;
+        if fire.on_release {
+            self.phase = Phase::Priming(mode);
+            result.primed = Some((weapon, mode));
+        } else if fire.charge > 0.0 {
+            self.phase = Phase::Charging(mode, fire.charge);
+            result.noise = Some(Noise::Charge);
+        } else {
+            self.shoot(arsenal, weapon, mode, &mut result);
+        }
+        result
+    }
+
+    /// The trigger of `mode` pulled with too little ammo for it. HL2: the
+    /// first pull clicks; the next tries to reload (or gives way to another
+    /// weapon). A mode that draws on carried ammo clicks and waits half a
+    /// second.
+    fn fire_empty(
+        &mut self,
+        arsenal: &Arsenal,
+        weapon: WeaponId,
+        mode: Mode,
+        result: &mut WeaponTick,
+    ) {
+        let from_clip = arsenal
+            .fire(weapon, mode)
+            .is_some_and(|fire| matches!(fire.ammo, FireAmmo::Clip(_)));
+        if from_clip && self.latch.fire_on_empty {
+            self.reload_or_switch(arsenal, weapon, result);
+            return;
+        }
+        if self.empty_wait <= 0.0 {
+            result.noise = Some(Noise::Dry);
+            self.dry_count = self.dry_count.wrapping_add(1);
+            self.empty_wait = EMPTY_CLICK_WAIT;
+        }
+        if from_clip || mode == Mode::Primary {
+            self.latch.fire_on_empty = true;
+        } else {
+            self.next[mode as usize] = EMPTY_CLICK_WAIT;
+        }
+    }
+
+    /// An empty weapon with a free moment reloads; one with nothing at all
+    /// left to fire gives way to the best weapon that has some.
+    fn reload_or_switch(&mut self, arsenal: &Arsenal, weapon: WeaponId, result: &mut WeaponTick) {
+        if self.phase != Phase::Ready || self.next.iter().any(|&next| next > 0.0) {
+            return;
+        }
+        if self.usable(arsenal, weapon) {
+            if self.clip(weapon) == Some(0) && !self.latch.pump_due {
+                result.reloading = self.start_reload(arsenal);
+            }
+        } else if let Some(best) = self.best_with_ammo(arsenal, weapon) {
+            result.switched = self.select(arsenal, best);
+        }
+    }
+
+    /// The weapon HL2 would bring up when `weapon` runs dry: the heaviest
+    /// other one that has ammo and may be switched to automatically.
+    fn best_with_ammo(&self, arsenal: &Arsenal, weapon: WeaponId) -> Option<WeaponId> {
+        self.weapons()
+            .filter(|&other| other != weapon && self.usable(arsenal, other))
+            .filter_map(|other| Some((other, arsenal.weapon(other)?)))
+            .filter(|(_, config)| config.auto_switch_to)
+            .max_by_key(|(_, config)| config.weight)
+            .map(|(other, _)| other)
+    }
+
+    /// Spends the ammo of a shot of `mode` and sets the beats: the mode's
+    /// own interval and the other's. Reports the shot in `result`.
+    fn shoot(&mut self, arsenal: &Arsenal, weapon: WeaponId, mode: Mode, result: &mut WeaponTick) {
+        let (Some(fire), Some(config)) = (arsenal.fire(weapon, mode), arsenal.weapon(weapon))
+        else {
+            return;
+        };
+        if !self.spend(arsenal, weapon, mode) {
+            return;
+        }
+        result.penalty = self.penalty;
+        let carried = self.next[mode as usize].min(0.0);
+        self.next[mode as usize] = carried + fire.interval;
+        if fire.other_interval > 0.0 {
+            self.next[1 - mode as usize] = carried + fire.other_interval;
+        }
+        self.since_shot = 0.0;
+        if let Shot::Hitscan(bullets) = &fire.shot
+            && let Some(accuracy) = &bullets.accuracy
+        {
+            self.penalty += accuracy.per_shot;
+        }
+        if config.pump.is_some() {
+            self.latch.pump_due = true;
+        }
+        if let Some(auto) = config.auto_reload
+            && self.clip(weapon) == Some(0)
+        {
+            self.reload_due = Some(auto);
+        }
+        if config.reload_after_projectile.is_some() {
+            self.latch.projectile_out = true;
+        }
+        result.fired = Some((weapon, mode));
+    }
+
+    /// The rocket `weapon` fired is gone (burst, expired, or its owner
+    /// died): a launcher in hand with rockets left reloads before it can
+    /// fire again.
+    pub fn projectile_ended(&mut self, arsenal: &Arsenal, weapon: WeaponId) {
+        let Some(reload) = arsenal
+            .weapon(weapon)
+            .and_then(|config| config.reload_after_projectile)
+        else {
+            return;
+        };
+        self.latch.projectile_out = false;
+        let rockets_left = arsenal
+            .fire(weapon, Mode::Primary)
+            .is_some_and(|_| self.usable(arsenal, weapon));
+        if self.active == Some(weapon) && self.phase == Phase::Ready && rockets_left {
+            self.begin_reload_step(ReloadStep::Whole, reload);
+        }
+    }
+
+    /// The weapon works its action: nothing fires for a moment.
+    fn pump(&mut self, config: &WeaponConfig, mut result: WeaponTick) -> WeaponTick {
+        self.latch.pump_due = false;
+        if let Some(pump) = config.pump {
+            let carried = self.next[0].min(0.0);
+            self.next = [carried + pump; 2];
+        }
+        self.pump_count = self.pump_count.wrapping_add(1);
+        result.noise = Some(Noise::Pump);
+        result
+    }
+
+    /// The pistol's penalty drains while the trigger is up and the weapon
+    /// is ready again.
+    fn drain_penalty(&mut self, config: &WeaponConfig, held: Buttons, dt: f32) {
+        let soonest = config
+            .primary
+            .as_ref()
+            .and_then(|fire| fire.click_interval)
+            .unwrap_or(0.0);
+        if !held.contains(Buttons::ATTACK) && self.since_shot >= soonest {
+            self.penalty = (self.penalty - dt).max(0.0);
+        }
+    }
+
+    /// A round-by-round reload gives way to a shot: if the trigger is held
+    /// and enough rounds are in, the reload ends here (its current step
+    /// still has to finish before anything fires).
+    fn interrupt_reload(&mut self, arsenal: &Arsenal, weapon: WeaponId, held: Buttons) {
+        if !matches!(self.phase, Phase::Reloading(_)) || self.reload == ReloadStep::Whole {
+            return;
+        }
+        let clip = self.clip(weapon).unwrap_or(0);
+        let wants = |mode: Mode, button: Buttons| {
+            held.contains(button)
+                && arsenal
+                    .fire(weapon, mode)
+                    .is_some_and(|fire| match fire.ammo {
+                        FireAmmo::Clip(count) => clip >= count,
+                        _ => true,
+                    })
+        };
+        if wants(Mode::Primary, Buttons::ATTACK) || wants(Mode::Secondary, Buttons::ATTACK2) {
+            self.phase = Phase::Ready;
+            self.reload = ReloadStep::Whole;
+        }
     }
 
     /// Whether the ammo for one shot of `mode` is there.
@@ -561,7 +944,8 @@ impl Inventory {
     }
 
     /// A primed weapon: while the button of `mode` is held nothing happens;
-    /// let go, the shot goes off.
+    /// let go, the shot goes off (after the fire mode's `charge`: the time
+    /// the arm takes to let go of it).
     fn release(
         &mut self,
         arsenal: &Arsenal,
@@ -577,49 +961,34 @@ impl Inventory {
         if cmd.buttons.contains(button) {
             return result;
         }
-        self.phase = Phase::Ready;
-        if self.spend(arsenal, weapon, mode) {
-            if let Some(fire) = arsenal.fire(weapon, mode) {
-                self.cooldown = fire.interval;
-            }
-            result.fired = Some((weapon, mode));
+        let delay = arsenal.fire(weapon, mode).map_or(0.0, |fire| fire.charge);
+        if delay > 0.0 {
+            self.phase = Phase::Charging(mode, delay);
+            return result;
         }
+        self.phase = Phase::Ready;
+        self.shoot(arsenal, weapon, mode, &mut result);
         result
     }
 
     /// Puts away the weapon in hand if it is a
     /// [consumable](rl_data::WeaponConfig::consumable) that has nothing
-    /// left to throw and is done throwing, taking up the best of what
-    /// remains. Returns the weapon put away.
+    /// left to throw and is done throwing, taking up the heaviest weapon
+    /// with ammo (see [`WeaponConfig::weight`]). Returns the weapon put away.
     fn retire_spent(&mut self, arsenal: &Arsenal) -> Option<WeaponId> {
         let weapon = self.active?;
         let config = arsenal.weapon(weapon)?;
         if !config.consumable
             || self.phase != Phase::Ready
-            || self.cooldown > 0.0
+            || self.next.iter().any(|&next| next > 0.0)
             || self.usable(arsenal, weapon)
         {
             return None;
         }
         self.weapons.retain(|carried| carried.weapon != weapon);
         self.active = None;
-        let best = self
-            .last()
-            .filter(|&last| self.usable(arsenal, last))
-            .or_else(|| {
-                let mut usable: Vec<WeaponId> = self
-                    .weapons()
-                    .filter(|&other| self.usable(arsenal, other))
-                    .collect();
-                usable.sort_by_key(|other| {
-                    arsenal
-                        .weapon(*other)
-                        .map_or((0, 0), |config| (config.slot, config.position))
-                });
-                usable.last().copied()
-            });
         self.last = None;
-        if let Some(best) = best {
+        if let Some(best) = self.best_with_ammo(arsenal, weapon) {
             self.select(arsenal, best);
         }
         Some(weapon)
@@ -670,19 +1039,38 @@ impl Inventory {
             return false;
         };
         let loaded = self.clip(weapon).unwrap_or(0);
-        if self.phase != Phase::Ready || loaded >= clip.size || self.ammo(ammo) == 0 {
+        if self.phase != Phase::Ready
+            || self.latch.pump_due
+            || loaded >= clip.size
+            || self.ammo(ammo) == 0
+        {
             return false;
         }
-        self.phase = Phase::Reloading(match clip.reload {
-            Reload::Whole { time } => time,
-            Reload::PerRound { start, .. } => start,
-        });
+        let (step, time) = match clip.reload {
+            Reload::Whole { time } => (ReloadStep::Whole, time),
+            Reload::PerRound { start, .. } => (ReloadStep::Start, start),
+        };
+        self.begin_reload_step(step, time);
         true
     }
 
-    /// Counts down deploying and reloading, loading rounds as reloads
-    /// complete.
-    fn advance_phase(&mut self, arsenal: &Arsenal, dt: f32) {
+    /// Enters a reload step that takes `time` seconds, which nothing fires
+    /// during.
+    fn begin_reload_step(&mut self, step: ReloadStep, time: f32) {
+        self.reload = step;
+        self.reload_count = self.reload_count.wrapping_add(1);
+        self.reload_due = None;
+        self.phase = if step == ReloadStep::Finish {
+            Phase::Ready
+        } else {
+            Phase::Reloading(time)
+        };
+        self.next = [time; 2];
+    }
+
+    /// Counts down deploying, reloading and charging, loading rounds as
+    /// reloads complete and sending off charged shots.
+    fn advance_phase(&mut self, arsenal: &Arsenal, dt: f32, result: &mut WeaponTick) {
         match self.phase {
             Phase::Ready | Phase::Priming(_) => {}
             Phase::Deploying(left) => {
@@ -699,11 +1087,20 @@ impl Inventory {
                     self.finish_reload_step(arsenal, left - dt);
                 }
             }
+            Phase::Charging(mode, left) => {
+                if left > dt {
+                    self.phase = Phase::Charging(mode, left - dt);
+                } else if let Some(weapon) = self.active {
+                    self.phase = Phase::Ready;
+                    self.next[mode as usize] = 0.0;
+                    self.shoot(arsenal, weapon, mode, result);
+                }
+            }
         }
     }
 
-    /// A reload's timer ran out (`overshoot` seconds ago, ≤ 0): load the
-    /// clip, or one round and time the next.
+    /// A reload step's timer ran out (`overshoot` seconds ago, ≤ 0): load
+    /// the clip, or put one round in and time the next step.
     fn finish_reload_step(&mut self, arsenal: &Arsenal, overshoot: f32) {
         self.phase = Phase::Ready;
         let Some(weapon) = self.active else {
@@ -718,24 +1115,33 @@ impl Inventory {
             return;
         };
         let reserve = self.ammo(ammo);
+        let step = self.reload;
         let Some(carried) = self.carried_mut(weapon) else {
             return;
         };
         let room = clip.size.saturating_sub(carried.clip);
-        let loaded = match clip.reload {
-            Reload::Whole { .. } => room.min(reserve),
-            Reload::PerRound { .. } => room.min(reserve).min(1),
-        };
-        carried.clip += loaded;
-        let full = carried.clip >= clip.size;
-        if let Some(carried) = self.ammo.get_mut(ammo.index()) {
-            *carried -= loaded;
-        }
-        if let Reload::PerRound { each, .. } = clip.reload
-            && !full
-            && reserve > loaded
-        {
-            self.phase = Phase::Reloading((each + overshoot).max(0.0));
+        match clip.reload {
+            Reload::Whole { .. } => {
+                let loaded = room.min(reserve);
+                carried.clip += loaded;
+                if let Some(carried) = self.ammo.get_mut(ammo.index()) {
+                    *carried -= loaded;
+                }
+                self.reload = ReloadStep::Whole;
+            }
+            Reload::PerRound { each, finish, .. } => {
+                if step == ReloadStep::Finish {
+                    self.reload = ReloadStep::Whole;
+                } else if room > 0 && reserve > 0 {
+                    carried.clip += 1;
+                    if let Some(carried) = self.ammo.get_mut(ammo.index()) {
+                        *carried -= 1;
+                    }
+                    self.begin_reload_step(ReloadStep::Round, (each + overshoot).max(0.0));
+                } else {
+                    self.begin_reload_step(ReloadStep::Finish, (finish + overshoot).max(0.0));
+                }
+            }
         }
     }
 

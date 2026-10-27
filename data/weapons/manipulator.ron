@@ -5,7 +5,10 @@ Weapon(
     slot: 1,
     // The letter of this weapon's icon in the game's HL2 icon font.
     icon: Some('m'),
-    position: 0,
+    position: 2,
+    weight: 0,
+    // The Gravity Gun is never chosen for the player when a weapon runs dry.
+    auto_switch_to: false,
     view_model: Some("models/weapons/v_physcannon.mdl"),
     world_model: "models/weapons/w_physics.mdl",
     clip: None,
@@ -13,7 +16,7 @@ Weapon(
     primary: Some((interval: 0.5, automatic: true, ammo: Unlimited, shot: Manipulator)),
     // Grab (or pull, or drop); then rest this long.
     secondary: Some((interval: 0.4, automatic: true, ammo: Unlimited, shot: Manipulator)),
-    deploy_time: 0.4,
+    deploy_time: 0.322,
     pickup: None,
     sounds: {
         "launch": "Weapon_PhysCannon.Launch",

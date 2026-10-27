@@ -17,7 +17,7 @@ use rl_sim::simulation::{
     PropImpactEvent, PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
-use rl_sim::weapons::{Mode, WeaponId};
+use rl_sim::weapons::{Mode, Noise, WeaponId};
 use serde::{Deserialize, Serialize};
 
 /// One thing that happened, for show.
@@ -31,6 +31,15 @@ pub enum Event {
         weapon: WeaponId,
         /// Which fire mode.
         mode: Mode,
+    },
+    /// A weapon clicked empty, was pumped, or began to charge.
+    Noise {
+        /// Who.
+        player: PlayerId,
+        /// Which weapon.
+        weapon: WeaponId,
+        /// What it did.
+        noise: Noise,
     },
     /// A player began reloading a weapon.
     Reload {
@@ -90,13 +99,10 @@ pub enum Event {
     PropScrape(PropScrapeEvent),
 }
 
-/// The events of a tick that `viewer` should hear of: everything but the
-/// trigger pulls and shots of their own, which they predicted. Kills are
-/// left out (they go reliably).
-#[must_use]
-pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Event> {
+/// The trigger pulls, noises, reloads and deployments of everyone but
+/// `viewer`, who predicted their own.
+fn weapon_events(events: &TickEvents, viewer: Option<PlayerId>, out: &mut Vec<Event>) {
     let mine = |player: PlayerId| Some(player) == viewer;
-    let mut out = Vec::new();
     out.extend(
         events
             .fired
@@ -106,6 +112,17 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
                 player,
                 weapon,
                 mode,
+            }),
+    );
+    out.extend(
+        events
+            .noises
+            .iter()
+            .filter(|(player, ..)| !mine(*player))
+            .map(|&(player, weapon, noise)| Event::Noise {
+                player,
+                weapon,
+                noise,
             }),
     );
     out.extend(
@@ -122,6 +139,16 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
             .filter(|(player, _)| !mine(*player))
             .map(|&(player, weapon)| Event::Deploy { player, weapon }),
     );
+}
+
+/// The events of a tick that `viewer` should hear of: everything but the
+/// trigger pulls and shots of their own, which they predicted. Kills are
+/// left out (they go reliably).
+#[must_use]
+pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Event> {
+    let mine = |player: PlayerId| Some(player) == viewer;
+    let mut out = Vec::new();
+    weapon_events(events, viewer, &mut out);
     out.extend(
         events
             .shots
@@ -204,6 +231,11 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
                 weapon,
                 mode,
             } => tick.fired.push((player, weapon, mode)),
+            Event::Noise {
+                player,
+                weapon,
+                noise,
+            } => tick.noises.push((player, weapon, noise)),
             Event::Reload { player, weapon } => tick.reloads.push((player, weapon)),
             Event::Deploy { player, weapon } => tick.deploys.push((player, weapon)),
             Event::Shot(shot) => tick.shots.push(shot),
@@ -249,6 +281,7 @@ mod tests {
                 normal: Vec3::ZERO,
                 struck: Struck::Nothing,
                 material: None,
+                head: false,
             },
         }
     }
