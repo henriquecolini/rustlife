@@ -502,7 +502,8 @@ fn draw_projectiles(
             .find(|projectile| projectile.id == view.0)
         {
             Some(projectile) => {
-                *transform = projectile_transform(projectile.position, projectile.velocity);
+                *transform =
+                    projectile_transform(projectile.position, flight_direction(projectile));
                 shown.push(view.0);
             }
             None => commands.entity(entity).try_despawn(),
@@ -524,11 +525,21 @@ fn draw_projectiles(
             &mut models,
             &asset_server,
             &config.model,
-            projectile_transform(projectile.position, projectile.velocity),
+            projectile_transform(projectile.position, flight_direction(projectile)),
         );
         commands
             .entity(entity)
             .insert((ProjectileView(projectile.id), Moving));
+    }
+}
+
+/// The way a projectile points: where it flies, or, stuck in a wall, how it
+/// was flying.
+fn flight_direction(projectile: &rl_sim::weapons::projectile::Projectile) -> Vec3 {
+    if projectile.velocity.length_squared() > 1.0 {
+        projectile.velocity
+    } else {
+        projectile.heading
     }
 }
 

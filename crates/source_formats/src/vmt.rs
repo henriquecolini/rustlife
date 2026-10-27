@@ -86,6 +86,9 @@ pub struct MaterialDesc {
     pub no_cull: bool,
     /// A `Water` material's fog: what is seen through it and from under it.
     pub water_fog: Option<WaterFog>,
+    /// `$selfillum`: the base texture's colour glows where its alpha channel
+    /// is set, whatever the light.
+    pub self_illum: bool,
 }
 
 /// A water surface's fog: the colour water fades to with depth, and the
@@ -135,6 +138,7 @@ pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
     if desc.kind == MaterialKind::Water {
         desc.water_fog = Some(water_fog(&[text]));
     }
+    desc.self_illum = flag_on(&[text], "$selfillum");
     Ok(desc)
 }
 
@@ -284,6 +288,7 @@ where
     if desc.kind == MaterialKind::Water {
         desc.water_fog = Some(water_fog(&[text, &base_text]));
     }
+    desc.self_illum = flag_on(&[text, &base_text], "$selfillum");
     Ok(desc)
 }
 
@@ -302,7 +307,22 @@ fn describe(material: &Material) -> MaterialDesc {
         alpha_test: material.alpha_test(),
         no_cull: material.no_cull(),
         water_fog: None,
+        self_illum: false,
     }
+}
+
+/// Whether the text of a VMT (or of the one it patches) switches `flag`
+/// (`$selfillum`) on.
+fn flag_on(texts: &[&str], flag: &str) -> bool {
+    texts.iter().any(|text| {
+        text.lines().any(|line| {
+            let mut words = line.split_whitespace();
+            let key = words.next().map(|key| key.trim_matches('"'));
+            let value = words.next().map(|value| value.trim_matches('"'));
+            key.is_some_and(|key| key.eq_ignore_ascii_case(flag))
+                && value.is_some_and(|value| value != "0")
+        })
+    })
 }
 
 /// `$basetexture` for any shader. `vmt-parser`'s own `base_texture()` returns
@@ -567,5 +587,13 @@ mod tests {
     fn malformed_vmt_errors_without_panicking() {
         assert!(parse("this is not a material").is_err());
         assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn selfillum_is_read_from_the_text() {
+        let glow = "\"VertexLitGeneric\"\n{\n\t\"$baseTexture\" \"a/b\"\n\t\"$selfillum\" 1\n}";
+        assert!(parse(glow).expect("parses").self_illum);
+        let dull = "\"VertexLitGeneric\"\n{\n\t\"$baseTexture\" \"a/b\"\n\t//\"$selfillum\" 1\n}";
+        assert!(!parse(dull).expect("parses").self_illum);
     }
 }

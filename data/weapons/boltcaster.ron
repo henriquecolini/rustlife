@@ -33,6 +33,13 @@ Weapon(
             hit_damage: 100.0,
             explosion: None,
             lifetime: 10.0,
+            // A bolt that meets the map at a shallow angle glances off at
+            // three quarters of its speed and then falls under full gravity;
+            // otherwise it embeds for two seconds, sparking. It shoves a
+            // prop with BULLET_IMPULSE(800 grains, 8000 ft/s).
+            ricochet: Some((max_dot: 0.5, min_speed: 100.0, speed_scale: 0.75, gravity: 1.0)),
+            stick: Some(2.0),
+            impact_force: 17411.0,
         )),
     )),
     secondary: None,

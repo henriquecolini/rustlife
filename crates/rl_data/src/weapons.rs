@@ -351,6 +351,17 @@ pub struct ProjectileConfig {
     pub explosion: Option<ExplosionConfig>,
     /// Seconds before it disappears if nothing else ends it.
     pub lifetime: f32,
+    /// A glancing blow on the map glances off instead of ending it (the
+    /// Crossbow's bolt).
+    #[serde(default)]
+    pub ricochet: Option<RicochetConfig>,
+    /// Seconds it stays stuck where it embeds in the map before it is gone,
+    /// if it embeds rather than bursts or bounces.
+    #[serde(default)]
+    pub stick: Option<f32>,
+    /// Impulse it gives a prop it strikes, kg·units/s, along its flight.
+    #[serde(default)]
+    pub impact_force: f32,
     /// Whoever it kills dissolves (the Pulse Rifle's energy ball).
     #[serde(default)]
     pub dissolves: bool,
@@ -366,6 +377,23 @@ pub struct ProjectileConfig {
     /// small box. Grenades are.
     #[serde(default)]
     pub body: Option<ProjectileBodyConfig>,
+}
+
+/// A projectile glancing off the map: when it meets a surface at less than
+/// `max_dot` of the way into it (the cosine of the angle to the normal) and
+/// is faster than `min_speed`, it is reflected at `speed_scale` of its speed
+/// and from then on falls under `gravity` times the world's.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RicochetConfig {
+    /// How head-on the hit may be and still glance off.
+    pub max_dot: f32,
+    /// The slowest speed that glances off, units/s.
+    pub min_speed: f32,
+    /// The speed kept.
+    pub speed_scale: f32,
+    /// The fraction of the world's gravity it falls under afterwards.
+    pub gravity: f32,
 }
 
 /// A rocket in the manner of HL2's RPG: it leaves the launcher slowly,

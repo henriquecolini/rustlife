@@ -153,7 +153,7 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
         events
             .shots
             .iter()
-            .filter(|shot| !mine(shot.player))
+            .filter(|shot| shot.late || !mine(shot.player))
             .map(|&shot| Event::Shot(shot)),
     );
     out.extend(
@@ -276,6 +276,7 @@ mod tests {
             player: player(by),
             weapon: WeaponId::from_index(1),
             start: Vec3::ZERO,
+            late: false,
             trace: ShotTrace {
                 end: Vec3::X,
                 normal: Vec3::ZERO,

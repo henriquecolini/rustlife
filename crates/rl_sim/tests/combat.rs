@@ -266,6 +266,71 @@ fn the_energy_ball_kills_outright_and_dissolves_the_body() {
     assert!(arena.sim.projectiles().is_empty());
 }
 
+#[test]
+fn a_bolt_embeds_in_a_wall_for_two_seconds_sparking() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(300.0, -500.0, 0.0),
+        Vec3::new(320.0, 500.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    arena.arm("boltcaster");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(10));
+    let impacts: Vec<_> = events
+        .iter()
+        .flat_map(|e| &e.shots)
+        .filter(|s| s.late)
+        .collect();
+    assert_eq!(impacts.len(), 1, "one impact for the effects");
+    let bolt = arena.sim.projectiles()[0].clone();
+    assert_eq!(bolt.velocity, Vec3::ZERO);
+    assert!((bolt.position.x - 300.0).abs() < 3.0, "{bolt:?}");
+    arena.idle(100);
+    assert_eq!(arena.sim.projectiles().len(), 1, "still there at 1.5 s");
+    arena.idle(60);
+    assert!(arena.sim.projectiles().is_empty(), "gone after 2 s");
+}
+
+#[test]
+fn a_bolt_that_grazes_a_wall_glances_off_and_falls() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(100.0, -3000.0, 0.0),
+        Vec3::new(120.0, 3000.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    arena.arm("boltcaster");
+    let cmd = UserCmd {
+        yaw: 80.0,
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    };
+    arena.tick(&cmd);
+    for _ in 0..40 {
+        arena.tick(&UserCmd {
+            yaw: 80.0,
+            ..UserCmd::default()
+        });
+        if arena
+            .sim
+            .projectiles()
+            .first()
+            .is_some_and(|b| b.gravity_scale.is_some())
+        {
+            break;
+        }
+    }
+    let bolt = arena.sim.projectiles()[0].clone();
+    assert_eq!(bolt.gravity_scale, Some(1.0));
+    // Reflected off a wall facing -X: it now heads away from it.
+    assert!(bolt.velocity.x < 0.0, "{bolt:?}");
+    assert!(
+        (bolt.velocity.length() - 0.75 * 3500.0).abs() < 100.0,
+        "{bolt:?}"
+    );
+}
+
 /// The shooter's SLAMs.
 fn slams(arena: &Arena) -> u32 {
     let slam = arena.sim.arsenal().find_ammo("slam").expect("ammo");

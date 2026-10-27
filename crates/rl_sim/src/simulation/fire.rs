@@ -152,6 +152,7 @@ impl Simulation {
                 weapon,
                 start: aim.eye,
                 trace: bullet.trace,
+                late: false,
             });
         }
     }
@@ -225,6 +226,7 @@ impl Simulation {
             weapon,
             start: aim.eye,
             trace,
+            late: false,
         });
     }
 
@@ -348,6 +350,9 @@ impl Simulation {
             heading: forward,
             lit: false,
             steer_clock: 0.0,
+            gravity_scale: None,
+            stuck: None,
+            impact: None,
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
     }
@@ -417,6 +422,7 @@ impl Simulation {
             others: &[],
         };
         let mut ended = Vec::new();
+        let mut impacts = Vec::new();
         let mut dots = dots.into_iter();
         self.projectiles.retain_mut(|projectile| {
             let dot = dots.next().flatten();
@@ -426,14 +432,18 @@ impl Simulation {
             else {
                 return false;
             };
-            match projectile.advance(
+            let flight = projectile.advance(
                 config,
                 self.data.physics.gravity,
                 self.dt,
                 &scene,
                 &targets,
                 dot,
-            ) {
+            );
+            if let Some(impact) = projectile.impact.take() {
+                impacts.push((projectile.owner, projectile.weapon, impact));
+            }
+            match flight {
                 Flight::Flying | Flight::Bounced => true,
                 flight => {
                     ended.push((projectile.clone(), flight));
@@ -441,6 +451,21 @@ impl Simulation {
                 }
             }
         });
+        for (owner, weapon, (point, normal, material)) in impacts {
+            events.shots.push(ShotEvent {
+                player: owner,
+                weapon,
+                start: point + normal,
+                trace: ShotTrace {
+                    end: point,
+                    normal,
+                    struck: Struck::World,
+                    material,
+                    head: false,
+                },
+                late: true,
+            });
+        }
         for (projectile, flight) in ended {
             if let Some(player) = self.player_mut(projectile.owner) {
                 player
@@ -484,12 +509,17 @@ impl Simulation {
                             model as usize,
                             config.hit_damage,
                         )),
-                        Struck::Prop(body) => self.hit_prop(
-                            body,
-                            config.hit_damage,
-                            Blow::Bullet,
-                            Some(projectile.owner),
-                        ),
+                        Struck::Prop(body) => {
+                            self.hit_prop(
+                                body,
+                                config.hit_damage,
+                                Blow::Bullet,
+                                Some(projectile.owner),
+                            );
+                            let along = projectile.velocity.normalize_or_zero();
+                            self.physics
+                                .apply_impulse(body, along * config.impact_force, point);
+                        }
                         Struck::World | Struck::Nothing => {}
                     }
                 }

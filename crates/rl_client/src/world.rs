@@ -595,6 +595,17 @@ fn standard_from(source: &SourceMaterial) -> StandardMaterial {
         double_sided: true,
         alpha_mode,
         lightmap_exposure: baked_light_scale(),
+        // `$selfillum`: it shines with its own colour, as bright as a lit
+        // surface at full light.
+        emissive: if source.self_illum {
+            LinearRgba::gray(baked_light_scale())
+        } else {
+            LinearRgba::BLACK
+        },
+        emissive_texture: source
+            .self_illum
+            .then(|| source.base_color.clone())
+            .flatten(),
         ..default()
     }
 }

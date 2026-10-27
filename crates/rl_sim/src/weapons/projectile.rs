@@ -62,6 +62,15 @@ pub struct Projectile {
     pub lit: bool,
     /// Seconds since the missile last steered.
     pub steer_clock: f32,
+    /// The fraction of the world's gravity it falls under, once a ricochet
+    /// has changed it.
+    pub gravity_scale: Option<f32>,
+    /// Seconds it has left stuck in the map, if it has embedded.
+    pub stuck: Option<f32>,
+    /// Where and against what it last bounced, glanced off or embedded:
+    /// `(point, surface normal, material)`, taken by the simulation for
+    /// effects.
+    pub impact: Option<(Vec3, Vec3, Option<u16>)>,
 }
 
 /// How a projectile's tick ended.
@@ -112,10 +121,16 @@ impl Projectile {
             return Flight::Expired;
         }
         if self.resting {
+            if let Some(left) = self.stuck.as_mut() {
+                *left -= dt;
+                if *left <= 0.0 {
+                    return Flight::Expired;
+                }
+            }
             return Flight::Flying;
         }
         if !self.lit {
-            self.velocity.z -= gravity * config.gravity * dt;
+            self.velocity.z -= gravity * self.gravity_scale.unwrap_or(config.gravity) * dt;
         }
         let start = self.position;
         let end = start + self.velocity * dt;
@@ -147,6 +162,11 @@ impl Projectile {
         }
         self.position = map.end + map.normal * SURFACE_GAP;
         let struck = crate::combat::hitscan::struck_by(&map);
+        if matches!(struck, Struck::World | Struck::Brush(_)) {
+            if let Some(flight) = self.glance_or_embed(config, &map) {
+                return flight;
+            }
+        }
         let Some(bounce) = config.bounce else {
             return Flight::Struck {
                 struck,
@@ -161,6 +181,36 @@ impl Projectile {
             self.resting = true;
         }
         Flight::Bounced
+    }
+
+    /// A hit on the map by a projectile that glances off or embeds: `None`
+    /// if it does neither (the hit is then handled as any other).
+    fn glance_or_embed(
+        &mut self,
+        config: &ProjectileConfig,
+        map: &crate::collision::Trace,
+    ) -> Option<Flight> {
+        let normal = map.normal.normalize_or(Vec3::Z);
+        let speed = self.velocity.length();
+        let direction = self.velocity.normalize_or(Vec3::X);
+        let impact = Some((map.end, normal, map.material));
+        if let Some(glance) = &config.ricochet {
+            let head_on = normal.dot(-direction);
+            if head_on < glance.max_dot && speed > glance.min_speed {
+                let reflected = direction + 2.0 * normal * head_on;
+                self.velocity = reflected.normalize_or(direction) * speed * glance.speed_scale;
+                self.gravity_scale = Some(glance.gravity);
+                self.impact = impact;
+                return Some(Flight::Bounced);
+            }
+        }
+        let stay = config.stick?;
+        self.velocity = Vec3::ZERO;
+        self.heading = direction;
+        self.resting = true;
+        self.stuck = Some(stay);
+        self.impact = impact;
+        Some(Flight::Flying)
     }
 
     /// A missile's motor and steering: before the motor lights it only
@@ -209,6 +259,9 @@ mod tests {
             explosion: None,
             lifetime: 5.0,
             dissolves: false,
+            ricochet: None,
+            stick: None,
+            impact_force: 0.0,
             missile: None,
             crouched: None,
             body: None,
@@ -250,6 +303,9 @@ mod tests {
             heading: velocity.normalize_or_zero(),
             lit: false,
             steer_clock: 0.0,
+            gravity_scale: None,
+            stuck: None,
+            impact: None,
         }
     }
 

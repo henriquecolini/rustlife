@@ -156,6 +156,9 @@ pub struct ShotEvent {
     pub start: Vec3,
     /// Where it went.
     pub trace: ShotTrace,
+    /// Not a shot the shooter's prediction made, so they must be told of
+    /// it too: a projectile glancing off or embedding in the map.
+    pub late: bool,
 }
 
 /// An explosion, for effects.

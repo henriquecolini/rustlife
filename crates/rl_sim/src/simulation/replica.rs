@@ -167,6 +167,7 @@ impl Simulation {
             weapon,
             start: aim.eye,
             trace,
+            late: false,
         };
         match arsenal.fire(weapon, mode).map(|fire| &fire.shot) {
             Some(Shot::Hitscan(bullets)) => {

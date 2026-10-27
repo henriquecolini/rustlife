@@ -36,6 +36,8 @@ pub struct SourceMaterial {
     pub no_cull: bool,
     /// A water material's fog (its colour tints the surface).
     pub water_fog: Option<WaterFog>,
+    /// `$selfillum`: the surface glows with its own colour, whatever the light.
+    pub self_illum: bool,
 }
 
 /// Errors from [`VmtLoader`].
@@ -90,6 +92,7 @@ impl AssetLoader for VmtLoader {
             alpha_test: desc.alpha_test,
             no_cull: desc.no_cull,
             water_fog: desc.water_fog,
+            self_illum: desc.self_illum,
         })
     }
 
