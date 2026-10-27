@@ -280,6 +280,13 @@ pub trait MovementWorld: CollisionQuery {
     fn ladders(&self) -> &[Ladder];
     /// Points where a climber may step off a ladder.
     fn ladder_dismounts(&self) -> &[Vec3];
+
+    /// The move, at most `max_distance` long, that takes `hull`, at
+    /// `origin`, towards the nearest way out of the movable things it
+    /// overlaps (props), if any. It never leads into the map.
+    fn penetration(&self, _origin: Vec3, _hull: &Hull, _max_distance: f32) -> Option<Vec3> {
+        None
+    }
 }
 
 impl MovementWorld for CollisionWorld {
@@ -331,6 +338,7 @@ struct Mover<'a, W> {
 impl<W: MovementWorld> Mover<'_, W> {
     fn run(&mut self) {
         self.check_velocity();
+        self.unstick();
         let falling_speed = (!self.state.on_ground).then_some(-self.state.velocity.z);
 
         self.update_duck();
@@ -442,6 +450,19 @@ impl<W: MovementWorld> Mover<'_, W> {
         self.state.velocity.z += self.config.jump.launch_speed(self.config.gravity);
         self.set_jump_held(true);
         self.events.jumped = true;
+    }
+
+    /// Pushes the player out of a prop that came to overlap them, at most
+    /// `unstick_speed` for the tick, so they are never held inside it.
+    ///
+    /// The way out is the shortest one the world offers, taken only as far
+    /// as the map allows, so the player is never pushed into a wall.
+    fn unstick(&mut self) {
+        let hull = self.hull();
+        let reach = self.config.unstick_speed * self.dt;
+        if let Some(step) = self.world.penetration(self.state.origin, &hull, reach) {
+            self.state.origin += step;
+        }
     }
 
     /// The hull in use.

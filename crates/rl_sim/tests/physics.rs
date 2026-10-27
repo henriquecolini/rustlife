@@ -737,3 +737,157 @@ fn joints_to_missing_bodies_are_refused() {
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
     assert!(!physics.add_joint(&hung_from(body, Vec3::ZERO)));
 }
+
+#[test]
+fn a_player_inside_a_prop_is_pushed_out_of_it() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let config = movement_config();
+    // A fixed crate whose face is 10 units inside the player's box.
+    physics.add_prop(&crate_at(
+        Vec3::new(40.0, 0.0, 0.0),
+        16.0,
+        50.0,
+        Motion::Fixed,
+    ));
+    physics.step();
+    let scene = Scene {
+        world: &world,
+        physics: &physics,
+        ignore: None,
+    };
+    let hull = Hull::from(&config.hulls.standing);
+    // Its face is at x = 24; the box reaches 16 either side of the origin.
+    let start = Vec3::new(16.0, 0.0, 1.0);
+    let mut state = PlayerState::at(start);
+    let idle = UserCmd::default();
+    // Stuck at the start, as a trace sees it.
+    assert!(
+        rl_sim::collision::CollisionQuery::trace_hull(
+            &scene,
+            state.origin,
+            state.origin,
+            &hull,
+            contents::MASK_PLAYER_SOLID
+        )
+        .start_solid
+    );
+    let (first, _) = simulate(&state, &idle, &config, DT, &scene);
+    let moved = (first.origin - state.origin).length();
+    assert!(
+        moved <= config.unstick_speed * DT + 1e-3,
+        "pushed out gradually, moved {moved}"
+    );
+    for _ in 0..66 {
+        state = simulate(&state, &idle, &config, DT, &scene).0;
+    }
+    assert!(
+        !rl_sim::collision::CollisionQuery::trace_hull(
+            &scene,
+            state.origin,
+            state.origin,
+            &hull,
+            contents::MASK_PLAYER_SOLID
+        )
+        .start_solid,
+        "free of the crate: {state:?}"
+    );
+    assert!(state.origin.x < start.x, "pushed away from it: {state:?}");
+    // Free, the player can walk again.
+    let walk = UserCmd {
+        forward: -1.0,
+        ..UserCmd::default()
+    };
+    let (after, _) = simulate(&state, &walk, &config, DT, &scene);
+    assert!(after.origin.x < state.origin.x);
+}
+
+#[test]
+fn a_player_is_not_pushed_through_a_wall_getting_out_of_a_prop() {
+    let world = floor()
+        .solid_box(
+            Vec3::new(-64.0, -256.0, 0.0),
+            Vec3::new(-24.0, 256.0, 256.0),
+        )
+        .build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let config = movement_config();
+    physics.add_prop(&crate_at(
+        Vec3::new(10.0, 0.0, 0.0),
+        16.0,
+        50.0,
+        Motion::Fixed,
+    ));
+    physics.step();
+    let scene = Scene {
+        world: &world,
+        physics: &physics,
+        ignore: None,
+    };
+    let mut state = PlayerState::at(Vec3::new(-8.0, 0.0, 1.0));
+    for _ in 0..66 {
+        state = simulate(&state, &UserCmd::default(), &config, DT, &scene).0;
+    }
+    assert!(
+        state.origin.x - config.hulls.standing.maxs[0] >= -24.0 - 0.1,
+        "stayed out of the wall: {state:?}"
+    );
+}
+
+#[test]
+fn a_prop_moving_into_a_player_shoves_them_by_its_mass() {
+    let shove_of = |mass: f32| {
+        let world = floor().build();
+        let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+        let hull = Hull::from(&movement_config().hulls.standing);
+        let player = physics.add_player(Vec3::ZERO, &hull);
+        let prop = physics.add_prop(&crate_at(
+            Vec3::new(120.0, 0.0, 20.0),
+            12.0,
+            mass,
+            Motion::Dynamic,
+        ));
+        physics.set_velocity(prop, Vec3::new(-600.0, 0.0, 0.0), Vec3::ZERO);
+        let mut total = Vec3::ZERO;
+        for _ in 0..60 {
+            physics.set_player(player, Vec3::ZERO, Vec3::ZERO, &hull);
+            physics.step();
+            for shove in physics.take_shoves() {
+                assert_eq!(shove.player, player);
+                total += shove.velocity;
+            }
+        }
+        total
+    };
+    let light = shove_of(5.0);
+    let heavy = shove_of(200.0);
+    assert!(
+        light.x < 0.0 && heavy.x < 0.0,
+        "away from the prop: {light} {heavy}"
+    );
+    assert!(
+        heavy.x < light.x * 2.0,
+        "a heavier prop shoves harder: {light} vs {heavy}"
+    );
+}
+
+#[test]
+fn a_resting_prop_shoves_nobody() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let hull = Hull::from(&movement_config().hulls.standing);
+    let player = physics.add_player(Vec3::ZERO, &hull);
+    physics.add_prop(&crate_at(
+        Vec3::new(30.0, 0.0, 0.0),
+        12.0,
+        50.0,
+        Motion::Dynamic,
+    ));
+    for _ in 0..120 {
+        physics.set_player(player, Vec3::ZERO, Vec3::ZERO, &hull);
+        physics.step();
+        for shove in physics.take_shoves() {
+            assert!(shove.velocity.length() < 1.0, "{shove:?}");
+        }
+    }
+}

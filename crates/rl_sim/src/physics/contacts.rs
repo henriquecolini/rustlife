@@ -33,12 +33,22 @@ pub struct Impact {
     pub damage: f32,
 }
 
+/// A prop shoving a player.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shove {
+    /// The player's body.
+    pub player: BodyId,
+    /// The change to give the player's velocity, units/s.
+    pub velocity: Vec3,
+}
+
 impl PhysicsWorld {
     /// The impacts of props on players that began this step, given each
     /// awake prop's velocity before it; updates the touching set.
     pub(super) fn detect_impacts(&mut self, before: &[(BodyId, Vec3)]) -> Vec<Impact> {
         let mut touching = Vec::new();
         let mut impacts = Vec::new();
+        let mut shoves: Vec<Shove> = Vec::new();
         for (index, body) in self.bodies.iter().enumerate() {
             let BodyKind::Player { velocity, .. } = body.kind else {
                 continue;
@@ -74,8 +84,7 @@ impl PhysicsWorld {
                     continue;
                 }
                 touching.push((player, prop));
-                let was_touching = self.touching.contains(&(player, prop));
-                if was_touching || self.holder(prop).is_some() || self.ignores(player, prop) {
+                if self.holder(prop).is_some() || self.ignores(player, prop) {
                     continue;
                 }
                 let Some(manifold) = contact.manifolds.first() else {
@@ -96,9 +105,22 @@ impl PhysicsWorld {
                     .iter()
                     .find(|(id, _)| *id == prop)
                     .map_or(Vec3::ZERO, |&(_, velocity)| velocity);
-                let speed = prop_velocity
-                    .dot(towards_player)
-                    .min((prop_velocity - velocity).dot(towards_player));
+                let closing = (prop_velocity - velocity).dot(towards_player);
+                if closing > 0.0 && self.is_dynamic(prop) {
+                    // The prop meets the player as a body of its mass in an
+                    // inelastic collision, as the player meets it in `push`.
+                    let push = &self.config.push;
+                    let change =
+                        (closing * mass / (push.player_mass + mass)).min(push.max_speed_change);
+                    shoves.push(Shove {
+                        player,
+                        velocity: towards_player * change,
+                    });
+                }
+                if self.touching.contains(&(player, prop)) {
+                    continue;
+                }
+                let speed = prop_velocity.dot(towards_player).min(closing);
                 let damage = self.config.impact_damage.damage(mass, speed);
                 if damage > 0.0 {
                     impacts.push(Impact {
@@ -111,6 +133,20 @@ impl PhysicsWorld {
             }
         }
         self.touching = touching;
+        self.shoves = sum_shoves(shoves);
         impacts
     }
+}
+
+/// One shove per player: the largest from each direction would be fussy, so
+/// they simply add.
+fn sum_shoves(shoves: Vec<Shove>) -> Vec<Shove> {
+    let mut summed: Vec<Shove> = Vec::new();
+    for shove in shoves {
+        match summed.iter_mut().find(|s| s.player == shove.player) {
+            Some(total) => total.velocity += shove.velocity,
+            None => summed.push(shove),
+        }
+    }
+    summed
 }

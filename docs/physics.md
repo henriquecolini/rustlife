@@ -109,6 +109,29 @@ Players also have a **kinematic box** in the physics world, moved to the
 player's position each tick. Props land on players and bump into them
 instead of passing through.
 
+Props act on players back in two ways.
+
+- **Shoves.** A prop in contact with a player and moving into them gives
+  them speed, as the player gives it to a prop: the prop meets the player as
+  a body of its own mass against `push.player_mass`, in a perfectly inelastic
+  collision along the contact normal, capped by `push.max_speed_change` per
+  tick. A rolling barrel carries a player along; a crate pushed by someone
+  else's Manipulator nudges them; a prop at rest or moving away does
+  nothing. The change goes to the player's velocity at the end of the tick
+  (`Simulation::shove_player`), so clients see it as a correction, like
+  knockback.
+- **Pushing out.** A prop can still end up overlapping a player (a rotating
+  prop's corner, a prop dropped by the Manipulator, a squeeze between two
+  props), and a player inside a prop cannot move at all, since every trace
+  starts in solid. So the first thing movement does each tick is to find
+  the way out. Each prop piece's clip planes, grown by the player's box,
+  bound the volume the player's centre must stay out of; inside it the
+  shortest way out is along the plane the centre is nearest to
+  (`PhysicsWorld::penetration`). The player is moved that way by at most
+  `movement.unstick_speed` per second, and only as far as the map allows,
+  so they are never pushed into a wall. Movement runs on clients too, so
+  prediction does the same.
+
 ## Impact damage
 
 A prop that *starts* touching a player during a step has hit them. The

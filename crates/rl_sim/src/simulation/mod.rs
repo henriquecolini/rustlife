@@ -724,6 +724,9 @@ impl Simulation {
         for impact in self.physics.step() {
             self.prop_impact(impact, &mut events);
         }
+        for shove in self.physics.take_shoves() {
+            self.shove_player(shove);
+        }
         self.sync_pickup_poses();
         self.hit_props_by_impacts();
         self.advance_grenades(&mut events);

@@ -10,7 +10,7 @@ use crate::collision::contents::MASK_SHOT;
 use crate::combat::{Cause, Damage, Vitals};
 use crate::hazards::DOSE_INTERVAL;
 use crate::movement::{Buttons, PlayerState, UserCmd};
-use crate::physics::{BodyId, Impact};
+use crate::physics::{BodyId, Impact, Shove};
 use crate::rng::Rng;
 use crate::rules::{self, MatchEvent};
 use crate::tools::manipulator::Manipulator;
@@ -206,6 +206,18 @@ impl Simulation {
         self.hurt(victim, damage, events);
         self.thrown
             .retain(|&(_, _, tick)| self.tick.saturating_sub(tick) <= credit);
+    }
+
+    /// Gives a player the speed a prop that ran into them passes on.
+    pub(super) fn shove_player(&mut self, shove: Shove) {
+        if let Some(player) = self
+            .players
+            .iter_mut()
+            .flatten()
+            .find(|player| player.body == shove.player && player.alive())
+        {
+            player.state.velocity += shove.velocity;
+        }
     }
 
     /// Lets pickups come back, and living players take those they touch.

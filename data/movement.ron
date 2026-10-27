@@ -61,6 +61,9 @@ Movement(
         // Speed the player drifts down at without input, units/s.
         sink_speed: 60.0,
     ),
+    // A prop that comes to overlap the player (landing on them, rolling into
+    // them) pushes them out at up to this speed, units/s.
+    unstick_speed: 300.0,
     ladder: (
         // Climbing speed along the ladder, units/s.
         climb_speed: 200.0,

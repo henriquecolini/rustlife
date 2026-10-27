@@ -30,6 +30,8 @@ pub struct MovementConfig {
     pub water: WaterConfig,
     /// Ladder climbing.
     pub ladder: LadderConfig,
+    /// Fastest a player is pushed out of a prop that overlaps them, units/s.
+    pub unstick_speed: f32,
 }
 
 /// Movement while standing on a floor.
@@ -187,6 +189,7 @@ impl MovementConfig {
         check.range("water.speed_scale", self.water.speed_scale, 0.0, 1.0);
         check.non_negative("water.sink_speed", self.water.sink_speed);
 
+        check.positive("movement.unstick_speed", self.unstick_speed);
         check.positive("ladder.climb_speed", self.ladder.climb_speed);
         check.positive("ladder.mount_distance", self.ladder.mount_distance);
         check.non_negative("ladder.jump_off_speed", self.ladder.jump_off_speed);

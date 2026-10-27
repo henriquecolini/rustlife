@@ -22,7 +22,9 @@ predict its own player with the code the server runs. Each tick runs these
 steps:
 
 1. **Sanitise.** Every velocity component is clamped to `max_velocity`, and
-   non-finite values are zeroed.
+   non-finite values are zeroed. A player overlapping a prop is then pushed
+   out of it, at most `unstick_speed` per second and never into the map
+   (see [physics.md](physics.md)).
 2. **Duck** (`duck.rs`). Crouching on the ground takes `duck.duck_time`.
    The view lowers over that time and the hull shrinks at the end. Crouching
    in the air is instant and lifts the feet by the difference in hull

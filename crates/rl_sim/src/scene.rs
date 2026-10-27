@@ -7,6 +7,7 @@
 
 use glam::Vec3;
 
+use crate::collision::contents::MASK_PLAYER_SOLID;
 use crate::collision::{CollisionQuery, CollisionWorld, Hull, Ladder, Trace};
 use crate::movement::MovementWorld;
 use crate::physics::{BodyId, PhysicsWorld};
@@ -56,5 +57,14 @@ impl MovementWorld for Scene<'_> {
 
     fn ladder_dismounts(&self) -> &[Vec3] {
         self.world.ladder_dismounts()
+    }
+
+    fn penetration(&self, origin: Vec3, hull: &Hull, max_distance: f32) -> Option<Vec3> {
+        let out = self.physics.penetration(origin, hull, self.ignore)?;
+        let step = out.clamp_length_max(max_distance);
+        let map = self
+            .world
+            .trace_hull(origin, origin + step, hull, MASK_PLAYER_SOLID);
+        (!map.all_solid).then(|| map.end - origin)
     }
 }
