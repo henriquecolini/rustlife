@@ -39,6 +39,7 @@ pub mod pcf;
 pub mod phy;
 pub mod propdata;
 pub mod props;
+pub mod sheet;
 pub mod skybox;
 pub mod soundscape;
 pub mod soundscript;

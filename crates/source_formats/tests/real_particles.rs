@@ -82,3 +82,42 @@ fn lists_operators_in_use() {
         eprintln!("{n:4} {k}");
     }
 }
+
+#[test]
+#[ignore = "requires a Half-Life 2: Deathmatch install"]
+fn particle_textures_carry_sheets() {
+    let options = ContentOptions {
+        game_dir: game_dir(),
+        ..ContentOptions::default()
+    };
+    let Ok(game) = mount_game(&options) else {
+        return;
+    };
+    let mut with = 0;
+    let mut without = 0;
+    for file in game.vfs.list("materials/particle/**/*.vtf") {
+        let bytes = game.vfs.read(&file.path).unwrap().unwrap();
+        match source_formats::sheet::parse(&bytes) {
+            Some(sheet) => {
+                with += 1;
+                for s in &sheet.sequences {
+                    assert!(!s.frames.is_empty(), "{}: empty sequence", file.path);
+                    for f in &s.frames {
+                        let r = f.rect;
+                        assert!(
+                            (0.0..=1.0).contains(&r.u0)
+                                && (0.0..=1.0).contains(&r.u1)
+                                && r.u0 <= r.u1
+                                && r.v0 <= r.v1,
+                            "{}: {r:?}",
+                            file.path
+                        );
+                    }
+                }
+            }
+            None => without += 1,
+        }
+    }
+    eprintln!("{with} textures with a sheet, {without} without");
+    assert!(with > 0, "no sheets found");
+}
