@@ -40,7 +40,7 @@ pub use map::{
     BspLoader, IrradianceVolumeData, MapAsset, MapBrushEntity, MapLoadError, MapMesh, PlacedProp,
     Spawn,
 };
-pub use material::{SourceMaterial, VmtLoadError, VmtLoader};
+pub use material::{SinePulse, SourceMaterial, VmtLoadError, VmtLoader};
 pub use model::{MdlLoader, ModelAsset, ModelLoadError, ModelPart};
 pub use skeleton::{Joint, SequenceClips, Skeleton};
 pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
