@@ -589,6 +589,18 @@ fn glow_projectiles(
             quad.size
         };
         transform.scale = Vec3::splat(2.0 * size);
+        if quad.frames > 1 {
+            // The game steps the ball's core through its frames at 25 a second.
+            let frame = (time.elapsed_secs() * GLOW_FPS) as u32 % quad.frames;
+            if let Some(mut material) = materials.get_mut(&quad.material) {
+                let frames = quad.frames as f32;
+                material.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
+                    Vec2::new(1.0 / frames, 1.0),
+                    0.0,
+                    Vec2::new(frame as f32 / frames, 0.0),
+                );
+            }
+        }
     }
     let mesh = quad_mesh
         .get_or_insert_with(|| meshes.add(Rectangle::new(1.0, 1.0)))
