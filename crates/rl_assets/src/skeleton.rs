@@ -135,6 +135,9 @@ pub struct SequenceClips {
     pub activity: String,
     /// Whether it loops.
     pub looping: bool,
+    /// Whether it is a delta, layered over whatever else plays (a weapon's
+    /// prongs opening) rather than played by itself.
+    pub delta: bool,
     /// One clip per blend, in the sequence's grid order.
     pub clips: Vec<Handle<AnimationClip>>,
     /// The blend grid's size.
@@ -172,10 +175,13 @@ impl SequenceClips {
 
 /// Builds the clips of `sequences` (from `source`, whose bones are matched
 /// to `skeleton`'s by name), adding each clip with `add`. Delta sequences
-/// (layers such as aim matrices and gestures) are skipped.
+/// (layers such as aim matrices and gestures) are skipped unless
+/// `with_deltas`: a model's own few (a weapon's prongs) are wanted, the many
+/// of a player's animation set are not.
 pub fn sequence_clips(
     skeleton: &Skeleton,
     source: &ModelAnimation,
+    with_deltas: bool,
     add: &mut dyn FnMut(AnimationClip) -> Handle<AnimationClip>,
 ) -> Vec<SequenceClips> {
     // Each of the source's bones' joint in this skeleton.
@@ -188,7 +194,7 @@ pub fn sequence_clips(
     source
         .sequences
         .iter()
-        .filter(|sequence| !sequence.delta)
+        .filter(|sequence| with_deltas || !sequence.delta)
         .map(|sequence| {
             let clips = sequence
                 .blends
@@ -226,6 +232,7 @@ fn sequence_of(
         label: sequence.label.to_ascii_lowercase(),
         activity: sequence.activity.to_ascii_uppercase(),
         looping: sequence.looping,
+        delta: sequence.delta,
         clips,
         group: sequence.group,
         axes: [axis(0), axis(1)],
@@ -383,7 +390,7 @@ mod tests {
         let model = model();
         let skeleton = Skeleton::of(&model);
         let mut added = Vec::new();
-        let sequences = sequence_clips(&skeleton, &model, &mut |clip| {
+        let sequences = sequence_clips(&skeleton, &model, false, &mut |clip| {
             added.push(clip);
             Handle::default()
         });
@@ -409,7 +416,7 @@ mod tests {
     fn one_dimensional_blends_split_between_neighbours() {
         let model = model();
         let skeleton = Skeleton::of(&model);
-        let run = &sequence_clips(&skeleton, &model, &mut |_| Handle::default())[0];
+        let run = &sequence_clips(&skeleton, &model, false, &mut |_| Handle::default())[0];
         assert_eq!(run.blend_1d(-180.0), [(0, 1.0), (1, 0.0)]);
         assert_eq!(run.blend_1d(0.0), [(1, 1.0), (2, 0.0)]);
         let [(low, a), (high, b)] = run.blend_1d(90.0)[..] else {

@@ -176,6 +176,9 @@ fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()
     for (index, parameter) in animation.pose_parameters.iter().enumerate() {
         writeln!(out, "pose parameter {index}: {parameter:?}")?;
     }
+    for attachment in &animation.attachments {
+        writeln!(out, "attachment {attachment:?}")?;
+    }
     for sequence in &animation.sequences {
         let clip = sequence
             .blends

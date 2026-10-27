@@ -47,16 +47,25 @@ impl Animated {
         self.animation
             .sequences
             .iter()
-            .position(|sequence| sequence.label.eq_ignore_ascii_case(label))
+            .position(|sequence| !sequence.delta && sequence.label.eq_ignore_ascii_case(label))
     }
 
     /// The index of the first sequence of activity `activity` (any case).
     #[must_use]
     pub fn activity(&self, activity: &str) -> Option<usize> {
+        self.animation.sequences.iter().position(|sequence| {
+            !sequence.delta && sequence.activity.eq_ignore_ascii_case(activity)
+        })
+    }
+
+    /// The index of the delta layer labelled `label` (any case): a sequence
+    /// laid over whatever plays, by [`SequencePlayer::set_layer`].
+    #[must_use]
+    pub fn layer(&self, label: &str) -> Option<usize> {
         self.animation
             .sequences
             .iter()
-            .position(|sequence| sequence.activity.eq_ignore_ascii_case(activity))
+            .position(|sequence| sequence.delta && sequence.label.eq_ignore_ascii_case(label))
     }
 }
 
@@ -132,6 +141,9 @@ struct Track {
 pub struct SequencePlayer {
     current: Option<Track>,
     fading: Vec<Track>,
+    /// Delta layers laid over the pose: the sequence, its blend value and
+    /// how strongly.
+    layers: Vec<(usize, f32, f32)>,
     /// Seconds a change of sequence fades over.
     pub fade: f32,
 }
@@ -162,6 +174,16 @@ impl SequencePlayer {
         self.start(sequence, 0.0, rate);
         if let Some(track) = &mut self.current {
             track.hold = true;
+        }
+    }
+
+    /// Lays the delta sequence `sequence` over the pose, blended at `blend`
+    /// along its axis and `weight` strong (a weapon's prongs, opened by the
+    /// pose parameter `active`). Lasts until set again.
+    pub fn set_layer(&mut self, sequence: usize, blend: f32, weight: f32) {
+        match self.layers.iter_mut().find(|layer| layer.0 == sequence) {
+            Some(layer) => *layer = (sequence, blend, weight),
+            None => self.layers.push((sequence, blend, weight)),
         }
     }
 
@@ -241,24 +263,33 @@ impl SequencePlayer {
     /// Each clip's weight and time: every track's blends, by their weights.
     fn clip_weights(&self, sequences: &[SequenceClips]) -> Vec<(AssetId<AnimationClip>, f32, f32)> {
         let mut weights: Vec<(AssetId<AnimationClip>, f32, f32)> = Vec::new();
-        for track in self.fading.iter().chain(&self.current) {
-            let Some(sequence) = sequences.get(track.sequence) else {
+        let layers = self
+            .layers
+            .iter()
+            .map(|&(sequence, blend, weight)| (sequence, blend, weight, 0.0));
+        let tracks = self
+            .fading
+            .iter()
+            .chain(&self.current)
+            .map(|track| (track.sequence, track.blend, track.weight, track.time));
+        for (index, blend_value, track_weight, time) in tracks.chain(layers) {
+            let Some(sequence) = sequences.get(index) else {
                 continue;
             };
-            for (blend, share) in sequence.blend_1d(track.blend) {
+            for (blend, share) in sequence.blend_1d(blend_value) {
                 let Some(clip) = sequence.clips.get(blend) else {
                     continue;
                 };
-                let weight = track.weight * share;
+                let weight = track_weight * share;
                 if weight <= 0.0 {
                     continue;
                 }
                 match weights.iter_mut().find(|(id, ..)| *id == clip.id()) {
                     Some(entry) => {
                         entry.1 += weight;
-                        entry.2 = track.time;
+                        entry.2 = time;
                     }
-                    None => weights.push((clip.id(), weight, track.time)),
+                    None => weights.push((clip.id(), weight, time)),
                 }
             }
         }
@@ -277,15 +308,16 @@ fn prepare(
         let model = graphs.0.entry(animated.model.id()).or_insert_with(|| {
             let mut graph = AnimationGraph::new();
             let mut nodes = HashMap::new();
-            for clip in animated
-                .animation
-                .sequences
-                .iter()
-                .flat_map(|sequence| &sequence.clips)
-            {
-                nodes
-                    .entry(clip.id())
-                    .or_insert_with(|| graph.add_clip(clip.clone(), 1.0, graph.root));
+            // Delta layers are added on top of the poses, under a node of
+            // their own.
+            let additive = graph.add_additive_blend(1.0, graph.root);
+            for sequence in &animated.animation.sequences {
+                let parent = if sequence.delta { additive } else { graph.root };
+                for clip in &sequence.clips {
+                    nodes
+                        .entry(clip.id())
+                        .or_insert_with(|| graph.add_clip(clip.clone(), 1.0, parent));
+                }
             }
             ModelGraph {
                 graph: assets.add(graph),
@@ -355,6 +387,7 @@ mod tests {
         let sequence = |looping, clips: usize| SequenceClips {
             label: "s".to_owned(),
             activity: String::new(),
+            delta: false,
             looping,
             clips: (0..clips).map(|_| Handle::default()).collect(),
             group: [clips, 1],

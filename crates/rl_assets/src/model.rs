@@ -100,12 +100,13 @@ pub struct ModelAnimationAsset {
 }
 
 impl ModelAnimationAsset {
-    /// The first sequence labelled `label` (any case).
+    /// The first sequence labelled `label` (any case); a delta layer is
+    /// found only by its own lookup.
     #[must_use]
     pub fn sequence(&self, label: &str) -> Option<&SequenceClips> {
         self.sequences
             .iter()
-            .find(|sequence| sequence.label.eq_ignore_ascii_case(label))
+            .find(|sequence| !sequence.delta && sequence.label.eq_ignore_ascii_case(label))
     }
 
     /// The first sequence of activity `activity` (any case).
@@ -113,7 +114,7 @@ impl ModelAnimationAsset {
     pub fn activity(&self, activity: &str) -> Option<&SequenceClips> {
         self.sequences
             .iter()
-            .find(|sequence| sequence.activity.eq_ignore_ascii_case(activity))
+            .find(|sequence| !sequence.delta && sequence.activity.eq_ignore_ascii_case(activity))
     }
 }
 
@@ -263,7 +264,14 @@ async fn load_animation(
             clip_count += 1;
             load_context.add_labeled_asset(format!("clip{clip_count}"), clip)
         };
-        sequences.extend(skeleton::sequence_clips(&skeleton, &model, &mut add));
+        // A model's own delta layers count; its includes' (the player
+        // animation sets' hundreds of aim matrices) do not.
+        sequences.extend(skeleton::sequence_clips(
+            &skeleton,
+            &model,
+            depth == 0,
+            &mut add,
+        ));
         if depth >= MAX_INCLUDE_DEPTH {
             continue;
         }

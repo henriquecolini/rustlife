@@ -62,6 +62,7 @@ pub mod net;
 pub mod particles;
 pub mod pcf_particles;
 pub mod player;
+mod prongs;
 pub mod props;
 pub mod ragdolls;
 pub mod script;

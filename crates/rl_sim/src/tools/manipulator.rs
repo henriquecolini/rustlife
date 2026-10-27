@@ -228,14 +228,7 @@ impl Manipulator {
         intervals: Intervals,
     ) -> Option<ToolEvent> {
         let grab = &config.grab;
-        let range = grab.range.max(grab.pull_range);
-        let (body, point) = aim_at(aim, range, world, physics)?;
-        let liftable = physics.is_grabbable(body)
-            && physics.mass(body).is_some_and(|mass| mass <= grab.max_mass)
-            && physics.holder(body).is_none();
-        if !liftable {
-            return None;
-        }
+        let (body, point) = liftable_target(aim, world, physics, config)?;
         if point.distance(aim.eye) <= grab.range {
             physics.set_held(body, Some(player_body));
             let rotation = physics
@@ -302,6 +295,24 @@ impl Manipulator {
         physics.set_velocity(held.body, linear, angular);
         None
     }
+}
+
+/// The prop under the crosshair the tool could grab or pull, within pull
+/// range, with the point hit: grabbable, light enough and not already held.
+/// With the tool in hand and a prop like this ahead, its prongs open.
+#[must_use]
+pub fn liftable_target(
+    aim: &Aim,
+    world: &CollisionWorld,
+    physics: &PhysicsWorld,
+    config: &ManipulatorConfig,
+) -> Option<(BodyId, Vec3)> {
+    let grab = &config.grab;
+    let (body, point) = aim_at(aim, grab.range.max(grab.pull_range), world, physics)?;
+    let liftable = physics.is_grabbable(body)
+        && physics.mass(body).is_some_and(|mass| mass <= grab.max_mass)
+        && physics.holder(body).is_none();
+    liftable.then_some((body, point))
 }
 
 /// The prop the aiming ray hits within `range`, with the point hit; `None`

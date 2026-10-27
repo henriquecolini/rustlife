@@ -51,7 +51,7 @@ pub struct ViewModelPlugin;
 
 impl Plugin for ViewModelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ZoomPlugin, LaserPlugin))
+        app.add_plugins((ZoomPlugin, LaserPlugin, crate::prongs::ProngsPlugin))
             .add_systems(Update, add_view_camera)
             .add_systems(
                 Update,
@@ -97,6 +97,13 @@ pub(crate) struct ViewModel {
     /// A shot charging (or a grenade being let go) has started its
     /// animation.
     charging: bool,
+}
+
+impl ViewModel {
+    /// The weapon it is the view model of.
+    pub(crate) fn weapon(&self) -> WeaponId {
+        self.weapon
+    }
 }
 
 /// Gives the main camera a child camera for the view model.
@@ -195,6 +202,7 @@ fn swap_view_model(
             charging: false,
         },
         Moving,
+        crate::prongs::Prongs::default(),
         // Lit from where the eyes are from the first frame: a model that
         // loads at once (a weapon taken up again) would otherwise be lit
         // from the world's origin, usually inside a wall.
@@ -411,7 +419,7 @@ fn follow_up(
 }
 
 /// Plays the view model's activities as the local player acts.
-fn animate_view_model(
+pub(crate) fn animate_view_model(
     mut ticks: MessageReader<Ticked>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
