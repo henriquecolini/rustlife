@@ -105,6 +105,12 @@ pub(super) fn frame_rect(
     }
 }
 
+/// Whether a card is skipped for being too near: the engine drops a card
+/// whose viewer is closer to it than half its radius.
+pub(super) fn too_near(radius: f32, distance: f32) -> bool {
+    0.5 * radius > distance
+}
+
 /// A card's radius and opacity scale as the engine's `SpriteCard` shader
 /// gives them, for a card of `radius` seen from `distance` away (same
 /// units): the radius is kept between `limits.min` and `limits.max` times
@@ -172,14 +178,14 @@ pub(super) fn sprite(
 }
 
 /// A streak from `head` back along `velocity`: `length` long (clamped to
-/// `min..=max`) and `radius` either side, turned about its axis to show its
-/// face to the viewer. `None` for a particle that is standing still.
+/// `min..=max`) and `width` wide (the particle's radius, not twice it, unlike
+/// a card), turned about its axis to show its face to the viewer. `None` for a particle that is standing still.
 pub(super) fn trail(
     head: Vec3,
     velocity: Vec3,
     length: f32,
     (min, max): (f32, f32),
-    radius: f32,
+    width: f32,
     view_position: Vec3,
     rect: Rect,
     color: [f32; 4],
@@ -194,7 +200,7 @@ pub(super) fn trail(
         .cross(view_position - head)
         .try_normalize()
         .unwrap_or(Vec3::Y)
-        * radius;
+        * (0.5 * width);
     // Texture runs tail (u0) to head (u1) along the streak.
     Some(Quad {
         corners: [tail + side, head + side, head - side, tail - side],
@@ -334,6 +340,29 @@ mod tests {
             limit_size(100.0, 100.0, SizeLimits::default()),
             (100.0, 1.0)
         );
+    }
+
+    #[test]
+    fn cards_closer_than_half_their_radius_are_skipped() {
+        assert!(too_near(10.0, 4.0));
+        assert!(!too_near(10.0, 5.0));
+        assert!(!too_near(1.0, 100.0));
+    }
+
+    #[test]
+    fn a_trail_is_as_wide_as_its_radius() {
+        let q = trail(
+            Vec3::ZERO,
+            Vec3::X,
+            2.0,
+            (0.0, 10.0),
+            3.0,
+            Vec3::Z * 5.0,
+            WHOLE,
+            [1.0; 4],
+        )
+        .unwrap();
+        assert!(((q.corners[0] - q.corners[3]).length() - 3.0).abs() < 1e-5);
     }
 
     #[test]
