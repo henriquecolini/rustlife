@@ -24,6 +24,7 @@ bevy_reflect.workspace = true
 bevy_transform.workspace = true
 futures-lite.workspace = true
 half.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 wgpu-types.workspace = true

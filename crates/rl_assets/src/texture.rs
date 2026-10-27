@@ -13,6 +13,7 @@ use bevy_asset::{AssetLoader, LoadContext, RenderAssetUsages};
 use bevy_image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
+use serde::{Deserialize, Serialize};
 use source_formats::vtf::{self, BlockFormat, CompressedTexture, DecodedTexture, VtfError};
 use thiserror::Error;
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
@@ -64,6 +65,14 @@ impl TextureDetail {
     }
 }
 
+/// How a texture is loaded, beyond how detailed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VtfSettings {
+    /// Load it as a `$selfillum` mask: the colour times the alpha, which is
+    /// how much the surface shines with its own light. (Always RGBA8.)
+    pub self_illum: bool,
+}
+
 /// Loads a `.vtf` file into an [`Image`]: block-compressed when the GPU
 /// samples BC formats (`bc`), else decoded RGBA8.
 #[derive(Default, TypePath)]
@@ -77,17 +86,22 @@ pub struct VtfLoader {
 
 impl AssetLoader for VtfLoader {
     type Asset = Image;
-    type Settings = ();
+    type Settings = VtfSettings;
     type Error = VtfLoadError;
 
     async fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &(),
+        settings: &VtfSettings,
         _load_context: &mut LoadContext<'_>,
     ) -> Result<Image, VtfLoadError> {
         let mut bytes = Vec::new();
         AsyncReadExt::read_to_end(reader, &mut bytes).await?;
+        if settings.self_illum {
+            let mut texture = vtf::decode(&bytes)?;
+            masked_by_alpha(&mut texture);
+            return Ok(image_from_decoded(texture, &self.detail));
+        }
         if self.bc.load(Ordering::Relaxed)
             && let Some(texture) = vtf::compressed(&bytes)
         {
@@ -98,6 +112,18 @@ impl AssetLoader for VtfLoader {
 
     fn extensions(&self) -> &[&str] {
         &["vtf"]
+    }
+}
+
+/// Multiplies each pixel's colour by its alpha and makes it opaque: the
+/// colour a `$selfillum` surface shines with.
+fn masked_by_alpha(texture: &mut DecodedTexture) {
+    for pixel in texture.rgba8.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(pixel[3]);
+        for channel in &mut pixel[..3] {
+            *channel = (u16::from(*channel) * alpha / 255) as u8;
+        }
+        pixel[3] = 255;
     }
 }
 
@@ -397,5 +423,25 @@ mod tests {
         };
         let image = image_from_decoded(decoded, &TextureDetail::default());
         assert_eq!(image.texture_descriptor.format, TextureFormat::Rgba8Unorm);
+    }
+
+    #[test]
+    fn a_self_illum_mask_is_the_colour_where_the_alpha_says_so() {
+        let mut texture = DecodedTexture {
+            width: 2,
+            height: 1,
+            rgba8: vec![200, 100, 50, 255, 200, 100, 50, 0],
+            is_normal_map: false,
+        };
+        masked_by_alpha(&mut texture);
+        assert_eq!(texture.rgba8, [200, 100, 50, 255, 0, 0, 0, 255]);
+        let mut half = DecodedTexture {
+            width: 1,
+            height: 1,
+            rgba8: vec![200, 100, 50, 128],
+            is_normal_map: false,
+        };
+        masked_by_alpha(&mut half);
+        assert_eq!(half.rgba8, [100, 50, 25, 255]);
     }
 }
