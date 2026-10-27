@@ -1,6 +1,6 @@
 # Plan: HL2DM visual effects, Gravity Gun and physics fidelity
 
-Status: effects work is partly done. DONE: PCF parser, simulation, renderer, event mapping; impacts, blood; the explosion rebuilt from FX_Explosion (matched frame by frame against native HL2DM); the AR2 impact flash; burning props play the game's `env_fire_medium`. NOT DONE (each needs its own client.so session): AR2 muzzle flash and tracer, combine ball, crossbow glow/trail, Gravity Gun visuals and strength (step 3), the physics audit (step 4), step 5's small items, decals audit, the debris chunks of CreateDebris.
+Status: DONE: PCF stack; impacts, blood; explosion (matched against native HL2DM); AR2 impact flash, Combine muzzle flash, animated energy ball (additive materials, TextureScroll, 25 fps core); burning props use env_fire_medium; crossbow tail glow (not visually verified). NOT DONE: Gravity Gun visuals and strength from server.so (step 3; manipulator.ron still holds guesses), physics audit (step 4), step 5 small items, decals audit, AR2 tracer exactness, CreateDebris chunks, wall-metal impact comparison, rope texture tiling.
 mechanics) is done; this plan covers what is left of "make it identical to
 HL2DM". Work in small commits; run `cargo run -q -p xtask -- ci` before each.
 
