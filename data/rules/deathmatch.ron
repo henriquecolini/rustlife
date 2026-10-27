@@ -57,8 +57,8 @@ Rules(
     // A prop thrown, punted or dropped by a player is theirs for this long:
     // a kill with it is their frag.
     prop_credit: 5.0,
-    // Landing faster than safe_speed hurts, rising linearly to
-    // fatal_damage at fatal_speed. A plain jump lands at about 270 units/s;
-    // a fall of 280 units reaches safe_speed.
-    fall_damage: (safe_speed: 580.0, fatal_speed: 1024.0, fatal_damage: 100.0),
+    // Landing faster than safe_speed (PLAYER_MAX_SAFE_FALL_SPEED) hurts by a
+    // fixed amount: HL2DM's mp_falldamage 0. A plain jump lands at about
+    // 270 units/s; a fall of 280 units reaches safe_speed.
+    fall_damage: (safe_speed: 580.0, damage: 10.0),
 )

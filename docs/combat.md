@@ -251,7 +251,7 @@ the prop within `prop_credit` seconds.
 |--------|--------|
 | Weapons | as above |
 | Props | `physics.ron`'s impact damage ([physics.md](physics.md)) |
-| Falls | `fall_damage`: none up to `safe_speed`, rising linearly to `fatal_damage` at `fatal_speed`. A plain jump lands at about 270 units/s; a 210-unit drop reaches the safe speed. |
+| Falls | `fall_damage`: none up to `safe_speed` (580), a fixed `damage` (10) past it, as HL2DM's `mp_falldamage 0`. A plain jump lands at about 270 units/s; a 280-unit drop reaches the safe speed. |
 | Hazards | a `trigger_hurt`'s `damage` per second, in two doses a second |
 
 Nobody is hurt between matches.

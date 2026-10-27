@@ -99,28 +99,26 @@ pub struct LoadoutConfig {
     pub ammo: BTreeMap<String, u32>,
 }
 
-/// Damage from landing hard: none up to a safe speed, rising linearly to
-/// `fatal_damage` at `fatal_speed` (and beyond it, in proportion).
+/// Damage from landing hard: none up to a safe speed, a fixed amount past it
+/// (HL2DM's `mp_falldamage 0`: `FlPlayerFallDamage` returns 10).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FallDamageConfig {
     /// Fastest landing that does no harm, units/s.
     pub safe_speed: f32,
-    /// Landing speed that deals `fatal_damage`, units/s.
-    pub fatal_speed: f32,
-    /// Damage at `fatal_speed`.
-    pub fatal_damage: f32,
+    /// Damage for landing faster than that.
+    pub damage: f32,
 }
 
 impl FallDamageConfig {
     /// The damage for landing at `speed` units/s.
     #[must_use]
     pub fn damage(&self, speed: f32) -> f32 {
-        let span = self.fatal_speed - self.safe_speed;
-        if speed <= self.safe_speed || span <= 0.0 {
-            return 0.0;
+        if speed > self.safe_speed {
+            self.damage
+        } else {
+            0.0
         }
-        (speed - self.safe_speed) / span * self.fatal_damage
     }
 }
 
@@ -146,10 +144,7 @@ impl RulesConfig {
         check.non_negative("prop_credit", self.prop_credit);
         let fall = &self.fall_damage;
         check.non_negative("fall_damage.safe_speed", fall.safe_speed);
-        if fall.fatal_speed <= fall.safe_speed {
-            check.fail("fall_damage.fatal_speed", "must exceed safe_speed");
-        }
-        check.non_negative("fall_damage.fatal_damage", fall.fatal_damage);
+        check.non_negative("fall_damage.damage", fall.damage);
     }
 }
 
@@ -158,14 +153,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fall_damage_rises_linearly_past_the_safe_speed() {
+    fn fall_damage_is_fixed_past_the_safe_speed() {
         let fall = FallDamageConfig {
-            safe_speed: 600.0,
-            fatal_speed: 1000.0,
-            fatal_damage: 100.0,
+            safe_speed: 580.0,
+            damage: 10.0,
         };
         assert_eq!(fall.damage(500.0), 0.0);
-        assert_eq!(fall.damage(800.0), 50.0);
-        assert_eq!(fall.damage(1200.0), 150.0);
+        assert_eq!(fall.damage(580.0), 0.0);
+        assert_eq!(fall.damage(581.0), 10.0);
+        assert_eq!(fall.damage(1500.0), 10.0);
     }
 }

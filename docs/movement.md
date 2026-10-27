@@ -41,7 +41,7 @@ steps:
 6. **Walk or fly**:
    1. Apply half of the tick's gravity.
    2. Jump if the button was freshly pressed (or held, with
-      `jump.auto_hop`). The launch speed is `√(2 · gravity · jump.height)`.
+      `jump.auto_hop`). The launch speed is `√(2 · gravity · jump.height)`: 160 units/s, a rise of about 21 units, as in HL2DM.
    3. On the ground, apply friction and then **walk**: accelerate towards
       the wished velocity and cap at the top speed. Move, stepping up ledges
       if blocked, and stay glued to slopes going down.

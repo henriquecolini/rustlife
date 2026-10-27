@@ -36,8 +36,10 @@ Movement(
         speed_cap: 30.0,
     ),
     jump: (
-        // Height of a standing jump, units.
-        height: 45.0,
+        // Height of a standing jump, units. HL2DM launches at a fixed
+        // 160 units/s with sv_gravity 600 (CheckJumpButton, taken with
+        // sv_optimizedmovement 1): 160^2 / (2 * 600) = 21.33.
+        height: 21.3333,
         // Jump again on landing while the button is held. When false, the
         // jump button must be re-pressed for every hop.
         auto_hop: false,
