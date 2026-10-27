@@ -63,7 +63,7 @@ Movement(
     ),
     // A prop that comes to overlap the player (landing on them, rolling into
     // them) pushes them out at up to this speed, units/s.
-    unstick_speed: 300.0,
+    unstick_speed: 600.0,
     ladder: (
         // Climbing speed along the ladder, units/s.
         climb_speed: 200.0,

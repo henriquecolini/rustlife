@@ -51,7 +51,7 @@ Physics(
         // creeps.
         player_mass: 85.0,
         // Largest speed change one tick of pushing gives a prop, units/s.
-        max_speed_change: 400.0,
+        max_speed_change: 800.0,
     ),
     breakables: (
         // The blast of an exploding prop (a barrel) throws players and props
