@@ -299,3 +299,13 @@ the throw. These scripts move the player on the hosted server.
 
 `cargo bench -p rl_sim -- simulation` times a whole tick with one player
 running into 64 tumbling crates.
+
+## Gravity Gun launch speed (from server.so)
+
+The physcannon's force routine returns `direction * force`, where `force` is
+`physcannon_maxforce` (1500) for a prop up to 100 kg, easing (smoothstep over
+`(mass - 100) * 0.002`) down to `physcannon_minforce` (700) at 600 kg. A held
+prop thrown with primary fire leaves at that speed. `data/tools/manipulator.ron`
+encodes it as `speed: 1500` and a mass curve. The punt uses the same routine's
+wrapper; how it applies the force, and the pull acceleration, hold distance and
+refire times, were not traced.

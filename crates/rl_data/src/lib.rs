@@ -650,12 +650,15 @@ mod tests {
     #[test]
     fn builtin_impact_damage_matches_its_documented_example() {
         let data = GameData::builtin().expect("builtin");
-        // physics.ron: a 30 kg barrel at 1000 units/s deals about 110.
+        // physics.ron: a 30 kg barrel at 1000 units/s deals about 110 (still the impact-damage example).
         let damage = data.physics.impact_damage.damage(30.0, 1000.0);
         assert!((100.0..120.0).contains(&damage), "{damage}");
-        // manipulator.ron: that barrel leaves at about 1000 units/s.
+        // manipulator.ron (from server.so's physcannon force): anything up to
+        // 100 kg leaves at 1500 units/s, heavier props a little slower.
         let speed = data.manipulator.launch.speed_for(30.0);
-        assert!((950.0..1050.0).contains(&speed), "{speed}");
+        assert!((1490.0..1510.0).contains(&speed), "{speed}");
+        let heavy = data.manipulator.launch.speed_for(250.0);
+        assert!((1300.0..1400.0).contains(&heavy), "{heavy}");
     }
 
     #[test]

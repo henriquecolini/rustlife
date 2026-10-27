@@ -31,18 +31,21 @@ Manipulator(
         break_distance: 64.0,
         break_time: 0.25,
     ),
-    // Primary fire on a held prop throws it along the view.
+    // Primary fire on a held prop throws it along the view. From server.so's
+    // physcannon force routine: the speed is physcannon_maxforce (1500) up to
+    // 100 kg, easing (smoothstep) down to physcannon_minforce (700) at 600 kg,
+    // so the factor below is that curve over 1500.
     launch: (
         range: 0.0,
-        // Speed of a weightless prop, units/s, scaled by mass: a 30 kg
-        // barrel leaves at about 1000 units/s.
-        speed: 1400.0,
-        mass_curve: [(0.0, 1.0), (10.0, 0.9), (30.0, 0.72), (100.0, 0.45), (250.0, 0.25)],
+        speed: 1500.0,
+        mass_curve: [(0.0, 1.0), (100.0, 1.0), (150.0, 0.985), (200.0, 0.945), (250.0, 0.885), (600.0, 0.4667)],
     ),
-    // Primary fire on a prop that is not held knocks it away.
+    // Primary fire on a prop that is not held knocks it away. The same force
+    // routine serves it (its entry is a thin wrapper); how the punt applies
+    // the force was not traced.
     punt: (
         range: 256.0,
-        speed: 1000.0,
-        mass_curve: [(0.0, 1.0), (30.0, 0.7), (100.0, 0.35), (500.0, 0.05)],
+        speed: 1500.0,
+        mass_curve: [(0.0, 1.0), (100.0, 1.0), (150.0, 0.985), (200.0, 0.945), (250.0, 0.885), (600.0, 0.4667)],
     ),
 )
