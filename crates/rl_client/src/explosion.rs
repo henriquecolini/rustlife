@@ -4,7 +4,8 @@
 //! not with a particle system: a handful of sprite puffs: dark smoke
 //! (`particle_noisesphere`), a fireball of `effects/fire_cloud2` and
 //! `fire_embers` sparks, launched hard and
-//! braked at once. The numbers here (counts, lifetimes, sizes, speeds) and
+//! braked at once; then `CreateDebris`'s spark streaks and its chips of
+//! concrete (`fleck_cement`), which fall and bounce. The numbers here (counts, lifetimes, sizes, speeds) and
 //! the per-frame rules are read from `client.so`; where something is an
 //! approximation it is said so.
 //!
@@ -64,6 +65,15 @@ const SMOKE_FLOOR: f32 = 0.05;
 const SPARK_WIDTH: (f32, f32) = (2.0, 16.0);
 /// A spark streak is this many seconds of its flight long.
 const SPARK_SECONDS: f32 = 0.04;
+/// How fast a chip falls, units/s² (`CParticleCollision`'s gravity).
+const CHIP_GRAVITY: f32 = 800.0;
+/// The share of its speed a chip keeps when it bounces off a wall.
+const CHIP_BOUNCE: f32 = 0.5;
+/// A chip's launch counts alignment with the normal like the puffs' do, but
+/// at `0.8` rather than `0.7`.
+const CHIP_THRUST: f32 = 0.8;
+/// A chip slower than this after a bounce lies still, units/s.
+const CHIP_REST_SPEED: f32 = 30.0;
 /// The longest a frame is allowed to age the puffs, seconds.
 const MAX_STEP: f32 = 1.0 / 30.0;
 /// Most puffs alive at once.
@@ -83,16 +93,21 @@ pub(crate) enum Sprite {
     Embers2,
     /// `effects/fire_embers3`: the spark streaks of `CreateDebris`.
     Spark,
+    /// `effects/fleck_cement1` and `2`: the chips of `CreateDebris`.
+    Chip1,
+    Chip2,
 }
 
 impl Sprite {
     /// Every sprite, to load.
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::Smoke,
         Self::Fire,
         Self::Embers1,
         Self::Embers2,
         Self::Spark,
+        Self::Chip1,
+        Self::Chip2,
     ];
 
     fn material(self) -> &'static str {
@@ -102,6 +117,8 @@ impl Sprite {
             Self::Embers1 => "effects/fire_embers1",
             Self::Embers2 => "effects/fire_embers2",
             Self::Spark => "effects/fire_embers3",
+            Self::Chip1 => "effects/fleck_cement1",
+            Self::Chip2 => "effects/fleck_cement2",
         }
     }
 }
@@ -169,6 +186,11 @@ pub(crate) struct Puff {
     /// Whether it is a streak along its flight (a spark) rather than a
     /// camera-facing puff; sparks are not braked.
     pub streak: bool,
+    /// How fast it falls, units/s², and what share of its speed it keeps
+    /// bouncing off a wall (a chip of debris; zero for the rest, which
+    /// neither fall nor collide).
+    pub gravity: f32,
+    pub bounce: f32,
 }
 
 /// A number in `low..high`.
@@ -243,6 +265,8 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -2.0, 2.0),
             streak: false,
+            gravity: 0.0,
+            bounce: 0.0,
         });
     }
     // Eight smaller, quicker smoke clouds around the centre: 32-64 doubling.
@@ -261,6 +285,8 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
             streak: false,
+            gravity: 0.0,
+            bounce: 0.0,
         });
     }
     // Sixteen embers thrown all about, leaning along the open side: constant
@@ -284,6 +310,8 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
             streak: false,
+            gravity: 0.0,
+            bounce: 0.0,
         });
     }
     // The fireball: thirty-two fire puffs of 0.2-0.4 s scattered over 96 units.
@@ -302,6 +330,8 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -16.0, 16.0),
             streak: false,
+            gravity: 0.0,
+            bounce: 0.0,
         });
     }
     // A ring of thirty-two flung flat along the open side.
@@ -320,12 +350,14 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: between(rng, 0.0, 360.0),
             roll_speed: between(rng, -8.0, 8.0),
             streak: false,
+            gravity: 0.0,
+            bounce: 0.0,
         });
     }
     // Eight to sixteen spark streaks flung every way, gone in a tenth of a
     // second (`CreateDebris`).
     for _ in 0..(8 + rng.below(9)) {
-        let direction = random_vector(rng, 1.0).normalize_or_zero();
+        let direction = (random_vector(rng, 1.0) + normal).normalize_or_zero();
         let half_width = 0.5 * between(rng, SPARK_WIDTH.0, SPARK_WIDTH.1);
         puffs.push(Puff {
             sprite: Sprite::Spark,
@@ -337,6 +369,36 @@ pub(crate) fn engine_puffs(rng: &mut Rng, normal: Vec3, light: Light) -> Vec<Puf
             roll: 0.0,
             roll_speed: 0.0,
             streak: true,
+            gravity: 0.0,
+            bounce: 0.0,
+        });
+    }
+    // Sixteen to thirty-two chips of concrete (`CreateDebris`'s second
+    // emitter), thrown about the open side from just in front of the blast,
+    // spinning, falling and bouncing for three seconds. The smaller the chip,
+    // the harder it flies; every one is dark.
+    for _ in 0..(16 + rng.below(17)) {
+        let size = 1 + rng.below(3);
+        let direction = (random_vector(rng, 1.0) + normal).normalize_or_zero();
+        let weight = CHIP_THRUST * direction.dot(normal).abs();
+        let speed = between(rng, 64.0, 256.0) * weight * (4 - size) as f32 * 8.0 * weight;
+        let grey = (between(rng, 0.5, 1.5) * 63.75).floor() / 255.0;
+        puffs.push(Puff {
+            sprite: if rng.below(2) == 0 {
+                Sprite::Chip1
+            } else {
+                Sprite::Chip2
+            },
+            offset: normal * 16.0 + random_vector(rng, 8.0),
+            velocity: direction * speed,
+            life: 3.0,
+            size: (size as f32, size as f32),
+            color: [grey; 3],
+            roll: between(rng, 0.0, 360.0).to_radians(),
+            roll_speed: between(rng, 0.0, 360.0).to_radians(),
+            streak: false,
+            gravity: CHIP_GRAVITY,
+            bounce: CHIP_BOUNCE,
         });
     }
     puffs
@@ -510,11 +572,44 @@ struct Alive {
     glows: bool,
     /// Whether it is a streak along its flight.
     streak: bool,
+    /// How fast it falls, units/s², and how much of its speed it keeps on a
+    /// bounce: a chip of debris if it falls.
+    gravity: f32,
+    bounce: f32,
+    /// A chip that came to rest.
+    settled: bool,
     /// Where it began, Bevy space.
     origin: Vec3,
     roll: f32,
     roll_speed: f32,
     material: Handle<StandardMaterial>,
+}
+
+/// Moves a chip for `dt`: it falls, and bounces off walls losing part of
+/// its speed, lying still once a bounce leaves it slow.
+fn fall(puff: &mut Alive, transform: &mut Transform, world: Option<&CollisionWorld>, dt: f32) {
+    if puff.settled {
+        return;
+    }
+    puff.velocity.z -= puff.gravity * dt;
+    let from = Vec3::from(coords::to_source_position(transform.translation));
+    let to = from + puff.velocity * dt;
+    let hit = world
+        .map(|world| world.trace_ray(from, to, SOLID))
+        .filter(|trace| trace.hit() && !trace.start_solid);
+    let Some(trace) = hit else {
+        transform.translation = coords::position(to.to_array());
+        return;
+    };
+    // Back off the wall a little, and send the chip away from it.
+    let at = trace.end + trace.normal * 0.5;
+    transform.translation = coords::position(at.to_array());
+    let along = puff.velocity.dot(trace.normal);
+    puff.velocity = (puff.velocity - 2.0 * along * trace.normal) * puff.bounce;
+    if puff.velocity.length() < CHIP_REST_SPEED {
+        puff.velocity = Vec3::ZERO;
+        puff.settled = true;
+    }
 }
 
 /// Makes the puffs of each asked-for blast.
@@ -578,6 +673,9 @@ fn spawn_puffs(
                     color: puff.color,
                     glows: sprite.additive,
                     streak: puff.streak,
+                    gravity: puff.gravity,
+                    bounce: puff.bounce,
+                    settled: false,
                     origin: blast.at + offset,
                     roll: puff.roll,
                     roll_speed: puff.roll_speed,
@@ -595,6 +693,7 @@ fn spawn_puffs(
 /// Moves, grows, turns and fades every puff; removes the spent.
 fn move_puffs(
     mut commands: Commands,
+    game: crate::net::Game,
     time: Res<Time>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut puffs: Query<(Entity, &mut Alive, &mut Transform)>,
@@ -613,16 +712,27 @@ fn move_puffs(
             commands.entity(entity).try_despawn();
             continue;
         }
-        if !puff.streak {
-            puff.velocity = braked(puff.velocity, dt);
+        let chip = puff.gravity > 0.0;
+        if chip {
+            fall(
+                &mut puff,
+                &mut transform,
+                game.sim().map(|sim| sim.world()),
+                dt,
+            );
+            puff.roll += puff.roll_speed * dt;
+        } else {
+            if !puff.streak {
+                puff.velocity = braked(puff.velocity, dt);
+            }
+            if !puff.streak {
+                transform.translation +=
+                    coords::direction(puff.velocity.to_array()) * coords::METERS_PER_UNIT * dt;
+            }
+            let (roll, roll_speed) = rolled(puff.roll, puff.roll_speed, dt);
+            puff.roll = roll;
+            puff.roll_speed = roll_speed;
         }
-        let step = coords::direction(puff.velocity.to_array()) * coords::METERS_PER_UNIT * dt;
-        if !puff.streak {
-            transform.translation += step;
-        }
-        let (roll, roll_speed) = rolled(puff.roll, puff.roll_speed, dt);
-        puff.roll = roll;
-        puff.roll_speed = roll_speed;
         let t = puff.age / puff.life;
         let half = puff.size.0 + (puff.size.1 - puff.size.0) * t;
         if puff.streak {
@@ -650,10 +760,16 @@ fn move_puffs(
         } else {
             fade(t)
         };
-        let alpha = brightness * near_fade(depth);
+        // A chip keeps its colour and fades out by its opacity, linearly.
+        let (shade, opacity) = if chip {
+            (1.0, 1.0 - t)
+        } else {
+            (brightness, brightness)
+        };
+        let alpha = opacity * near_fade(depth);
         if let Some(mut material) = materials.get_mut(&puff.material) {
             let gain = if puff.glows { GLOW_GAIN } else { 1.0 };
-            let [r, g, b] = puff.color.map(|c| c * brightness * gain);
+            let [r, g, b] = puff.color.map(|c| c * shade * gain);
             material.base_color = Color::linear_rgba(r, g, b, alpha);
         }
     }
@@ -671,6 +787,10 @@ mod tests {
         puffs.iter().filter(|p| p.streak).count()
     }
 
+    fn chips(puffs: &[Puff]) -> Vec<Puff> {
+        puffs.iter().filter(|p| p.gravity > 0.0).copied().collect()
+    }
+
     fn of(puffs: &[Puff], sprite: Sprite) -> Vec<Puff> {
         puffs
             .iter()
@@ -682,7 +802,7 @@ mod tests {
     #[test]
     fn a_blast_is_ninety_two_puffs_in_five_groups_and_some_sparks() {
         let all = puffs(Vec3::Z);
-        assert_eq!(all.len() - sparks(&all), 92);
+        assert_eq!(all.len() - sparks(&all) - chips(&all).len(), 92);
         assert_eq!(of(&all, Sprite::Fire).len(), 32, "the fireball");
         assert_eq!(
             of(&all, Sprite::Smoke).len(),
@@ -732,6 +852,104 @@ mod tests {
                 assert_eq!(p.sprite, Sprite::Spark);
             }
         }
+    }
+
+    #[test]
+    fn sixteen_to_thirty_two_dark_chips_fall_and_bounce_for_three_seconds() {
+        for seed in 0..30 {
+            let all = engine_puffs(&mut Rng::seeded(&[seed]), Vec3::Z, Light::BRIGHT);
+            let chips = chips(&all);
+            assert!((16..=32).contains(&chips.len()), "{}", chips.len());
+            for chip in chips {
+                assert!(matches!(chip.sprite, Sprite::Chip1 | Sprite::Chip2));
+                assert_eq!(chip.life, 3.0);
+                assert_eq!((chip.gravity, chip.bounce), (800.0, 0.5));
+                assert!((1.0..=3.0).contains(&chip.size.0) && chip.size.0 == chip.size.1);
+                assert!(
+                    chip.color
+                        .iter()
+                        .all(|&c| (31.0 / 255.0..=95.0 / 255.0).contains(&c))
+                );
+                // Born 16 units out along the normal, give or take 8.
+                assert!((8.0..=24.0).contains(&chip.offset.z), "{:?}", chip.offset);
+                assert!(chip.offset.x.abs() <= 8.0 && chip.offset.y.abs() <= 8.0);
+            }
+        }
+    }
+
+    #[test]
+    fn small_chips_fly_harder_than_big_ones() {
+        let mut fastest = [0.0f32; 4];
+        for seed in 0..60 {
+            for chip in chips(&engine_puffs(
+                &mut Rng::seeded(&[seed]),
+                Vec3::Z,
+                Light::BRIGHT,
+            )) {
+                let size = chip.size.0 as usize;
+                fastest[size] = fastest[size].max(chip.velocity.length());
+            }
+        }
+        assert!(
+            fastest[1] > fastest[2] && fastest[2] > fastest[3],
+            "{fastest:?}"
+        );
+    }
+
+    #[test]
+    fn sparks_leave_around_the_open_side() {
+        let normal = Vec3::Z;
+        let mut up = 0;
+        let mut down = 0;
+        for seed in 0..40 {
+            for p in engine_puffs(&mut Rng::seeded(&[seed]), normal, Light::BRIGHT) {
+                if p.streak {
+                    if p.velocity.z > 0.0 {
+                        up += 1;
+                    } else {
+                        down += 1;
+                    }
+                }
+            }
+        }
+        assert!(up > 2 * down, "{up} up, {down} down");
+    }
+
+    #[test]
+    fn a_falling_chip_bounces_off_the_floor_and_comes_to_rest() {
+        let floor = rl_sim::collision::WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-512.0, -512.0, -64.0),
+                Vec3::new(512.0, 512.0, 0.0),
+            )
+            .build();
+        let mut chip = Alive {
+            velocity: Vec3::new(100.0, 0.0, 0.0),
+            age: 0.0,
+            life: 3.0,
+            size: (2.0, 2.0),
+            color: [0.2; 3],
+            glows: false,
+            streak: false,
+            gravity: CHIP_GRAVITY,
+            bounce: CHIP_BOUNCE,
+            settled: false,
+            origin: Vec3::ZERO,
+            roll: 0.0,
+            roll_speed: 0.0,
+            material: Handle::default(),
+        };
+        let mut transform = Transform::from_translation(coords::position([0.0, 0.0, 40.0]));
+        let mut lowest = f32::MAX;
+        for _ in 0..600 {
+            fall(&mut chip, &mut transform, Some(&floor), 1.0 / 60.0);
+            let z = coords::to_source_position(transform.translation)[2];
+            lowest = lowest.min(z);
+        }
+        assert!(lowest > -1.0, "never through the floor: {lowest}");
+        assert!(chip.settled, "lies still in the end");
+        let z = coords::to_source_position(transform.translation)[2];
+        assert!(z < 2.0, "on the floor: {z}");
     }
 
     #[test]
