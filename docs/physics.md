@@ -113,9 +113,9 @@ Props act on players back in two ways.
 
 - **Shoves.** A prop in contact with a player and moving into them gives
   them speed, as the player gives it to a prop: the prop meets the player as
-  a body of its own mass against `push.player_mass`, in a perfectly inelastic
-  collision along the contact normal, capped by `push.max_speed_change` per
-  tick. A rolling barrel carries a player along; a crate pushed by someone
+  a body of its own mass against the much lighter `push.shove_mass` (so
+  even a small crate moves a player), in a perfectly inelastic collision
+  along the contact normal, capped by `push.max_shove_change` per tick. A rolling barrel carries a player along; a crate pushed by someone
   else's Manipulator nudges them; a prop at rest or moving away does
   nothing. The change goes to the player's velocity at the end of the tick
   (`Simulation::shove_player`), so clients see it as a correction, like

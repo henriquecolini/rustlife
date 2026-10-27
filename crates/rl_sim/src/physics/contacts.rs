@@ -108,10 +108,11 @@ impl PhysicsWorld {
                 let closing = (prop_velocity - velocity).dot(towards_player);
                 if closing > 0.0 && self.is_dynamic(prop) {
                     // The prop meets the player as a body of its mass in an
-                    // inelastic collision, as the player meets it in `push`.
+                    // inelastic collision, as the player meets it in `push`,
+                    // but against a much lighter player.
                     let push = &self.config.push;
                     let change =
-                        (closing * mass / (push.player_mass + mass)).min(push.max_speed_change);
+                        (closing * mass / (push.shove_mass + mass)).min(push.max_shove_change);
                     shoves.push(Shove {
                         player,
                         velocity: towards_player * change,

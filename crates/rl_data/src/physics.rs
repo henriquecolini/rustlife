@@ -178,6 +178,12 @@ pub struct PushConfig {
     pub player_mass: f32,
     /// Largest speed change one push may give a prop, units/s.
     pub max_speed_change: f32,
+    /// The mass props meet a player with when they shove them, kg. Lighter
+    /// than [`player_mass`](Self::player_mass), so even a small prop moves a
+    /// player.
+    pub shove_mass: f32,
+    /// Largest speed change one tick of shoving gives a player, units/s.
+    pub max_shove_change: f32,
 }
 
 /// Damage props deal to players they hit.
@@ -245,6 +251,8 @@ impl PhysicsConfig {
 
         check.positive("push.player_mass", self.push.player_mass);
         check.non_negative("push.max_speed_change", self.push.max_speed_change);
+        check.positive("push.shove_mass", self.push.shove_mass);
+        check.non_negative("push.max_shove_change", self.push.max_shove_change);
 
         let damage = &self.impact_damage;
         check.non_negative("impact_damage.min_speed", damage.min_speed);
