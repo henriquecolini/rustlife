@@ -53,12 +53,22 @@ have no separate walk. The held weapon's world model is joined to the
 player's skeleton at the first bone they share, so it moves with the hand.
 
 When a player dies, their model becomes a ragdoll: the animation stops and
-each bone becomes a rigid body with a capsule collider, mass and angular
-limits at its joints, simulated by Box3D against the map with the engine's ragdoll
-joint tuning: spherical hips, shoulders and spine with cone and twist
-limits, revolute knees and elbows, and a little joint friction. Bones of
-one corpse do not collide with each other, so the body never fights
-itself; the colliders still stop at the map.
+the pelvis, spine, chest, neck, head and limb bones become rigid bodies with
+capsule colliders, mass and angular limits at their joints, simulated by
+Box3D against the map in Source space. Fingers, toes, clavicles and the
+middle spine bones follow the nearest simulated bone. The joint tuning is
+the engine's human ragdoll sample's: spherical hips, shoulders and spine
+with cone and twist limits, revolute knees and elbows, joint friction, and a
+soft spring (1 Hz, damped) toward the pose of death, so a corpse crumples
+without going limp. Bones of one corpse do not collide with each other, so
+the body never fights itself; the colliders still stop at the map.
+A corpse is kept stable by limits rather than luck: bones have a sensible
+mass (a hand is never a featherweight beside a pelvis), no bone moves faster
+than 16 m/s or spins faster than 14 rad/s, overlaps with the map are eased
+apart at 1 m/s, and a blow is limited by the speed it would give the bone it
+hits, not only by its size, so a bullet nudges a hand and does not fling it.
+A corpse that still goes wrong (a bone not a number, or torn from the body)
+is frozen where it lay instead of being simulated further.
 The pose starts from the one the player died in; the fatal shot pushes the
 bone it struck, and a nearby blast throws the whole body outwards. A corpse
 is visual only, lies for 25 seconds, and at most eight are kept.

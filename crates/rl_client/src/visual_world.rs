@@ -1,6 +1,6 @@
-//! Static geometry for the client's visual-only Box3D worlds.
+//! Static geometry for the client's visual-only `Box3D` worlds.
 //!
-//! Ragdolls and gibs are simulated on the client with Box3D, but never touch
+//! Ragdolls and gibs are simulated on the client with `Box3D`, but never touch
 //! the server's authoritative prop world. Each gets a small world of its own
 //! and only the map's solid geometry: brushes as convex hulls and
 //! displacements as a triangle mesh, in Source units.
@@ -68,7 +68,7 @@ pub(crate) fn build_static_world(sim: &Simulation, mask: u64) -> World {
 
 fn add_map_geometry(world: &mut World, body: b3::BodyId, shape: &ShapeDef, map: &CollisionWorld) {
     for solid in map.convex_solids(MASK_PLAYER_SOLID) {
-        let points: Vec<B3Vec3> = solid.iter().map(|point| b3v(Vec3::from(*point))).collect();
+        let points: Vec<B3Vec3> = solid.iter().map(|point| b3v(*point)).collect();
         if let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES) {
             create_hull_shape(world, body, shape, &hull);
         }

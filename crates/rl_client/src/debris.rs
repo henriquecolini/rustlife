@@ -4,7 +4,7 @@
 //! models the prop's `prop_data` names (wood chunks, metal gibs, glass
 //! shards), flung out and bouncing on the map until they lie still, then
 //! shrinking away. They are only for show — the server knows nothing of
-//! them — but each is a real Box3D body with the model's `.phy` convex
+//! them — but each is a real `Box3D` body with the model's `.phy` convex
 //! pieces (or its bounding box), colliding with the map and nothing else.
 
 use std::sync::{Mutex, PoisonError};
@@ -45,7 +45,7 @@ const DEFAULT_GIBS: u32 = 4;
 const STEP: f32 = 1.0 / 60.0;
 /// Most fixed steps one frame may run.
 const MAX_STEPS: usize = 4;
-/// Box3D sub-steps per fixed step, as in the engine's samples.
+/// `Box3D` sub-steps per fixed step, as in the engine's samples.
 const SUB_STEPS: i32 = 4;
 /// Seconds a gib lasts, and how many of them are spent shrinking away.
 const LIFETIME: f32 = 7.0;
@@ -75,7 +75,7 @@ impl Plugin for DebrisPlugin {
     }
 }
 
-/// The Box3D world the client's debris lives in.
+/// The `Box3D` world the client's debris lives in.
 #[derive(Resource, Default)]
 struct DebrisPhysics {
     world: Option<Mutex<World>>,
@@ -328,8 +328,10 @@ fn add_gib_body(
     body_def.is_bullet = true;
     let body = create_body(world, &body_def);
 
-    let mut shape_def = ShapeDef::default();
-    shape_def.density = density;
+    let mut shape_def = ShapeDef {
+        density,
+        ..ShapeDef::default()
+    };
     shape_def.base_material.friction = material.friction;
     shape_def.base_material.restitution = 0.12;
     shape_def.filter = filter(DEBRIS_GROUP, WORLD_GROUP);

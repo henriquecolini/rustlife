@@ -224,9 +224,10 @@ See [docs/netcode.md](docs/netcode.md).
    meshes. The client plays stance sequences on other players, holding
    their weapons' world models, and activities on the view model, drawn by
    its own camera. A dead player's model becomes a client-side Box3D
-   ragdoll with the engine's joint limits and friction (bones of one corpse
-   do not collide with each other), and the killing blow applied to the
-   bone it hit.
+   ragdoll in Source space, with a compact sample-like rig (pelvis, spine,
+   chest, neck, head and limbs; fingers and toes follow them) and the
+   engine's joint limits, friction and soft rest-pose spring (bones of one corpse do not collide
+   with each other), and the killing blow applied to the bone it hit.
 3. **Sound.** `source_formats` reads WAV files, soundscripts and
    soundscapes; `rl_assets` loads sounds as Bevy audio. The client plays
    the tick's events, the map's ambient and door sounds, soundscapes and
