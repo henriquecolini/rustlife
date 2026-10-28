@@ -59,6 +59,9 @@ half = "2"
 wgpu-types = { version = "30", default-features = false }
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
+# SIGINT/SIGTERM handling, so the dedicated server shuts down cleanly when
+# stopped (Ctrl+C, `docker stop`).
+ctrlc = { version = "3", features = ["termination"] }
 directories = "6"
 memmap2 = "0.9"
 proptest = "1"

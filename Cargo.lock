@@ -5634,6 +5634,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ctrlc",
  "rl_config",
  "rl_data",
  "rl_level",

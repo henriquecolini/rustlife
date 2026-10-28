@@ -1,0 +1,37 @@
+# The build context of deploy/Dockerfile: only what compiling the server
+# needs. Everything else would slow every build down or, for game files,
+# break Valve's license by ending up in an image.
+
+# Build output and version control.
+/target
+/.git
+/.claude
+
+# Documentation and editor state.
+/docs
+*.swp
+.idea/
+.vscode/
+
+# Scratch files: screenshots, captures, logs.
+*.png
+*.jpg
+*.mp4
+*.log
+
+# Local game installs and anything copied out of one. rustlife never ships
+# Valve content; the container downloads it when it starts.
+/hl2dm
+*.bsp
+*.vpk
+*.vtf
+*.vmt
+*.mdl
+*.vvd
+*.vtx
+*.phy
+*.ani
+*.wav
+*.mp3
+*.pcf
+*.nav

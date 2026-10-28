@@ -68,6 +68,11 @@ the config file).
 first time the server runs. It sets the mounted games, the map list, the
 port, the player limit, the match length and the respawn delay.
 
+To host one on a server machine, `docker compose up -d` builds and runs it in
+a container that downloads the Half-Life 2: Deathmatch Dedicated Server
+itself; [docs/deploy.md](docs/deploy.md) covers that and deploying it with
+Coolify.
+
 ## Running
 
 ```sh
