@@ -119,7 +119,10 @@ that room behind the world as if seen from the sky camera's position plus
 the eye's position divided by the scale. rustlife does the same with a
 second camera. It draws first, sees only the skybox's faces and props, and
 has the 2D sky behind it. The main camera then draws the world over it
-without clearing, so the skybox shows wherever the world leaves sky.
+without clearing, so the skybox shows wherever the world leaves sky. The
+sky camera follows the main one late in the frame, from where transform
+propagation finally put it, and settles its own transform before frusta are
+computed, so the two always draw the same frame's view.
 
 ### Visibility
 

@@ -305,6 +305,10 @@ fn show_loaded_skin(
 /// Keeps the view model at the eyes, turned with the view. It is a root
 /// entity placed each frame rather than the camera's child: cameras carry
 /// no visibility of their own for a child to inherit.
+///
+/// Unlike the sky camera, it follows in `Update` (after the camera is
+/// placed), not after transform propagation: its meshes, bones and
+/// attachments hang below it and need propagating from where it is put.
 fn follow_camera(
     camera: Query<&Transform, (With<FlyCam>, Without<ViewModel>)>,
     mut views: Query<&mut Transform, With<ViewModel>>,
