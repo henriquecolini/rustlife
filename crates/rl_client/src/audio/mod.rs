@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use bevy::audio::{PlaybackMode, SpatialListener, SpatialScale, Volume};
+use bevy::audio::{GlobalVolume, PlaybackMode, SpatialListener, SpatialScale, Volume};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SoundAsset, coords};
@@ -52,10 +52,22 @@ const STALE_SECS: f32 = 0.5;
 const UNITS_PER_METRE: f32 = 1.0 / 0.0254;
 
 /// Plays the game's sounds.
-pub struct SoundPlugin;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SoundPlugin {
+    /// Play every sound at volume zero this run (see [`Silent`]).
+    pub silent: bool,
+}
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
+        if self.silent {
+            // Nothing should reach the speakers, not even a sound played
+            // without an emitter, so Bevy's own volume is zeroed too. It is
+            // only read when a sound starts, which is why the emitters'
+            // gains go through `Volumes` as well.
+            app.insert_resource(Silent)
+                .insert_resource(GlobalVolume::new(Volume::SILENT));
+        }
         app.init_resource::<Sounds>()
             .add_systems(
                 OnEnter(AppState::InGame),
@@ -207,6 +219,41 @@ impl SoundCategory {
                 Self::Effects => audio.effects,
                 Self::Ambient => audio.ambient,
             }
+    }
+}
+
+/// Present for a silent run (`--silent`, and every unattended capture):
+/// every sound plays at volume zero, whatever the volume settings say.
+///
+/// The [`Settings`] are left as the player set them, so a silent run that
+/// changes some other setting saves the player's own volumes, not zero.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct Silent;
+
+/// The gains sounds play at this run: those of the player's volume
+/// settings, or none at all in a [`Silent`] run. Every volume given to a
+/// playing sound goes through here.
+#[derive(SystemParam)]
+pub struct Volumes<'w> {
+    settings: Res<'w, Settings>,
+    silent: Option<Res<'w, Silent>>,
+}
+
+impl Volumes<'_> {
+    /// The gain a sound of `category` plays at.
+    #[must_use]
+    pub fn gain(&self, category: SoundCategory) -> f32 {
+        if self.silent.is_some() {
+            0.0
+        } else {
+            category.gain(&self.settings.audio)
+        }
+    }
+
+    /// Whether the gains may have changed since the system last ran.
+    #[must_use]
+    pub fn is_changed(&self) -> bool {
+        self.settings.is_changed() || self.silent.as_ref().is_some_and(Res::is_changed)
     }
 }
 
@@ -376,15 +423,15 @@ fn add_listener(
 
 /// Applies a change of the volume settings to the sounds already playing.
 fn apply_volumes(
-    settings: Res<Settings>,
+    volumes: Volumes,
     mut plain: Query<(&Emitter, Option<&SoundCategory>, &mut AudioSink)>,
     mut spatial: Query<(&Emitter, Option<&SoundCategory>, &mut SpatialAudioSink)>,
 ) {
-    if !settings.is_changed() {
+    if !volumes.is_changed() {
         return;
     }
     let level = |emitter: &Emitter, category: Option<&SoundCategory>| {
-        Volume::Linear(emitter.volume * category.copied().unwrap_or_default().gain(&settings.audio))
+        Volume::Linear(emitter.volume * volumes.gain(category.copied().unwrap_or_default()))
     };
     for (emitter, category, mut sink) in &mut plain {
         sink.set_volume(level(emitter, category));
@@ -401,7 +448,7 @@ fn start_emitters(
     time: Res<Time>,
     assets: Res<AssetServer>,
     loaded: Res<Assets<SoundAsset>>,
-    settings: Res<Settings>,
+    volumes: Volumes,
     emitters: Query<(Entity, &Emitter, Option<&SoundCategory>), Without<Started>>,
 ) {
     let now = time.elapsed_secs();
@@ -423,7 +470,7 @@ fn start_emitters(
         let mut settings = PlaybackSettings {
             mode,
             volume: Volume::Linear(
-                emitter.volume * category.copied().unwrap_or_default().gain(&settings.audio),
+                emitter.volume * volumes.gain(category.copied().unwrap_or_default()),
             ),
             speed: emitter.speed,
             ..PlaybackSettings::ONCE

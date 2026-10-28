@@ -211,8 +211,10 @@ cargo run --release -p rustlife -- --map dm_lockdown --dummies 1 --weapon launch
 `--teleport x,y,z,pitch,yaw` stands the player at a spot (to look at a
 skybox, or into water), and `--log-fps` logs the frame rate every second.
 Screenshots and scripted captures play no sound, so they can be run
-unattended; `--mute` does the same for any other run. The volume settings
-are not changed, so nothing muted is saved to the config.
+unattended; `--silent` (or its alias `--mute`) does the same for any other
+run. The volume settings are not changed: every sound's gain is zeroed as
+it plays, so a silent run that changes some other setting still saves the
+player's own volumes.
 
 ## Tests
 

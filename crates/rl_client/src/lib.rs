@@ -131,9 +131,10 @@ pub struct ClientOptions {
     pub net: NetSettings,
     /// Log the frame rate and frame time every second (a developer aid).
     pub log_fps: bool,
-    /// Play no sound this run, whatever the volume settings say. The
-    /// settings themselves are left alone, so nothing muted is saved.
-    pub mute: bool,
+    /// Play no sound this run, whatever the volume settings say
+    /// (`--silent`). The settings themselves are left alone, so a silent
+    /// run never saves its silence to the config.
+    pub silent: bool,
 }
 
 /// Builds and runs the client over the content mounted in `vfs`.
@@ -152,10 +153,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     };
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
-    let mut settings = Settings(options.content.config.settings.clone());
-    if options.mute {
-        settings.audio.master = 0.0;
-    }
+    let settings = Settings(options.content.config.settings.clone());
     let video = settings.video.clone();
     app.insert_resource(options.content);
     app.insert_resource(settings);
@@ -193,7 +191,9 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         HudPlugin,
         EffectsPlugin,
         MoversPlugin,
-        SoundPlugin,
+        SoundPlugin {
+            silent: options.silent,
+        },
         ModelAnimationPlugin,
         ViewModelPlugin,
         SkyPlugin,

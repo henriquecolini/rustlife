@@ -22,10 +22,9 @@ use rl_sim::rng::Rng;
 use source_formats::entities::MapEntity;
 use source_formats::soundscape::{self, Soundscapes};
 
-use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer};
+use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
 use crate::camera::FlyCam;
 use crate::net::{Game, LevelEntities};
-use crate::settings::Settings;
 use crate::{AppState, GameVfs};
 
 /// Seconds between looks at where the listener stands.
@@ -315,12 +314,12 @@ fn start_layer(
 fn fade_layers(
     mut commands: Commands,
     time: Res<Time>,
-    settings: Res<Settings>,
+    volumes: Volumes,
     mut ambience: ResMut<Ambience>,
     mut emitters: Query<(&mut Emitter, Option<&mut AudioSink>)>,
 ) {
     let dt = time.delta_secs();
-    let level = SoundCategory::Ambient.gain(&settings.audio);
+    let level = volumes.gain(SoundCategory::Ambient);
     for layer in &mut ambience.layers {
         layer.gain = crate::ui::anim::smooth_toward(layer.gain, layer.target, GAIN_RATE, dt);
         for &(entity, base) in &layer.loops {

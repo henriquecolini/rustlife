@@ -166,10 +166,11 @@ struct Cli {
     #[arg(long)]
     log_fps: bool,
 
-    /// Play no sound. Always on for screenshots and scripted captures, which
+    /// Play no sound, whatever the volume settings say; the settings are
+    /// not changed. Always on for screenshots and scripted captures, which
     /// are run unattended.
-    #[arg(long)]
-    mute: bool,
+    #[arg(long, visible_alias = "mute")]
+    silent: bool,
 
     /// Render non-interactively, save one screenshot to this PNG path, and exit.
     #[arg(long, value_name = "PNG")]
@@ -262,7 +263,7 @@ fn main() -> Result<()> {
         // Captures and scripts act at fixed times: no countdown to wait out.
         data.rules.warmup = 0.0;
     }
-    let mute = cli.mute || scripted || cli.screenshot.is_some();
+    let silent = cli.silent || scripted || cli.screenshot.is_some();
     let capture = cli.screenshot.map(|path| Capture {
         path,
         warmup_secs: shot_secs,
@@ -291,7 +292,7 @@ fn main() -> Result<()> {
             data,
             net,
             log_fps: cli.log_fps,
-            mute,
+            silent,
         },
     );
     Ok(())

@@ -19,13 +19,12 @@
 use bevy::audio::{AudioSink, AudioSinkPlayback, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 
-use super::{Emitter, Repeat, SoundCategory, SoundPlayer};
+use super::{Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
 use crate::AppState;
 use crate::gravity_gun::{GunLook, Look};
 use crate::net::Game;
 use crate::physcannon_impact::PhyscannonImpact;
 use crate::player::LocalPlayer;
-use crate::settings::Settings;
 
 /// Where the hold loop starts and ends its pitch, percent.
 const QUIET_PITCH: f32 = 50.0;
@@ -226,7 +225,7 @@ fn gun_sounds(
     look: Res<GunLook>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
-    settings: Res<Settings>,
+    volumes: Volumes,
     mut launches: MessageReader<PhyscannonImpact>,
     mut sounding: ResMut<Sounding>,
     mut player: SoundPlayer,
@@ -278,7 +277,7 @@ fn gun_sounds(
     if let Ok((mut emitter, spatial, plain)) = emitters.get_mut(live.emitter) {
         emitter.volume = (live.base * live.hold.volume(now)).clamp(0.0, 1.0);
         emitter.speed = live.hold.speed(now);
-        let level = Volume::Linear(emitter.volume * SoundCategory::Effects.gain(&settings.audio));
+        let level = Volume::Linear(emitter.volume * volumes.gain(SoundCategory::Effects));
         if let Some(mut sink) = spatial {
             sink.set_volume(level);
             sink.set_speed(emitter.speed);

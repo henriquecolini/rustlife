@@ -20,10 +20,9 @@ use bevy::prelude::*;
 use rl_sim::physics::BodyId;
 use source_formats::surfaceprops::SurfaceTable;
 
-use super::{Emitter, Repeat, SoundCategory, SoundPlayer};
+use super::{Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
 use crate::net::Game;
 use crate::player::Ticked;
-use crate::settings::Settings;
 use crate::{AppState, GameVfs};
 
 pub(super) struct PropSoundsPlugin;
@@ -78,7 +77,7 @@ fn hear_props(
     time: Res<Time>,
     game: Game,
     surfaces: Res<Surfaces>,
-    settings: Res<Settings>,
+    volumes: Volumes,
     mut scrapes: ResMut<Scrapes>,
     mut player: SoundPlayer,
     mut emitters: Query<(
@@ -142,8 +141,7 @@ fn hear_props(
                     {
                         transform.translation = position;
                         emitter.volume = volume;
-                        let level =
-                            Volume::Linear(volume * SoundCategory::Effects.gain(&settings.audio));
+                        let level = Volume::Linear(volume * volumes.gain(SoundCategory::Effects));
                         if let Some(mut sink) = spatial {
                             sink.set_volume(level);
                         }

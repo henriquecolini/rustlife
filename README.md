@@ -140,6 +140,8 @@ Other options:
   to press use on the nearest door or button of that class, and
   `--teleport x,y,z[,pitch,yaw]` with `--wait <secs>` to look at a spot a
   while later. `--log-fps` logs the frame rate.
+- `--silent` (alias `--mute`) plays no sound without touching the volume
+  settings; screenshots and scripted captures are always silent.
 
 Maps' own logic runs: doors, buttons, lifts, teleporters and traps work
 as their mappers wired them ([docs/map-logic.md](docs/map-logic.md)).

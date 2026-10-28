@@ -639,6 +639,62 @@ mod tests {
         assert_eq!(Binding::Key(FULLSCREEN_KEY).name(), None);
         assert!(Binding::parse("F12").is_some(), "its neighbours still can");
     }
+
+    /// A silent run plays nothing, yet saves the player's own volumes when
+    /// another setting changes (an old `--mute` saved master volume 0).
+    #[test]
+    fn a_silent_run_saves_the_players_volumes() {
+        use std::time::Duration;
+
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::time::{TimePlugin, TimeUpdateStrategy};
+
+        use crate::audio::{Silent, SoundCategory, Volumes};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.ron");
+        let mut config = rl_config::UserConfig::default();
+        config.settings.audio.master = 0.8;
+        let mut app = App::new();
+        app.add_plugins(TimePlugin)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)))
+            .insert_resource(Settings(config.settings.clone()))
+            .insert_resource(Content {
+                config,
+                path: Some(path.clone()),
+                games: Vec::new(),
+            })
+            .insert_resource(Silent)
+            .add_systems(Update, save_later);
+        app.update();
+
+        let gains = app
+            .world_mut()
+            .run_system_once(|volumes: Volumes| {
+                [SoundCategory::Effects, SoundCategory::Ambient].map(|c| volumes.gain(c))
+            })
+            .unwrap();
+        assert_eq!(gains, [0.0, 0.0], "a silent run plays nothing");
+
+        app.world_mut().resource_mut::<Settings>().video.fov = 100.0;
+        for _ in 0..3 {
+            app.update();
+        }
+        let saved = rl_config::UserConfig::load(&path).unwrap();
+        assert_eq!(saved.settings.video.fov, 100.0, "the change was saved");
+        assert_eq!(saved.settings.audio.master, 0.8, "and the volume kept");
+
+        app.world_mut().remove_resource::<Silent>();
+        let gain = app
+            .world_mut()
+            .run_system_once(|volumes: Volumes| volumes.gain(SoundCategory::Effects))
+            .unwrap();
+        let effects = saved.settings.audio.effects;
+        assert!(
+            (gain - 0.8 * effects).abs() < 1e-6,
+            "an audible run follows the sliders"
+        );
+    }
 }
 
 #[cfg(test)]
