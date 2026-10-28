@@ -2,9 +2,9 @@
 //!
 //! Input is sampled every frame but the simulation ticks at a fixed rate,
 //! so a press shorter than a tick could fall between two ticks. Presses are
-//! therefore latched until the next tick takes them: buttons
-//! count as held for that tick, and a weapon choice (number keys, the mouse
-//! last-weapon key, a pick from the weapon list) waits to be resolved against the inventory.
+//! therefore latched until the next tick takes them: buttons count as held
+//! for that tick, and a weapon choice (the last-weapon and Gravity Gun keys,
+//! a pick from the weapon list) waits to be resolved against the inventory.
 //!
 //! Which key does what is the player's choice (the [`Bindings`], by
 //! default:)
@@ -19,6 +19,7 @@
 //! | Left / right mouse | Primary / secondary fire |
 //! | `R` | Reload |
 //! | `Q` | Last weapon |
+//! | `G` | Gravity Gun, or back to the weapon held before it |
 //! | `1`–`9` | Weapons of that slot (fixed) |
 //! | Mouse wheel | Moves through the weapon list (fixed) |
 //! | Primary fire, with the list up | Switches to the weapon picked in it |
@@ -106,6 +107,10 @@ pub(crate) fn latch_input(
         selector.dismiss();
         latched.choice = Some(Choice::Last);
     }
+    if bindings.just_pressed("gravity_gun", &keys, mouse.as_deref()) {
+        selector.dismiss();
+        latched.choice = Some(Choice::ToggleTool);
+    }
     // Wheel up goes back through the list, as in most shooters. It only
     // moves the list's cursor; a click picks.
     let forward = match scroll.map_or(0.0, |scroll| scroll.delta.y) {
@@ -162,7 +167,55 @@ pub(crate) fn idle_cmd(angles: ViewAngles) -> UserCmd {
 
 #[cfg(test)]
 mod tests {
+    use rl_data::GameData;
+    use rl_sim::weapons::{Arsenal, Inventory};
+
     use super::*;
+
+    /// An app that runs only [`latch_input`], with no game joined.
+    fn latching_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Bindings>()
+            .init_resource::<WeaponSelector>()
+            .init_resource::<Latched>()
+            .add_systems(Update, latch_input);
+        app
+    }
+
+    /// One frame in which `key` goes down.
+    fn tap(app: &mut App, key: KeyCode) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release_all();
+        keys.clear();
+        keys.press(key);
+        app.update();
+    }
+
+    #[test]
+    fn the_gravity_gun_key_latches_the_toggle_and_closes_the_list() {
+        let mut app = latching_app();
+        // The weapon list is up when G goes down.
+        let arsenal = Arsenal::new(&GameData::builtin().expect("builtin"));
+        let inventory = Inventory::loadout(
+            &arsenal,
+            &GameData::builtin().expect("builtin").rules.loadout,
+        );
+        app.world_mut()
+            .resource_mut::<WeaponSelector>()
+            .scroll(&inventory, &arsenal, true);
+        tap(&mut app, KeyCode::KeyG);
+        assert_eq!(
+            app.world().resource::<Latched>().choice,
+            Some(Choice::ToggleTool)
+        );
+        assert!(!app.world().resource::<WeaponSelector>().is_open());
+
+        app.world_mut().resource_mut::<Latched>().choice = None;
+        tap(&mut app, KeyCode::KeyQ);
+        assert_eq!(app.world().resource::<Latched>().choice, Some(Choice::Last));
+    }
 
     #[test]
     fn commands_combine_held_keys_mouse_and_latched_presses() {

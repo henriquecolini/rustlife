@@ -165,6 +165,17 @@ impl Binding {
         }
     }
 
+    /// What the menus call the input named `name` in the config file:
+    /// "Unbound" for none, "?" for one that does not parse.
+    #[must_use]
+    pub fn label_of(name: &str) -> &'static str {
+        if name.is_empty() {
+            "Unbound"
+        } else {
+            Self::parse(name).map_or("?", Self::label)
+        }
+    }
+
     /// What the menus call the input.
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -213,14 +224,18 @@ pub struct Bindings(HashMap<&'static str, Binding>);
 
 impl Bindings {
     /// The bindings `controls` describe; an action whose binding does not
-    /// parse falls back to its default.
+    /// parse falls back to its default, and an unbound one (see
+    /// [`ControlSettings::binding`]) has none.
     #[must_use]
     pub fn from_controls(controls: &ControlSettings) -> Self {
         let bindings = ACTIONS
             .iter()
             .filter_map(|action| {
-                let binding = Binding::parse(controls.binding(action.id))
-                    .or_else(|| Binding::parse(action.default))?;
+                let name = controls.binding(action.id);
+                if name.is_empty() {
+                    return None;
+                }
+                let binding = Binding::parse(name).or_else(|| Binding::parse(action.default))?;
                 Some((action.id, binding))
             })
             .collect();
@@ -509,6 +524,18 @@ mod tests {
             Bindings::from_controls(&controls).get("jump"),
             Some(Binding::Key(KeyCode::KeyJ))
         );
+    }
+
+    #[test]
+    fn an_unbound_action_has_no_input() {
+        let mut controls = ControlSettings::default();
+        controls.bindings.insert("use".into(), "KeyG".into());
+        let bindings = Bindings::from_controls(&controls);
+        assert_eq!(bindings.get("use"), Some(Binding::Key(KeyCode::KeyG)));
+        assert_eq!(bindings.get("gravity_gun"), None);
+        assert_eq!(Binding::label_of(""), "Unbound");
+        assert_eq!(Binding::label_of("KeyG"), "G");
+        assert_eq!(Binding::label_of("Garbage"), "?");
     }
 
     #[test]

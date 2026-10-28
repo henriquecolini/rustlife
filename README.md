@@ -98,6 +98,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | 1 – 9 | Choose a weapon by slot |
 | Mouse wheel | Browse the weapon list; left mouse confirms the pick |
 | Q | Last weapon |
+| G | Gravity Gun; again to go back to the weapon held before it |
 | Tab | Scoreboard |
 | Right mouse (Gravity Gun) | Grab a prop (hold to pull a distant one in); press again to drop it |
 | Left mouse (Gravity Gun) | Throw the held prop, or punt the one under the crosshair |

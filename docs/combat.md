@@ -86,8 +86,11 @@ Shot by shot:
   opens with each shot and closes while the trigger is up.
 
 The command for a tick may choose a weapon (`UserCmd::select`). The client
-resolves `Q` (last weapon) and a pick from the weapon list (`Choice::Weapon`)
-against the inventory (`Inventory::choose`). Switching deploys the new weapon, and
+resolves `Q` (last weapon), `G` (`Choice::ToggleTool`: the Gravity Gun, or
+with it in hand back to the weapon held before it, else the heaviest usable
+one) and a pick from the weapon list (`Choice::Weapon`) against the inventory
+(`Inventory::choose`). The Gravity Gun is found by its fire modes
+(`Arsenal::tool`), not by name. Switching deploys the new weapon, and
 cancels whatever the old one was doing.
 
 The mouse wheel and the number keys (cycling through the weapons of a slot,

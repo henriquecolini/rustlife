@@ -136,6 +136,15 @@ impl Arsenal {
         }
     }
 
+    /// The tool run by `tools::manipulator` (the Gravity Gun), if the data
+    /// has one.
+    #[must_use]
+    pub fn tool(&self) -> Option<WeaponId> {
+        self.weapons()
+            .find(|(_, config)| is_tool(config))
+            .map(|(weapon, _)| weapon)
+    }
+
     /// The ammo type with id string `id`.
     #[must_use]
     pub fn find_ammo(&self, id: &str) -> Option<AmmoId> {
@@ -182,6 +191,9 @@ pub enum Choice {
     Previous,
     /// The weapon in hand before this one.
     Last,
+    /// The [tool](Arsenal::tool) if it is not in hand, else back to the
+    /// weapon in hand before it.
+    ToggleTool,
     /// A particular carried weapon (a pick from the weapon list).
     Weapon(WeaponId),
 }
@@ -667,6 +679,7 @@ impl Inventory {
         carried.sort_by_key(order);
         let chosen = match choice {
             Choice::Last => self.last(),
+            Choice::ToggleTool => self.toggle_tool(arsenal),
             Choice::Slot(slot) => {
                 let in_slot: Vec<WeaponId> = carried
                     .iter()
@@ -685,6 +698,18 @@ impl Inventory {
             Choice::Weapon(weapon) => self.has(weapon).then_some(weapon),
         };
         chosen.filter(|&weapon| Some(weapon) != self.active)
+    }
+
+    /// The tool, or with the tool in hand the weapon held before it; failing
+    /// that the weapon HL2 would bring up as the tool's replacement.
+    fn toggle_tool(&self, arsenal: &Arsenal) -> Option<WeaponId> {
+        let tool = arsenal.tool()?;
+        if self.active != Some(tool) {
+            return self.has(tool).then_some(tool);
+        }
+        self.last()
+            .filter(|&last| last != tool)
+            .or_else(|| self.best_with_ammo(arsenal, tool))
     }
 
     /// The usable weapon after (`forward`) or before `from` in slot order,

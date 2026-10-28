@@ -643,6 +643,42 @@ fn number_keys_cycle_through_a_slot() {
 }
 
 #[test]
+fn the_gravity_gun_key_toggles_between_the_tool_and_the_last_weapon() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    let mut inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    let (manipulator, pistol) = (id(&arsenal, "manipulator"), id(&arsenal, "sidearm"));
+    assert_eq!(arsenal.tool(), Some(manipulator));
+    inventory.select(&arsenal, pistol);
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::ToggleTool),
+        Some(manipulator)
+    );
+    inventory.select(&arsenal, manipulator);
+    assert_eq!(inventory.choose(&arsenal, Choice::ToggleTool), Some(pistol));
+}
+
+#[test]
+fn the_gravity_gun_key_falls_back_to_the_heaviest_weapon_without_a_last_one() {
+    let arsenal = arsenal();
+    let data = GameData::builtin().expect("data");
+    // The loadout starts with the Gravity Gun in hand and nothing before it.
+    let inventory = Inventory::loadout(&arsenal, &data.rules.loadout);
+    assert_eq!(inventory.last(), None);
+    assert_eq!(
+        inventory.choose(&arsenal, Choice::ToggleTool),
+        Some(id(&arsenal, "smg")),
+        "the heaviest usable weapon of the loadout"
+    );
+    // With only the tool carried there is nothing to go back to, and
+    // without the tool nothing to go to.
+    let alone = with_weapon(&arsenal, "manipulator", 0);
+    assert_eq!(alone.choose(&arsenal, Choice::ToggleTool), None);
+    let unarmed = with_weapon(&arsenal, "sidearm", 10);
+    assert_eq!(unarmed.choose(&arsenal, Choice::ToggleTool), None);
+}
+
+#[test]
 fn next_and_previous_skip_weapons_without_ammo() {
     let arsenal = arsenal();
     let data = GameData::builtin().expect("data");

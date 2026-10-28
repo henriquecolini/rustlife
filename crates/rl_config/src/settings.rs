@@ -254,6 +254,11 @@ pub const ACTIONS: &[Action] = &[
         default: "KeyQ",
     },
     Action {
+        id: "gravity_gun",
+        label: "Gravity Gun",
+        default: "KeyG",
+    },
+    Action {
         id: "scoreboard",
         label: "Scoreboard",
         default: "Tab",
@@ -286,19 +291,22 @@ impl Default for ControlSettings {
 
 impl ControlSettings {
     /// The input bound to action `id`: the player's choice, else the
-    /// default. Empty for an unknown action.
+    /// default. Empty for an unknown action, and for one whose default the
+    /// player has given another action: an action added after the file was
+    /// saved must not share a key the player already chose for something
+    /// else.
     #[must_use]
     pub fn binding(&self, id: &str) -> &str {
-        self.bindings
-            .get(id)
-            .map(String::as_str)
-            .or_else(|| {
-                ACTIONS
-                    .iter()
-                    .find(|action| action.id == id)
-                    .map(|a| a.default)
-            })
-            .unwrap_or_default()
+        if let Some(input) = self.bindings.get(id) {
+            return input;
+        }
+        let Some(action) = ACTIONS.iter().find(|action| action.id == id) else {
+            return "";
+        };
+        let taken = self.bindings.iter().any(|(other, input)| {
+            other != id && *input == action.default && ACTIONS.iter().any(|a| a.id == other)
+        });
+        if taken { "" } else { action.default }
     }
 
     /// Binds `input` to action `id`. Another action using the same input
@@ -374,6 +382,31 @@ mod tests {
 
         controls.reset_bindings();
         assert_eq!(controls.binding("jump"), "Space");
+    }
+
+    #[test]
+    fn a_default_the_player_gave_another_action_is_left_unbound() {
+        // A file saved before the Gravity Gun key existed, with G on use.
+        let mut controls = ControlSettings::default();
+        controls.bindings.insert("use".into(), "KeyG".into());
+        assert_eq!(controls.binding("use"), "KeyG");
+        assert_eq!(controls.binding("gravity_gun"), "", "G is not bound twice");
+        // A stale entry for an action that no longer exists takes nothing.
+        let mut stale = ControlSettings::default();
+        stale.bindings.insert("removed".into(), "KeyG".into());
+        assert_eq!(stale.binding("gravity_gun"), "KeyG");
+        // Binding the unbound action somewhere swaps as usual.
+        controls.rebind("gravity_gun", "KeyF");
+        assert_eq!(controls.binding("gravity_gun"), "KeyF");
+        let mut inputs: Vec<&str> = ACTIONS
+            .iter()
+            .map(|a| controls.binding(a.id))
+            .filter(|input| !input.is_empty())
+            .collect();
+        let bound = inputs.len();
+        inputs.sort_unstable();
+        inputs.dedup();
+        assert_eq!(inputs.len(), bound);
     }
 
     #[test]

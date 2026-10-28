@@ -431,7 +431,7 @@ fn arm(player: PlayerId, sim: &mut Simulation, name: &str) -> Option<WeaponId> {
 /// The grab step: Manipulator in hand, at the nearest prop, secondary fire
 /// held until it is picked up.
 fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &mut UserCmd) {
-    let manipulator = sim.arsenal().find_weapon("manipulator");
+    let manipulator = sim.arsenal().tool();
     let in_hand = sim
         .player(player)
         .and_then(|player| player.inventory.active());

@@ -394,7 +394,7 @@ fn control_rows(rows: &mut ChildSpawnerCommands, ctx: &Ctx) {
     ));
     rows.spawn(ctx.fonts.bold("Key bindings", 18.0, theme::TEXT_DIM));
     for action in ACTIONS {
-        let bound = Binding::parse(controls.binding(action.id)).map_or("?", Binding::label);
+        let bound = Binding::label_of(controls.binding(action.id));
         rows.spawn(Node {
             width: Val::Percent(100.0),
             justify_content: JustifyContent::SpaceBetween,
@@ -526,9 +526,7 @@ fn show_bindings(
         let label = if rebinding.0 == Some(bind.0) {
             "Press a key…".to_owned()
         } else {
-            Binding::parse(settings.controls.binding(bind.0))
-                .map_or("?", Binding::label)
-                .to_owned()
+            Binding::label_of(settings.controls.binding(bind.0)).to_owned()
         };
         for &child in children {
             if let Ok(mut text) = texts.get_mut(child) {
