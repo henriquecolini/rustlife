@@ -17,7 +17,8 @@ pub use anim::{Curtain, Reveal, Smooth};
 pub use theme::Fonts;
 pub use widgets::{
     Activate, ButtonStyle, Choice, Disabled, Focus, FocusScope, Focusable, Slider, TextField,
-    Toggle, ValueChanged, WidgetsPlugin, button, choice, panel, slider, text_field, toggle,
+    Toggle, UiSound, ValueChanged, WidgetsPlugin, button, choice, panel, slider, text_field,
+    toggle,
 };
 
 /// Loads the fonts and adds the animation and widget systems.

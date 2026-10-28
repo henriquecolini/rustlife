@@ -9,11 +9,18 @@
 //!
 //! The widgets are plain components and systems, so a screen is just a
 //! function that spawns them.
+//!
+//! They sound as Half-Life 2's menu buttons do, through [`UiSound`]
+//! messages the audio plays: a rollover as the pointer (or the keyboard's
+//! focus) comes onto a widget, a click as it is pressed (or activated from
+//! the keyboard) and a release as the pointer lets go. Disabled widgets are
+//! silent; a widget is heard once as the pointer enters it however long it
+//! stays, and a slider dragged clicks once, when grabbed.
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::picking::Pickable;
 use bevy::picking::events::{
-    PointerClick, PointerDrag, PointerOut, PointerOver, PointerPress, PointerRelease,
+    PointerClick, PointerDrag, PointerEnter, PointerOut, PointerOver, PointerPress, PointerRelease,
 };
 use bevy::prelude::*;
 
@@ -106,6 +113,18 @@ pub struct Activate {
 pub struct ValueChanged {
     /// The widget.
     pub entity: Entity,
+}
+
+/// A sound a widget makes, for the audio to play (VGUI's button sounds).
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiSound {
+    /// The pointer or the keyboard's focus came onto a widget (VGUI's
+    /// "armed").
+    Rollover,
+    /// A widget was pressed, or activated from the keyboard.
+    Click,
+    /// A pressed widget was let go.
+    Release,
 }
 
 /// The root of a screen's widgets: keyboard focus moves among the
@@ -223,6 +242,8 @@ pub struct WidgetsPlugin;
 impl Plugin for WidgetsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Focus>()
+            .add_message::<UiSound>()
+            .add_observer(pointer_enter)
             .add_observer(pointer_over)
             .add_observer(pointer_out)
             .add_observer(pointer_press)
@@ -524,6 +545,17 @@ pub fn panel(width: Val, max_height: Val) -> impl Bundle + use<> {
 
 // --------------------------------------------------------------- pointer
 
+/// The pointer coming onto a widget (not just onto another part of it).
+fn pointer_enter(
+    enter: On<PointerEnter>,
+    widgets: Query<(), (With<Interact>, Without<Disabled>)>,
+    mut sounds: MessageWriter<UiSound>,
+) {
+    if widgets.contains(enter.entity) {
+        sounds.write(UiSound::Rollover);
+    }
+}
+
 fn pointer_over(over: On<PointerOver>, mut widgets: Query<&mut Interact, Without<Disabled>>) {
     if let Ok(mut interact) = widgets.get_mut(over.entity) {
         interact.hovered = true;
@@ -537,15 +569,27 @@ fn pointer_out(out: On<PointerOut>, mut widgets: Query<&mut Interact>) {
     }
 }
 
-fn pointer_press(press: On<PointerPress>, mut widgets: Query<&mut Interact, Without<Disabled>>) {
+fn pointer_press(
+    press: On<PointerPress>,
+    mut widgets: Query<&mut Interact, Without<Disabled>>,
+    mut sounds: MessageWriter<UiSound>,
+) {
     if let Ok(mut interact) = widgets.get_mut(press.entity) {
         interact.pressed = true;
+        sounds.write(UiSound::Click);
     }
 }
 
-fn pointer_release(release: On<PointerRelease>, mut widgets: Query<&mut Interact>) {
-    if let Ok(mut interact) = widgets.get_mut(release.entity) {
+fn pointer_release(
+    release: On<PointerRelease>,
+    mut widgets: Query<&mut Interact>,
+    mut sounds: MessageWriter<UiSound>,
+) {
+    if let Ok(mut interact) = widgets.get_mut(release.entity)
+        && interact.pressed
+    {
         interact.pressed = false;
+        sounds.write(UiSound::Release);
     }
 }
 
@@ -661,14 +705,14 @@ fn activate_field(
 type Navigable = (With<Focusable>, Without<Disabled>);
 
 /// Moves focus with Up/Down (and Tab), activates with Enter/Space and
-/// adjusts the focused slider or choice with Left/Right.
+/// adjusts the focused slider or choice with Left/Right, sounding each.
 fn navigate(
     keys: Res<ButtonInput<KeyCode>>,
     mut focus: ResMut<Focus>,
     focusables: Query<(Entity, &UiGlobalTransform), Navigable>,
-    mut sliders: Query<&mut Slider>,
-    mut choices: Query<&mut Choice>,
+    mut values: Query<(Option<&mut Slider>, Option<&mut Choice>)>,
     fields: Query<(), With<TextField>>,
+    mut sounds: MessageWriter<UiSound>,
     mut commands: Commands,
 ) {
     let typing = focus.0.is_some_and(|entity| fields.contains(entity));
@@ -685,8 +729,9 @@ fn navigate(
             .collect();
         order.sort_by(|a, b| a.1.total_cmp(&b.1));
         let next = focus_after(&order, focus.0, if down { 1 } else { -1 });
-        if next.is_some() {
+        if next.is_some() && next != focus.0 {
             focus.0 = next;
+            sounds.write(UiSound::Rollover);
         }
     }
     let Some(focused) = focus.0.filter(|&entity| focusables.contains(entity)) else {
@@ -694,12 +739,20 @@ fn navigate(
     };
     let sideways = i32::from(keys.just_pressed(KeyCode::ArrowRight))
         - i32::from(keys.just_pressed(KeyCode::ArrowLeft));
-    if sideways != 0 {
-        if let Ok(mut slider) = sliders.get_mut(focused) {
+    if sideways != 0
+        && let Ok((slider, choice)) = values.get_mut(focused)
+    {
+        let changed = if let Some(mut slider) = slider {
             slider.nudge(sideways);
-            commands.trigger(ValueChanged { entity: focused });
-        } else if let Ok(mut choice) = choices.get_mut(focused) {
+            true
+        } else if let Some(mut choice) = choice {
             choice.cycle(sideways);
+            true
+        } else {
+            false
+        };
+        if changed {
+            sounds.write(UiSound::Click);
             commands.trigger(ValueChanged { entity: focused });
         }
     }
@@ -707,6 +760,7 @@ fn navigate(
         || keys.just_pressed(KeyCode::NumpadEnter)
         || (!typing && keys.just_pressed(KeyCode::Space));
     if activate && !fields.contains(focused) {
+        sounds.write(UiSound::Click);
         commands.trigger(Activate { entity: focused });
     }
 }
@@ -911,7 +965,114 @@ fn show_fields(
 
 #[cfg(test)]
 mod tests {
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::backend::HitData;
+    use bevy::picking::events::Pointer;
+    use bevy::picking::pointer::{Location, PointerButton, PointerId};
+
     use super::*;
+
+    /// An app running only the pointer observers, with one button-like
+    /// widget.
+    fn pointer_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<Focus>()
+            .add_message::<UiSound>()
+            .add_observer(pointer_enter)
+            .add_observer(pointer_over)
+            .add_observer(pointer_out)
+            .add_observer(pointer_press)
+            .add_observer(pointer_release);
+        let widget = app.world_mut().spawn((Interact::default(), Focusable)).id();
+        (app, widget)
+    }
+
+    fn pointer() -> Pointer {
+        Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::None {
+                    width: 1,
+                    height: 1,
+                },
+                position: Vec2::ZERO,
+            },
+        )
+    }
+
+    fn hit() -> HitData {
+        HitData::new(Entity::PLACEHOLDER, 0.0, None, None)
+    }
+
+    /// What the widgets asked to be heard since the last call.
+    fn heard(app: &mut App) -> Vec<UiSound> {
+        app.world_mut()
+            .resource_mut::<Messages<UiSound>>()
+            .drain()
+            .collect()
+    }
+
+    /// The pointer coming onto `widget` and moving about over its parts, as
+    /// picking reports it: one enter, then an over for every part crossed.
+    fn hover(app: &mut App, widget: Entity) {
+        app.world_mut().trigger(PointerEnter {
+            entity: widget,
+            pointer: pointer(),
+            hit: hit(),
+            is_in_bounds: true,
+        });
+        for _ in 0..3 {
+            app.world_mut().trigger(PointerOut {
+                entity: widget,
+                pointer: pointer(),
+                hit: hit(),
+            });
+            app.world_mut().trigger(PointerOver {
+                entity: widget,
+                pointer: pointer(),
+                hit: hit(),
+            });
+        }
+    }
+
+    #[test]
+    fn hovering_a_button_queues_exactly_one_rollover() {
+        let (mut app, widget) = pointer_app();
+        hover(&mut app, widget);
+        assert_eq!(heard(&mut app), [UiSound::Rollover]);
+        assert!(app.world().get::<Interact>(widget).expect("widget").hovered);
+    }
+
+    #[test]
+    fn a_press_clicks_and_its_release_lets_go_but_a_disabled_widget_is_silent() {
+        let (mut app, widget) = pointer_app();
+        let press = PointerPress {
+            entity: widget,
+            pointer: pointer(),
+            button: PointerButton::Primary,
+            hit: hit(),
+            count: 1,
+        };
+        let release = PointerRelease {
+            entity: widget,
+            pointer: pointer(),
+            button: PointerButton::Primary,
+            hit: hit(),
+        };
+        app.world_mut().trigger(press.clone());
+        app.world_mut().trigger(release.clone());
+        app.world_mut().trigger(release.clone());
+        assert_eq!(
+            heard(&mut app),
+            [UiSound::Click, UiSound::Release],
+            "a release with nothing pressed is silent"
+        );
+        app.world_mut().entity_mut(widget).insert(Disabled);
+        hover(&mut app, widget);
+        app.world_mut().trigger(press);
+        app.world_mut().trigger(release);
+        assert!(heard(&mut app).is_empty());
+    }
 
     #[test]
     fn sliders_snap_to_their_step_and_stay_in_range() {

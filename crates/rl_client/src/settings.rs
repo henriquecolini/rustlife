@@ -698,10 +698,15 @@ mod tests {
         let gains = app
             .world_mut()
             .run_system_once(|volumes: Volumes| {
-                [SoundCategory::Effects, SoundCategory::Ambient].map(|c| volumes.gain(c))
+                [
+                    SoundCategory::Effects,
+                    SoundCategory::Ambient,
+                    SoundCategory::Ui,
+                ]
+                .map(|c| volumes.gain(c))
             })
             .unwrap();
-        assert_eq!(gains, [0.0, 0.0], "a silent run plays nothing");
+        assert_eq!(gains, [0.0, 0.0, 0.0], "a silent run plays nothing");
 
         app.world_mut().resource_mut::<Settings>().video.fov = 100.0;
         for _ in 0..3 {

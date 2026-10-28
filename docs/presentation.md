@@ -108,6 +108,15 @@ play at the listener. What plays, by source:
 | `surfaceproperties.txt` | footstep and bullet-impact sounds from the surface underfoot or struck: concrete, metal, wood, glass, flesh, dirt and the rest |
 | The map's logic | `ambient_generic`s as the logic switches them; doors' move and stop sounds (`noise1`, `noise2`), carried with them |
 | Soundscapes | the ambience of the nearest `env_soundscape` the listener can see and is within the radius of: its loops, and its random sounds every so often |
+| `sounds.ron`'s `weapon_select` | the weapon list, as HL2DM's ([combat.md](combat.md)) |
+| `sounds.ron`'s `ui` | the menus' widgets, as Half-Life 2's buttons: `ui/buttonrollover.wav` as the pointer or the keyboard's focus comes onto one, `ui/buttonclick.wav` as it is pressed or activated from the keyboard, `ui/buttonclickrelease.wav` as the pointer lets go |
+
+The menus' sounds are files rather than soundscript entries, since the
+soundscripts load with the first map and the main menu sounds before any.
+A widget is heard once as the pointer enters it, however long it stays or
+whichever of its parts it crosses; a slider clicks when grabbed, not as it
+is dragged; disabled widgets are silent. They follow the master volume
+only.
 
 ## The world
 

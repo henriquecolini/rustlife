@@ -62,6 +62,10 @@ fn named_sounds_resolve_and_decode() {
             &config.weapon_select.step,
             &config.weapon_select.pick,
             &config.weapon_select.close,
+            &config.weapon_select.deny,
+            &config.ui.rollover,
+            &config.ui.click,
+            &config.ui.release,
         ]
         .into_iter()
         .cloned(),

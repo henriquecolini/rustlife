@@ -18,7 +18,8 @@
 //! What plays when is split by source: game events (`events`), the map's
 //! ambient sounds, moving doors and wall chargers (`world`), the
 //! soundscape of where the listener is (`soundscape`), footsteps
-//! (`steps`), and the weapon list (`weapon_select`).
+//! (`steps`), the weapon list (`weapon_select`) and the menus' widgets
+//! (`ui`), which sound in the main menu too, before any map is loaded.
 
 use std::collections::HashMap;
 
@@ -40,6 +41,7 @@ mod gravity_gun;
 mod props;
 mod soundscape;
 mod steps;
+mod ui;
 mod weapon_select;
 mod world;
 
@@ -82,6 +84,7 @@ impl Plugin for SoundPlugin {
                 steps::StepsPlugin,
                 weapon_select::WeaponSelectSoundsPlugin,
                 soundscape::SoundscapePlugin,
+                ui::UiSoundsPlugin,
             ));
     }
 }
@@ -208,6 +211,8 @@ pub enum SoundCategory {
     Effects,
     /// The place's soundscape and the map's ambient sounds.
     Ambient,
+    /// The menus' widgets: only the master volume applies.
+    Ui,
 }
 
 impl SoundCategory {
@@ -218,6 +223,7 @@ impl SoundCategory {
             * match self {
                 Self::Effects => audio.effects,
                 Self::Ambient => audio.ambient,
+                Self::Ui => 1.0,
             }
     }
 }
@@ -319,19 +325,40 @@ impl SoundPlayer<'_, '_> {
         repeat: Repeat,
     ) -> Option<Entity> {
         debug!(path = chosen.path, ?at, ?repeat, "sound");
-        let sound = self.sounds.handle(&chosen.path, &self.assets);
         let transform = at.map_or_else(Transform::default, |at| {
             Transform::from_translation(coords::position(at.to_array()))
         });
-        let emitter = Emitter {
-            sound,
+        let emitter = self.emitter(chosen, volume, at.and(spatial), repeat);
+        Some(self.commands.spawn((emitter, transform, MapScoped)).id())
+    }
+
+    /// Plays `name` once at the listener for the menus: under the
+    /// [`SoundCategory::Ui`] volume, and not cut off by leaving a map.
+    pub fn play_ui(&mut self, name: &str, volume: f32) -> Option<Entity> {
+        let Some(chosen) = self.sounds.choose(name) else {
+            debug!("no sound named {name}");
+            return None;
+        };
+        let emitter = self.emitter(&chosen, volume, None, Repeat::Once);
+        let sound = (emitter, Transform::default(), SoundCategory::Ui);
+        Some(self.commands.spawn(sound).id())
+    }
+
+    fn emitter(
+        &mut self,
+        chosen: &Chosen,
+        volume: f32,
+        spatial: Option<f32>,
+        repeat: Repeat,
+    ) -> Emitter {
+        Emitter {
+            sound: self.sounds.handle(&chosen.path, &self.assets),
             volume: (chosen.volume * volume).clamp(0.0, 1.0),
             speed: chosen.speed,
-            spatial: at.and(spatial),
+            spatial,
             repeat,
             requested: self.time.elapsed_secs(),
-        };
-        Some(self.commands.spawn((emitter, transform, MapScoped)).id())
+        }
     }
 
     /// Stops an emitter's sound, if it is still playing.
@@ -495,6 +522,17 @@ fn start_emitters(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_menus_follow_only_the_master_volume() {
+        let audio = rl_config::AudioSettings {
+            master: 0.5,
+            effects: 0.2,
+            ambient: 0.0,
+        };
+        assert_eq!(SoundCategory::Ui.gain(&audio), 0.5);
+        assert_eq!(SoundCategory::Ambient.gain(&audio), 0.0);
+    }
 
     #[test]
     fn louder_sounds_fade_later() {

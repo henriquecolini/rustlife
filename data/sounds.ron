@@ -68,4 +68,12 @@ Sounds(
         close: "Player.WeaponSelectionClose",
         deny: "Player.DenyWeaponSelection",
     ),
+    // The menus, as Half-Life 2's VGUI buttons: the pointer (or the
+    // keyboard's focus) coming onto a widget, a press and its release. Files,
+    // not soundscript entries: the menus sound before any map is loaded.
+    ui: (
+        rollover: "ui/buttonrollover.wav",
+        click: "ui/buttonclick.wav",
+        release: "ui/buttonclickrelease.wav",
+    ),
 )

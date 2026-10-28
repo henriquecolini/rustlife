@@ -47,6 +47,22 @@ pub struct SoundsConfig {
     pub props: PropSoundsConfig,
     /// Choosing a weapon from the weapon list.
     pub weapon_select: WeaponSelectSounds,
+    /// The menus' buttons, toggles, sliders and choosers.
+    pub ui: UiSounds,
+}
+
+/// The sounds of the menus' widgets, as Half-Life 2's VGUI buttons make
+/// them. They play before any map (and its soundscripts) is loaded, so
+/// they name files under `sound/`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiSounds {
+    /// The pointer or the keyboard coming onto a widget.
+    pub rollover: String,
+    /// A widget pressed (or activated from the keyboard).
+    pub click: String,
+    /// A pressed widget let go.
+    pub release: String,
 }
 
 /// The sounds of the weapon list.
@@ -151,6 +167,9 @@ impl SoundsConfig {
         named(check, "weapon_select.pick", &select.pick);
         named(check, "weapon_select.close", &select.close);
         named(check, "weapon_select.deny", &select.deny);
+        named(check, "ui.rollover", &self.ui.rollover);
+        named(check, "ui.click", &self.ui.click);
+        named(check, "ui.release", &self.ui.release);
         if !self.button.contains("{}") {
             check.fail("button", "must contain {} for the button's sound number");
         }
@@ -216,6 +235,11 @@ mod tests {
                 close: "Player.WeaponSelectionClose".to_owned(),
                 deny: "Player.DenyWeaponSelection".to_owned(),
             },
+            ui: UiSounds {
+                rollover: "ui/buttonrollover.wav".to_owned(),
+                click: "ui/buttonclick.wav".to_owned(),
+                release: "ui/buttonclickrelease.wav".to_owned(),
+            },
         }
     }
 
@@ -241,8 +265,9 @@ mod tests {
         bad.button = "Buttons.snd".to_owned();
         bad.props.min_volume = 3.0;
         bad.props.scrape_timeout = 0.0;
+        bad.ui.click.clear();
         let mut check = Validator::default();
         bad.validate(&mut check);
-        assert_eq!(check.finish().len(), 8);
+        assert_eq!(check.finish().len(), 9);
     }
 }
