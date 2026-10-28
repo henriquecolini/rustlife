@@ -18,6 +18,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -115,11 +116,12 @@ fn main() -> Result<()> {
     )?;
     tracing::info!(map, addresses = ?server.addresses(), "serving");
 
+    let stopping = stop_on_signal()?;
     let start = Instant::now();
     let stop = cli.run_for.map(Duration::from_secs_f32);
     let mut status = start;
     let mut busiest = Duration::ZERO;
-    while stop.is_none_or(|stop| start.elapsed() < stop) {
+    while !stopping.load(Ordering::Relaxed) && stop.is_none_or(|stop| start.elapsed() < stop) {
         let began = Instant::now();
         server.update(start.elapsed());
         let busy = began.elapsed();
@@ -137,10 +139,27 @@ fn main() -> Result<()> {
         // Sleeping half a tick keeps ticks punctual without spinning.
         std::thread::sleep(tick.saturating_sub(busy) / 2);
     }
+    tracing::info!("shutting down");
     server.shut_down();
     // Let the disconnections go out.
     server.update(start.elapsed());
     Ok(())
+}
+
+/// Makes SIGINT, SIGTERM and SIGHUP (Ctrl+C, `docker stop`, a closed
+/// terminal) raise the returned flag, which ends the main loop so that
+/// players are told the server is going away. A second signal, while the
+/// first is being handled, exits at once.
+fn stop_on_signal() -> Result<Arc<AtomicBool>> {
+    let stopping = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopping);
+    ctrlc::set_handler(move || {
+        if flag.swap(true, Ordering::Relaxed) {
+            std::process::exit(130);
+        }
+    })
+    .context("installing the signal handler")?;
+    Ok(stopping)
 }
 
 /// Mounts every game the config requires, failing if one cannot be mounted,
