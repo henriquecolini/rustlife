@@ -1,44 +1,60 @@
-//! The map's soundscapes: the ambience of where the listener is.
+//! The map's soundscapes: the ambience of where the listener is, as
+//! HL2DM's `C_SoundscapeSystem` plays it.
 //!
-//! `env_soundscape` (and `env_soundscape_proxy`, which borrows another's)
-//! entities mark places with a radius. Where Source plays the nearest one
-//! the listener can see and cuts to the next at its edge, rustlife mixes:
-//! every soundscape the listener is within reach of is a *layer* with a
-//! gain that follows how deep inside its radius they stand, so walking from
-//! one place to the next fades one out and the other in with the distance
-//! rather than switching at a line. A layer's gain also eases over time, so
-//! a doorway that opens or a wall that comes between does not cut it. A
-//! layer's looping sounds play for as long as it does, its random ones
-//! every so often, all at the listener (rustlife does not place positional
-//! soundscape sounds). Leaving every radius keeps the last place playing.
+//! One soundscape plays at a time. The server's choice
+//! (`CEnvSoundscape::UpdateForPlayer`) is made here: among the enabled
+//! `env_soundscape`s (and `_triggerable`s, and `_proxy`s, which borrow
+//! another's soundscape and positions), the nearest one whose radius
+//! (`-1`: everywhere) reaches the listener and that can see them. When
+//! none can, the last one keeps playing.
+//!
+//! When another takes over, every loop fades to silence over
+//! [`FADE_SECS`] and the new soundscape's loops fade up at the same rate;
+//! a loop the new one shares with the old (same wave and pitch, both at the
+//! listener or both at the same place) carries on and glides to its new
+//! volume. Random sounds still to come are dropped at once, and the new
+//! ones first play after half their interval.
+//!
+//! Loops play at the listener, or at the soundscape entity's `positionN`
+//! targets, fading with distance as their sound level says. Random sounds
+//! play at the listener, at a position, or (`position random`) 36 units
+//! from the eye in a random direction, drawn anew each time. Volumes are
+//! the scripts' alone, times the ambient volume setting.
 
-use std::collections::BTreeMap;
-
-use bevy::audio::{AudioSink, Volume};
+use bevy::audio::{AudioSink, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use rl_assets::coords;
-use rl_sim::collision::contents::MASK_SHOT;
+use rl_sim::collision::contents::{GRATE, MASK_WATER, MOVEABLE, SOLID, WINDOW};
 use rl_sim::rng::Rng;
 use source_formats::entities::MapEntity;
-use source_formats::soundscape::{self, Soundscapes};
+use source_formats::soundscape::{
+    self, RandomPlace, Soundscapes, StartedLoop, StartedRandom, draw,
+};
 
-use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
+use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer, Volumes, spatial_scale};
 use crate::camera::FlyCam;
 use crate::net::{Game, LevelEntities};
 use crate::{AppState, GameVfs};
 
-/// Seconds between looks at where the listener stands.
+/// Seconds between looks at which soundscape is in charge.
 const CHOOSE_INTERVAL: f32 = 0.1;
-/// How fast a layer's gain approaches its target, per second.
-const GAIN_RATE: f32 = 1.8;
-/// A layer this quiet, with a target of nothing, is dropped.
-const SILENT: f32 = 0.01;
-/// How deep into a radius (as a fraction of it) the listener must be for a
-/// soundscape to be at full strength.
-const FULL_AT: f32 = 0.55;
-/// The least the place last in charge keeps while the listener is between
-/// places, as a share of full.
-const LINGER: f32 = 1.0;
+/// Seconds a loop takes to fade between silence and full volume
+/// (`soundscape_fadetime`).
+pub(crate) const FADE_SECS: f32 = 3.0;
+/// The volume a positional loop starts at (HL2DM's engine culls a
+/// positional sound at zero).
+const POSITIONAL_START: f32 = 0.05;
+/// Units from the eye a `position random` sound plays at.
+const RANDOM_DISTANCE: f32 = 36.0;
+/// Positions an `env_soundscape` names (`position0`..`position7`).
+const POSITIONS: usize = 8;
+/// Loops within this many units of each other are at the same place.
+const SAME_PLACE: f32 = 0.1;
+/// What blocks a soundscape's sight of the listener
+/// (`MASK_SOLID_BRUSHONLY | MASK_WATER`).
+const SIGHT_MASK: u32 = SOLID | WINDOW | GRATE | MOVEABLE | MASK_WATER;
+/// The radius that reaches everywhere.
+const EVERYWHERE: f32 = -1.0;
 
 /// Plays the map's soundscapes.
 pub(super) struct SoundscapePlugin;
@@ -56,7 +72,7 @@ impl Plugin for SoundscapePlugin {
             )
             .add_systems(
                 Update,
-                (choose, fade_layers, play_random)
+                (choose, fade_loops, play_random)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -67,27 +83,127 @@ impl Plugin for SoundscapePlugin {
 #[derive(Resource, Default)]
 struct Scapes(Soundscapes);
 
-/// One soundscape being mixed in.
-struct Layer {
-    /// The soundscape, lower case.
-    name: String,
-    /// Its looping sounds' emitters with the volume each has at full gain.
-    loops: Vec<(Entity, f32)>,
-    /// Its random sounds, each with the time it next plays.
-    random: Vec<(soundscape::RandomSound, f32)>,
-    /// How loud the layer is now, `0..=1`.
-    gain: f32,
-    /// How loud it is heading for.
+/// A looping sound of the mix.
+#[derive(Debug, Clone, PartialEq)]
+struct Loop {
+    wave: String,
+    pitch: f32,
+    /// Where it plays, Source space; `None` at the listener.
+    place: Option<Vec3>,
+    soundlevel: f32,
+    /// Its volume now...
+    current: f32,
+    /// ...and the one it is fading to.
     target: f32,
+    /// The soundscape start that last claimed it.
+    generation: u32,
+    /// Its sound, once started.
+    emitter: Option<Entity>,
+}
+
+/// A random sound waiting for its next play.
+#[derive(Debug, Clone, PartialEq)]
+struct Pending {
+    sound: StartedRandom,
+    /// Where an `At` sound plays, Source space.
+    place: Option<Vec3>,
+    /// When it next plays, seconds of game time.
+    due: f32,
+}
+
+/// The sounds of the soundscapes, the one in charge and those fading out.
+#[derive(Debug, Default)]
+struct Mix {
+    loops: Vec<Loop>,
+    random: Vec<Pending>,
+    generation: u32,
+}
+
+impl Mix {
+    /// A new soundscape takes over: every loop heads for silence, and the
+    /// random sounds still to come are dropped.
+    fn begin(&mut self) {
+        for sound in &mut self.loops {
+            sound.target = 0.0;
+        }
+        self.generation += 1;
+        self.random.clear();
+    }
+
+    /// Adds a loop of the soundscape just begun at `place`
+    /// (`AddLoopingSound`): one the old soundscapes share carries on and
+    /// glides to the new volume. Returns the loop whose sound must start
+    /// now (stopping any it had), if any.
+    fn add_loop(&mut self, sound: &StartedLoop, place: Option<Vec3>) -> Option<usize> {
+        let generation = self.generation;
+        let reused = self.loops.iter().rposition(|old| {
+            old.generation != generation
+                && (old.pitch - sound.pitch).abs() < 0.5 // whole percents
+                && old.wave.eq_ignore_ascii_case(&sound.wave)
+                && old.place.is_some() == place.is_some()
+        });
+        let claim = |old: &mut Loop| {
+            old.target = sound.volume;
+            old.generation = generation;
+            old.soundlevel = sound.soundlevel;
+        };
+        if let Some(index) = reused {
+            let old = &mut self.loops[index];
+            let moved = match (old.place, place) {
+                (Some(was), Some(now)) => (was - now).abs().max_element() > SAME_PLACE,
+                _ => false,
+            };
+            claim(old);
+            old.place = place;
+            // A positional loop that moves restarts there at once, at the
+            // volume it had.
+            return moved.then_some(index);
+        }
+        self.loops.push(Loop {
+            wave: sound.wave.clone(),
+            pitch: sound.pitch,
+            place,
+            soundlevel: sound.soundlevel,
+            current: if place.is_some() {
+                POSITIONAL_START
+            } else {
+                0.0
+            },
+            target: sound.volume,
+            generation,
+            emitter: None,
+        });
+        Some(self.loops.len() - 1)
+    }
+
+    /// Moves every loop's volume linearly towards its target, a whole
+    /// volume in [`FADE_SECS`], and drops the loops that have gone silent,
+    /// returning their sounds to stop.
+    fn fade(&mut self, dt: f32) -> Vec<Entity> {
+        let rate = dt / FADE_SECS;
+        for sound in &mut self.loops {
+            let step = (sound.target - sound.current).clamp(-rate, rate);
+            sound.current += step;
+        }
+        let mut stopped = Vec::new();
+        self.loops.retain(|sound| {
+            let silent = sound.target == 0.0 && sound.current == 0.0;
+            if silent {
+                stopped.extend(sound.emitter);
+            }
+            !silent
+        });
+        stopped
+    }
 }
 
 /// What plays now.
 #[derive(Resource)]
 struct Ambience {
-    layers: Vec<Layer>,
-    /// The place that was most strongly in charge, which lingers between
-    /// places.
-    anchor: Option<String>,
+    /// The soundscape entity in charge (its index among the map's
+    /// entities).
+    current: Option<usize>,
+    mix: Mix,
     /// Seconds until the next look.
     until_look: f32,
     rng: Rng,
@@ -96,55 +212,12 @@ struct Ambience {
 impl Default for Ambience {
     fn default() -> Self {
         Self {
-            layers: Vec::new(),
-            anchor: None,
+            current: None,
+            mix: Mix::default(),
             until_look: 0.0,
             rng: Rng::seeded(&[0x0073_6361_7065]),
         }
     }
-}
-
-/// How strongly a soundscape of `radius` is heard from `distance` away:
-/// nothing at its edge, rising smoothly to full at [`FULL_AT`] of the way in.
-#[must_use]
-fn weight(distance: f32, radius: f32) -> f32 {
-    if radius <= 0.0 {
-        return 0.0;
-    }
-    let depth = ((radius - distance) / (radius * FULL_AT)).clamp(0.0, 1.0);
-    depth * depth * (3.0 - 2.0 * depth)
-}
-
-/// The gains the soundscapes are heading for, given how strongly each is
-/// heard (`weights`, by name) and which one is `anchor`: they share the
-/// whole between them (two soundscapes both at full strength play at half),
-/// and the anchor keeps its place while nothing else has taken over.
-/// Nothing at all gives no targets: the layers stay as they are.
-#[must_use]
-fn targets(weights: &BTreeMap<String, f32>, anchor: Option<&str>) -> Vec<(String, f32)> {
-    let sum: f32 = weights.values().sum();
-    if sum <= 0.0 {
-        return Vec::new();
-    }
-    let others = |name: &str| {
-        weights
-            .iter()
-            .filter(|(other, _)| other.as_str() != name)
-            .map(|(_, weight)| weight)
-            .sum::<f32>()
-    };
-    let mut out: Vec<(String, f32)> = weights
-        .iter()
-        .map(|(name, &weight)| (name.clone(), weight / sum.max(1.0)))
-        .collect();
-    if let Some(anchor) = anchor
-        && let Some(entry) = out.iter_mut().find(|(name, _)| name == anchor)
-    {
-        // Between places, the one that was here carries on at full.
-        let linger = LINGER * (1.0 - others(anchor).min(1.0));
-        entry.1 = entry.1.max(linger.min(1.0));
-    }
-    out
 }
 
 /// Reads every soundscape file the manifest lists.
@@ -167,46 +240,124 @@ fn load_soundscapes(vfs: Res<GameVfs>, mut scapes: ResMut<Scapes>) {
     info!("{} soundscapes", scapes.0.len());
 }
 
-/// An `env_soundscape`'s place, reach and soundscape.
+/// A soundscape entity: its place, reach and soundscape.
+#[derive(Debug, Clone, PartialEq)]
 struct Spot<'a> {
+    /// Its index among the map's entities.
+    entity: usize,
     origin: Vec3,
+    /// Units it reaches; [`EVERYWHERE`] for no limit.
     radius: f32,
+    enabled: bool,
     soundscape: &'a str,
+    /// Where its `positionN` targets are, Source space.
+    positions: [Option<Vec3>; POSITIONS],
 }
 
-/// The map's soundscape entities, proxies resolved to the soundscape of
-/// the entity they name.
+impl Spot<'_> {
+    /// Which positions it sets, a bit each (`localBits`).
+    fn position_bits(&self) -> u32 {
+        self.positions
+            .iter()
+            .enumerate()
+            .filter(|(_, position)| position.is_some())
+            .fold(0, |bits, (index, _)| bits | (1 << index))
+    }
+
+    /// Whether it reaches `range` units.
+    fn reaches(&self, range: f32) -> bool {
+        self.radius == EVERYWHERE || self.radius > range
+    }
+}
+
+/// The map's soundscape entities, proxies given the soundscape and
+/// positions of the entity they name.
 fn spots(entities: &[MapEntity]) -> Vec<Spot<'_>> {
     let named = |name: &str| {
+        entities.iter().find(|entity| {
+            matches!(
+                entity.classname.as_str(),
+                "env_soundscape" | "env_soundscape_triggerable"
+            ) && entity
+                .property("targetname")
+                .is_some_and(|target| target.eq_ignore_ascii_case(name))
+        })
+    };
+    let origin_of = |name: &str| {
         entities
             .iter()
             .find(|entity| {
-                entity.classname == "env_soundscape"
-                    && entity
-                        .property("targetname")
-                        .is_some_and(|target| target.eq_ignore_ascii_case(name))
+                entity
+                    .property("targetname")
+                    .is_some_and(|target| target.eq_ignore_ascii_case(name))
             })
-            .and_then(|entity| entity.property("soundscape"))
+            .map(|entity| Vec3::from(entity.origin))
     };
     entities
         .iter()
-        .filter_map(|entity| {
-            let soundscape = match entity.classname.as_str() {
-                "env_soundscape" => entity.property("soundscape")?,
+        .enumerate()
+        .filter_map(|(index, entity)| {
+            let main = match entity.classname.as_str() {
+                "env_soundscape" | "env_soundscape_triggerable" => entity,
                 "env_soundscape_proxy" => named(entity.property("MainSoundscapeName")?)?,
                 _ => return None,
             };
+            let positions = std::array::from_fn(|n| {
+                main.property(&format!("position{n}"))
+                    .filter(|name| !name.trim().is_empty())
+                    .and_then(origin_of)
+            });
             Some(Spot {
+                entity: index,
                 origin: Vec3::from(entity.origin),
                 radius: entity.number("radius").unwrap_or(128.0),
-                soundscape,
+                enabled: entity.number("StartDisabled").unwrap_or(0.0) == 0.0,
+                soundscape: main.property("soundscape")?,
+                positions,
             })
         })
         .collect()
 }
 
-/// Every so often, works out how strongly each soundscape is heard and
-/// sets the layers' targets, starting any that are new.
+/// The spot that should be in charge for a listener at `listener`, given
+/// the one that is (`current`, an entity index), as HL2DM's server chooses:
+/// the nearest enabled one that reaches the listener and that `sees` (from
+/// its origin), the one in charge winning a tie. `None` when none does.
+fn audible(
+    spots: &[Spot],
+    listener: Vec3,
+    current: Option<usize>,
+    sees: impl Fn(Vec3) -> bool,
+) -> Option<usize> {
+    // The one in charge goes first.
+    let mut order: Vec<usize> = (0..spots.len()).collect();
+    order.sort_by_key(|&index| Some(spots[index].entity) != current);
+    let mut chosen = None;
+    let mut distance = 0.0;
+    let mut in_range = false;
+    for index in order {
+        let spot = &spots[index];
+        if !spot.enabled {
+            continue;
+        }
+        let range = spot.origin.distance(listener);
+        if Some(spot.entity) == current {
+            distance = range;
+            in_range = spot.reaches(range) && sees(spot.origin);
+            if in_range {
+                chosen = Some(index);
+            }
+        } else if (!in_range || range < distance) && spot.reaches(range) && sees(spot.origin) {
+            chosen = Some(index);
+            in_range = true;
+            distance = range;
+        }
+    }
+    chosen
+}
+
+/// Every so often, finds the soundscape in charge and starts it if it is
+/// new.
 fn choose(
     time: Res<Time>,
     game: Game,
@@ -226,225 +377,179 @@ fn choose(
     };
     let listener = Vec3::from(coords::to_source_position(camera.translation()));
     let world = sim.world();
-    let mut heard: BTreeMap<String, f32> = BTreeMap::new();
-    for spot in spots(&entities.0) {
-        let strength = weight(spot.origin.distance(listener), spot.radius);
-        if strength <= 0.0 || world.trace_ray(spot.origin, listener, MASK_SHOT).hit() {
-            continue;
-        }
-        let entry = heard
-            .entry(spot.soundscape.to_ascii_lowercase())
-            .or_default();
-        *entry = entry.max(strength);
-    }
-    let wanted = targets(&heard, ambience.anchor.as_deref());
-    if wanted.is_empty() {
+    let spots = spots(&entities.0);
+    let sees = |from: Vec3| {
+        let trace = world.trace_ray(from, listener, SIGHT_MASK);
+        !trace.hit() && !trace.start_solid
+    };
+    let Some(spot) = audible(&spots, listener, ambience.current, sees).map(|i| &spots[i]) else {
+        return;
+    };
+    if ambience.current == Some(spot.entity) {
         return;
     }
-    if let Some((name, _)) = heard
-        .iter()
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .filter(|(_, strength)| **strength > 0.3)
-    {
-        ambience.anchor = Some(name.clone());
+    ambience.current = Some(spot.entity);
+    if scapes.0.get(spot.soundscape).is_none() {
+        debug!(soundscape = spot.soundscape, "unknown soundscape");
+        return;
     }
-    let now = time.elapsed_secs();
-    for layer in &mut ambience.layers {
-        layer.target = 0.0;
-    }
-    for (name, target) in wanted {
-        if let Some(layer) = ambience.layers.iter_mut().find(|layer| layer.name == name) {
-            layer.target = target;
-        } else {
-            let layer = start_layer(&name, target, now, &scapes, &mut ambience.rng, &mut player);
-            ambience.layers.push(layer);
-        }
-    }
+    debug!(soundscape = spot.soundscape, "soundscape");
+    start(
+        spot,
+        &scapes.0,
+        time.elapsed_secs(),
+        &mut ambience,
+        &mut player,
+    );
 }
 
-/// Starts a soundscape's looping sounds, silent, to be faded in.
-fn start_layer(
-    name: &str,
-    target: f32,
+/// Starts `spot`'s soundscape over whatever plays (`StartNewSoundscape`).
+fn start(
+    spot: &Spot,
+    scapes: &Soundscapes,
     now: f32,
-    scapes: &Scapes,
-    rng: &mut Rng,
+    ambience: &mut Ambience,
     player: &mut SoundPlayer,
-) -> Layer {
-    let scape = scapes.0.flatten(name);
-    debug!(
-        soundscape = name,
-        loops = scape.looping.len(),
-        random = scape.random.len(),
-        "soundscape"
-    );
-    let mut loops = Vec::new();
-    for sound in &scape.looping {
-        let base = sound.volume.clamp(0.0, 1.0);
-        let chosen = Chosen {
-            path: sound.wave.clone(),
-            volume: 0.0,
-            speed: (sound.pitch / 100.0).clamp(0.05, 4.0),
-            soundlevel: 0.0,
+) {
+    let Ambience { mix, rng, .. } = ambience;
+    let mut unit = || rng.unit();
+    let started = scapes.start(spot.soundscape, spot.position_bits(), &mut unit);
+    mix.begin();
+    let place = |index: Option<usize>| index.and_then(|n| spot.positions.get(n).copied()?);
+    for sound in &started.looping {
+        let Some(index) = mix.add_loop(sound, place(sound.position)) else {
+            continue;
         };
-        if let Some(emitter) = player.spawn_chosen(&chosen, None, 1.0, None, Repeat::Loop) {
-            player.categorize(emitter, SoundCategory::Ambient);
-            loops.push((emitter, base));
+        let fresh = &mut mix.loops[index];
+        if let Some(old) = fresh.emitter.take() {
+            player.stop(old);
         }
+        fresh.emitter = start_loop(fresh, player);
     }
-    let random = scape
+    mix.random = started
         .random
         .into_iter()
         .map(|sound| {
-            let wait = pick(rng, sound.time);
-            (sound, now + wait)
+            let wait = 0.5 * draw(sound.sound.time, &mut unit);
+            let place = match sound.place {
+                RandomPlace::At(n) => spot.positions.get(n).copied().flatten(),
+                RandomPlace::Ambient | RandomPlace::AroundListener => None,
+            };
+            Pending {
+                sound,
+                place,
+                due: now + wait,
+            }
         })
         .collect();
-    Layer {
-        name: name.to_owned(),
-        loops,
-        random,
-        gain: 0.0,
-        target,
-    }
 }
 
-/// Eases every layer's gain towards its target, sets its loops' volumes and
-/// drops the layers that have faded out.
-fn fade_layers(
+/// Starts a loop's sound at the volume it has now.
+fn start_loop(sound: &Loop, player: &mut SoundPlayer) -> Option<Entity> {
+    let chosen = Chosen {
+        path: sound.wave.clone(),
+        volume: 1.0,
+        speed: (sound.pitch / 100.0).clamp(0.05, 4.0),
+        soundlevel: sound.soundlevel,
+    };
+    let spatial = sound.place.and_then(|_| spatial_scale(sound.soundlevel));
+    let emitter =
+        player.spawn_chosen(&chosen, sound.place, sound.current, spatial, Repeat::Loop)?;
+    player.categorize(emitter, SoundCategory::Ambient);
+    Some(emitter)
+}
+
+/// Fades the loops and sets their sounds' volumes; stops the silent ones.
+fn fade_loops(
     mut commands: Commands,
     time: Res<Time>,
     volumes: Volumes,
     mut ambience: ResMut<Ambience>,
-    mut emitters: Query<(&mut Emitter, Option<&mut AudioSink>)>,
+    mut emitters: Query<(
+        &mut Emitter,
+        Option<&mut AudioSink>,
+        Option<&mut SpatialAudioSink>,
+    )>,
 ) {
-    let dt = time.delta_secs();
+    for stopped in ambience.mix.fade(time.delta_secs()) {
+        commands.entity(stopped).try_despawn();
+    }
     let level = volumes.gain(SoundCategory::Ambient);
-    for layer in &mut ambience.layers {
-        layer.gain = crate::ui::anim::smooth_toward(layer.gain, layer.target, GAIN_RATE, dt);
-        for &(entity, base) in &layer.loops {
-            let Ok((mut emitter, sink)) = emitters.get_mut(entity) else {
-                continue;
-            };
-            emitter.volume = base * layer.gain;
-            if let Some(mut sink) = sink {
-                sink.set_volume(Volume::Linear(emitter.volume * level));
-            }
+    for sound in &ambience.mix.loops {
+        let Some(Ok((mut emitter, plain, spatial))) = sound.emitter.map(|e| emitters.get_mut(e))
+        else {
+            continue;
+        };
+        emitter.volume = sound.current;
+        let volume = Volume::Linear(sound.current * level);
+        if let Some(mut sink) = plain {
+            sink.set_volume(volume);
+        }
+        if let Some(mut sink) = spatial {
+            sink.set_volume(volume);
         }
     }
-    ambience.layers.retain(|layer| {
-        let keep = layer.target > 0.0 || layer.gain > SILENT;
-        if !keep {
-            for &(entity, _) in &layer.loops {
-                commands.entity(entity).try_despawn();
-            }
-        }
-        keep
-    });
 }
 
-/// Plays the layers' random sounds when they are due, as loud as the layer.
-fn play_random(time: Res<Time>, mut ambience: ResMut<Ambience>, mut player: SoundPlayer) {
+/// Plays the random sounds that are due, each drawn afresh, and sets when
+/// they next play.
+fn play_random(
+    time: Res<Time>,
+    camera: Query<&GlobalTransform, With<FlyCam>>,
+    mut ambience: ResMut<Ambience>,
+    mut player: SoundPlayer,
+) {
     let now = time.elapsed_secs();
-    let Ambience { layers, rng, .. } = &mut *ambience;
-    for layer in layers {
-        let gain = layer.gain;
-        for (sound, due) in &mut layer.random {
-            if now < *due {
-                continue;
+    let Ambience { mix, rng, .. } = &mut *ambience;
+    for pending in &mut mix.random {
+        if now < pending.due {
+            continue;
+        }
+        let mut unit = || rng.unit();
+        let sound = &pending.sound.sound;
+        pending.due = now + draw(sound.time, &mut unit);
+        let wave = sound.waves[rng.below(sound.waves.len())].clone();
+        let mut unit = || rng.unit();
+        let volume = draw(sound.volume, &mut unit) * pending.sound.master;
+        let pitch = draw(sound.pitch, &mut unit).trunc();
+        let soundlevel = draw(sound.soundlevel, &mut unit).trunc();
+        let place = match pending.sound.place {
+            RandomPlace::Ambient => None,
+            RandomPlace::At(_) => pending.place,
+            RandomPlace::AroundListener => {
+                let angle = draw((-180.0, 180.0), &mut unit);
+                camera.single().ok().map(|eye| around(eye, angle))
             }
-            *due = now + pick(rng, sound.time).max(0.1);
-            let Some(wave) = sound.waves.get(rng.below(sound.waves.len())) else {
-                continue;
-            };
-            if gain < SILENT {
-                continue;
-            }
-            let chosen = Chosen {
-                path: wave.clone(),
-                volume: (pick(rng, sound.volume) * gain).clamp(0.0, 1.0),
-                speed: (pick(rng, sound.pitch) / 100.0).clamp(0.05, 4.0),
-                soundlevel: 0.0,
-            };
-            if let Some(emitter) = player.spawn_chosen(&chosen, None, 1.0, None, Repeat::Once) {
-                player.categorize(emitter, SoundCategory::Ambient);
-            }
+        };
+        // The engine ignores a sound at pitch 0, the default.
+        if pitch <= 0.0 {
+            continue;
+        }
+        let chosen = Chosen {
+            path: wave,
+            volume: volume.clamp(0.0, 1.0),
+            speed: (pitch / 100.0).clamp(0.05, 4.0),
+            soundlevel,
+        };
+        let spatial = place.and_then(|_| spatial_scale(soundlevel));
+        if let Some(emitter) = player.spawn_chosen(&chosen, place, 1.0, spatial, Repeat::Once) {
+            player.categorize(emitter, SoundCategory::Ambient);
         }
     }
 }
 
-/// A number within `(low, high)`.
-fn pick(rng: &mut Rng, (low, high): (f32, f32)) -> f32 {
-    low + (high - low) * rng.unit()
+/// Where a `position random` sound plays: [`RANDOM_DISTANCE`] from the
+/// eye at `angle` round it, between its right and its forward
+/// (`GenerateRandomSoundPosition`, which takes the degrees it draws as
+/// radians). Source space.
+fn around(eye: &GlobalTransform, angle: f32) -> Vec3 {
+    let at = eye.translation();
+    let source = |bevy: Vec3| Vec3::from(coords::to_source_position(bevy));
+    let direction = |towards: Vec3| (source(at + towards) - source(at)).normalize_or_zero();
+    let (forward, right) = (direction(*eye.forward()), direction(*eye.right()));
+    let (sin, cos) = angle.sin_cos();
+    source(at) + RANDOM_DISTANCE * (cos * right + sin * forward)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn proxies_borrow_the_soundscape_they_name() {
-        let entities = [
-            MapEntity::new("env_soundscape", [1.0, 0.0, 0.0])
-                .with("targetname", "Out")
-                .with("soundscape", "strike_outside")
-                .with("radius", "300"),
-            MapEntity::new("env_soundscape_proxy", [9.0, 0.0, 0.0])
-                .with("MainSoundscapeName", "out"),
-            MapEntity::new("env_soundscape_proxy", [9.0, 0.0, 0.0])
-                .with("MainSoundscapeName", "nobody"),
-        ];
-        let spots = spots(&entities);
-        assert_eq!(spots.len(), 2);
-        assert_eq!(
-            (spots[0].soundscape, spots[0].radius),
-            ("strike_outside", 300.0)
-        );
-        assert_eq!(
-            (spots[1].soundscape, spots[1].radius, spots[1].origin.x),
-            ("strike_outside", 128.0, 9.0)
-        );
-    }
-
-    #[test]
-    fn a_soundscape_is_silent_at_its_edge_and_full_well_inside() {
-        assert_eq!(weight(300.0, 300.0), 0.0);
-        assert_eq!(weight(500.0, 300.0), 0.0);
-        assert_eq!(weight(0.0, 300.0), 1.0);
-        assert_eq!(weight(300.0 * (1.0 - FULL_AT), 300.0), 1.0);
-        let steps: Vec<f32> = (0..=10)
-            .map(|i| weight(300.0 - 16.0 * i as f32, 300.0))
-            .collect();
-        assert!(steps.windows(2).all(|pair| pair[0] <= pair[1]), "{steps:?}");
-        assert_eq!(weight(10.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn overlapping_soundscapes_share_the_mix_and_the_anchor_lingers() {
-        let weights = |entries: &[(&str, f32)]| -> BTreeMap<String, f32> {
-            entries
-                .iter()
-                .map(|&(name, w)| (name.to_owned(), w))
-                .collect()
-        };
-        let gain = |targets: &[(String, f32)], name: &str| {
-            targets.iter().find(|(n, _)| n == name).map(|(_, g)| *g)
-        };
-        // Both at full strength: half each.
-        let both = targets(&weights(&[("a", 1.0), ("b", 1.0)]), None);
-        assert_eq!(gain(&both, "a"), Some(0.5));
-        assert_eq!(gain(&both, "b"), Some(0.5));
-        // Only one, partly in: it fades with distance...
-        let edge = targets(&weights(&[("a", 0.3)]), None);
-        assert_eq!(gain(&edge, "a"), Some(0.3));
-        // ...unless it was the place we were in: then it lingers at full.
-        let lingering = targets(&weights(&[("a", 0.3)]), Some("a"));
-        assert_eq!(gain(&lingering, "a"), Some(1.0));
-        // Entering another place takes the mix from it as it comes.
-        let crossing = targets(&weights(&[("a", 0.3), ("b", 0.7)]), Some("a"));
-        assert!((gain(&crossing, "a").expect("a") - 0.3).abs() < 1e-6);
-        assert!((gain(&crossing, "b").expect("b") - 0.7).abs() < 1e-6);
-        // Nowhere: no change.
-        assert!(targets(&weights(&[]), Some("a")).is_empty());
-    }
-}
+mod tests;

@@ -215,7 +215,7 @@ fn pitch_name(name: &str) -> Option<f32> {
 }
 
 /// A sound level: decibels, or one of the engine's names for them.
-fn soundlevel(text: &str) -> Option<f32> {
+pub(crate) fn soundlevel(text: &str) -> Option<f32> {
     let text = text.trim();
     if let Ok(value) = text.parse::<f32>() {
         return value.is_finite().then_some(value);

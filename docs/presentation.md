@@ -107,7 +107,7 @@ play at the listener. What plays, by source:
 | `sounds.ron` | fallback footsteps, hard landings, weapon pickups, deaths, explosions, fallback bullet impacts, breakables by material, buttons by sound number |
 | `surfaceproperties.txt` | footstep and bullet-impact sounds from the surface underfoot or struck: concrete, metal, wood, glass, flesh, dirt and the rest |
 | The map's logic | `ambient_generic`s as the logic switches them; doors' move and stop sounds (`noise1`, `noise2`), carried with them |
-| Soundscapes | the ambience of the nearest `env_soundscape` the listener can see and is within the radius of: its loops, and its random sounds every so often |
+| Soundscapes | the ambience of the `env_soundscape` in charge (below): its loops, and its random sounds every so often |
 | `sounds.ron`'s `weapon_select` | the weapon list, as HL2DM's ([combat.md](combat.md)) |
 | `sounds.ron`'s `ui` | the menus' widgets, as Half-Life 2's buttons: `ui/buttonrollover.wav` as the pointer or the keyboard's focus comes onto one, `ui/buttonclick.wav` as it is pressed or activated from the keyboard, `ui/buttonclickrelease.wav` as the pointer lets go |
 
@@ -117,6 +117,42 @@ A widget is heard once as the pointer enters it, however long it stays or
 whichever of its parts it crosses; a slider clicks when grabbed, not as it
 is dragged; disabled widgets are silent. They follow the master volume
 only.
+
+### Soundscapes
+
+Soundscapes play as HL2DM's `C_SoundscapeSystem` plays them, with the
+server's choice of soundscape (`CEnvSoundscape::UpdateForPlayer`) made by
+the client:
+
+- **One at a time.** Of the enabled `env_soundscape`,
+  `env_soundscape_triggerable` and `env_soundscape_proxy` entities
+  (`StartDisabled` honoured; a proxy borrows the soundscape and positions
+  of the one its `MainSoundscapeName` names), the nearest whose `radius`
+  reaches the listener (`-1`: everywhere) and that sees them unblocked by
+  brushes or water is in charge; the one already in charge wins a tie.
+  When none qualifies the last one keeps playing.
+- **Crossfade.** When another takes over, every loop fades to silence
+  linearly over 3 s (`soundscape_fadetime`) and the new one's loops fade
+  up at the same rate. A loop both share (same wave and pitch, both at the
+  listener or both at the same place) carries on and glides to its new
+  volume. Random sounds still to come are dropped at once.
+- **Loops** (`playlooping`): volume (default 0: not played), pitch and
+  sound level (`soundlevel`, or `attenuation` as `20 / a + 50` dB) are
+  drawn once from their intervals when the soundscape starts. Without a
+  `position` a loop plays at the listener; with `position N` at the
+  entity's `positionN` target, fading with distance by its sound level,
+  and not at all if that position is not set.
+- **Random sounds** (`playrandom`): a wave of `rndwave` every `time`
+  seconds (the first after half of one), volume, pitch and sound level
+  drawn afresh every play; at the listener, at a position, or with
+  `position random` 36 units from the eye in a random direction.
+- **Children** (`playsoundscape`, at most eight deep) play at their drawn
+  `volume` times their parent's; `position` shifts the positions their
+  sounds name, and `positionoverride` / `ambientpositionoverride` pin
+  their positional / ambient sounds to one.
+
+Volumes are the scripts' alone, times the ambient and master settings.
+DSP (`dsp`, `dsp_player`, `Soundmixer`) is not applied.
 
 ## The world
 
@@ -237,7 +273,8 @@ player's own volumes.
 | `rl_client/src/animation.rs` | Looping and holding sequences, fading one into the next |
 | `rl_client/src/actors.rs`, `viewmodel.rs` | Stances following movement, runs blended by direction, view models facing the view, swings playing hit or miss |
 | `source_formats/src/wav.rs` | 8- and 16-bit PCM, Microsoft ADPCM, loops from cue points, garbage refused |
-| `source_formats/src/soundscript.rs`, `soundscape.rs` | Entries' waves, ranges and levels, manifests, soundscapes with their children flattened |
+| `source_formats/src/soundscript.rs`, `soundscape.rs` | Entries' waves, ranges and levels, manifests, soundscapes started as HL2DM's: drawn volumes, children's masters and positions, unset positions skipped |
+| `rl_client/src/audio/soundscape/tests.rs` | The soundscape in charge (nearest in reach and sight, ties to the current one, `radius -1`, disabled ones, proxies), crossfading and shared loops |
 | `rl_client/tests/sounds.rs` | Every sound the data names resolving and decoding (needs an install) |
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
 | `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |
