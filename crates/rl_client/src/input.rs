@@ -22,7 +22,8 @@
 //! | `G` | Gravity Gun, or back to the weapon held before it |
 //! | `1`–`9` | Weapons of that slot (fixed) |
 //! | Mouse wheel | Moves through the weapon list (fixed) |
-//! | Primary fire, with the list up | Switches to the weapon picked in it |
+//! | Either fire button, with the list up | Switches to the weapon picked in it |
+//! | `Esc`, with the list up | Closes it (else the pause menu) |
 
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
@@ -82,14 +83,28 @@ pub(crate) fn latch_input(
     mut latched: ResMut<Latched>,
 ) {
     selector.advance(time.delta_secs());
+    let carried = game
+        .sim()
+        .zip(game.local())
+        .and_then(|(sim, local)| Some((&sim.player(local)?.inventory, sim.arsenal())));
+    // Either fire button picks from the list instead of firing, as HL2's
+    // `CBaseHudWeaponSelection::ProcessInput` has it.
+    let picking = selector.is_open()
+        && ["attack", "attack2"]
+            .iter()
+            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref()));
+    if picking {
+        let chosen = match carried {
+            Some((inventory, arsenal)) => selector.confirm(inventory, arsenal),
+            None => selector.dismiss().and(None),
+        };
+        if let Some(weapon) = chosen {
+            latched.choice = Some(Choice::Weapon(weapon));
+        }
+    }
     for (action, button) in ACTION_BUTTONS {
-        if bindings.just_pressed(action, &keys, mouse.as_deref()) {
-            if button == Buttons::ATTACK
-                && let Some(weapon) = selector.confirm()
-            {
-                latched.choice = Some(Choice::Weapon(weapon));
-                continue;
-            }
+        let fire = button == Buttons::ATTACK || button == Buttons::ATTACK2;
+        if !(picking && fire) && bindings.just_pressed(action, &keys, mouse.as_deref()) {
             latched.buttons = latched.buttons | button;
         }
     }
@@ -97,12 +112,12 @@ pub(crate) fn latch_input(
     // `hud_fastswitch 0` does.
     for (key, slot) in SLOT_KEYS {
         if keys.just_pressed(key)
-            && let (Some(sim), Some(local)) = (game.sim(), game.local())
-            && let Some(player) = sim.player(local)
+            && let Some((inventory, arsenal)) = carried
         {
-            selector.select_slot(&player.inventory, sim.arsenal(), slot);
+            selector.select_slot(inventory, arsenal, slot);
         }
     }
+    // These switch at once and silently, leaving the list (HL2's `lastinv`).
     if bindings.just_pressed("last_weapon", &keys, mouse.as_deref()) {
         selector.dismiss();
         latched.choice = Some(Choice::Last);
@@ -118,10 +133,8 @@ pub(crate) fn latch_input(
         delta if delta < 0.0 => true,
         _ => return,
     };
-    if let (Some(sim), Some(local)) = (game.sim(), game.local())
-        && let Some(player) = sim.player(local)
-    {
-        selector.scroll(&player.inventory, sim.arsenal(), forward);
+    if let Some((inventory, arsenal)) = carried {
+        selector.scroll(inventory, arsenal, forward);
     }
 }
 
@@ -215,6 +228,34 @@ mod tests {
         app.world_mut().resource_mut::<Latched>().choice = None;
         tap(&mut app, KeyCode::KeyQ);
         assert_eq!(app.world().resource::<Latched>().choice, Some(Choice::Last));
+    }
+
+    #[test]
+    fn alternate_fire_with_the_list_up_picks_instead_of_firing() {
+        let mut app = latching_app();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        let arsenal = Arsenal::new(&GameData::builtin().expect("builtin"));
+        let inventory = Inventory::loadout(
+            &arsenal,
+            &GameData::builtin().expect("builtin").rules.loadout,
+        );
+        app.world_mut()
+            .resource_mut::<WeaponSelector>()
+            .scroll(&inventory, &arsenal, true);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        assert!(!app.world().resource::<WeaponSelector>().is_open());
+        assert_eq!(app.world().resource::<Latched>().buttons, Buttons::NONE);
+
+        // With the list down, the same press fires.
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.release_all();
+        mouse.clear();
+        mouse.press(MouseButton::Right);
+        app.update();
+        assert_eq!(app.world().resource::<Latched>().buttons, Buttons::ATTACK2);
     }
 
     #[test]

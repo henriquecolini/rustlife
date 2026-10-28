@@ -53,13 +53,13 @@ pub struct SoundsConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WeaponSelectSounds {
-    /// The cursor moving to another weapon.
+    /// The cursor moving to another weapon, or any slot key.
     pub step: String,
     /// A weapon picked.
     pub pick: String,
-    /// The list closing with no pick.
+    /// The list closing after a pick, or cancelled.
     pub close: String,
-    /// A slot key pressed for a slot with no weapon.
+    /// A click on a weapon that cannot be selected (no ammo).
     pub deny: String,
 }
 

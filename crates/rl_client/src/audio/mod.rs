@@ -334,6 +334,11 @@ impl SoundPlayer<'_, '_> {
         Some(self.commands.spawn((emitter, transform, MapScoped)).id())
     }
 
+    /// Stops an emitter's sound, if it is still playing.
+    pub fn stop(&mut self, emitter: Entity) {
+        self.commands.entity(emitter).try_despawn();
+    }
+
     /// Files an emitter under a volume slider other than the default one.
     pub fn categorize(&mut self, emitter: Entity, category: SoundCategory) {
         self.commands.entity(emitter).insert(category);

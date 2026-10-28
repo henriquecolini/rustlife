@@ -58,13 +58,14 @@ Sounds(
         scrape_timeout: 0.3,
         scrape_loud_speed: 400.0,
     ),
-    // The weapon list (mouse wheel): moving the cursor, picking a weapon, and
-    // closing with no pick.
+    // The weapon list (mouse wheel, slot keys), as HL2DM's: moving the
+    // cursor (and any slot key), picking a weapon, closing the list after a
+    // pick or with Esc, and a click on a weapon with no ammo. Each cuts off
+    // the one before; timing out is silent.
     weapon_select: (
         step: "Player.WeaponSelectionMoveSlot",
         pick: "Player.WeaponSelected",
         close: "Player.WeaponSelectionClose",
-        // A slot key for a slot with nothing in it.
         deny: "Player.DenyWeaponSelection",
     ),
 )

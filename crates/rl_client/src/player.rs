@@ -29,7 +29,7 @@ use rl_assets::coords;
 use rl_data::{GameData, MovementConfig};
 use rl_sim::movement::{Buttons, PlayerState};
 use rl_sim::simulation::{MapEvent, PlayerId, Prediction, Simulation, Spawn, TickEvents};
-use rl_sim::weapons::{Choice, WeaponId};
+use rl_sim::weapons::WeaponId;
 
 use crate::AppState;
 use crate::camera::FlyCam;
@@ -37,7 +37,7 @@ use crate::input::{Latched, idle_cmd, latch_input, user_cmd};
 use crate::menu::Menu;
 use crate::net::{Connection, Game, Host, NetStatus, Receive};
 use crate::script::{self, InputScript};
-use crate::selector::{Cue, WeaponSelector};
+use crate::selector::WeaponSelector;
 use crate::settings::{Bindings, RADIANS_PER_PIXEL, Settings};
 use crate::world::StartSpawn;
 use crate::zoom::Zoom;
@@ -376,25 +376,21 @@ fn tick(
     } else {
         user_cmd(&keys, mouse.as_deref(), &bindings, latched.buttons, *angles)
     };
-    let (attack_held, attack_pressed) = (
-        bindings.pressed("attack", &keys, mouse.as_deref()),
-        bindings.just_pressed("attack", &keys, mouse.as_deref()),
+    let fire = ["attack", "attack2"];
+    let (fire_held, fire_pressed) = (
+        fire.iter()
+            .any(|action| bindings.pressed(action, &keys, mouse.as_deref())),
+        fire.iter()
+            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref())),
     );
-    if selector.swallows_attack(attack_held, attack_pressed) {
-        cmd.buttons = cmd.buttons.with(Buttons::ATTACK, false);
+    if selector.swallows_fire(fire_held, fire_pressed) {
+        cmd.buttons = cmd
+            .buttons
+            .with(Buttons::ATTACK, false)
+            .with(Buttons::ATTACK2, false);
     }
     if let (Some(choice), Some(local)) = (latched.choice, session.sim().player(player.id)) {
-        let arsenal = session.sim().arsenal();
-        cmd.select = local.inventory.choose(arsenal, choice);
-        // HL2: a slot key moves the list's sound, or denies an empty slot.
-        if let Choice::Slot(slot) = choice {
-            let carried = local.inventory.weapons().any(|weapon| {
-                arsenal
-                    .weapon(weapon)
-                    .is_some_and(|config| config.slot == slot)
-            });
-            selector.cue(if carried { Cue::Step } else { Cue::Deny });
-        }
+        cmd.select = local.inventory.choose(session.sim().arsenal(), choice);
     }
     *latched = Latched::default();
     if let Some(mut script) = script {

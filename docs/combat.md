@@ -93,14 +93,25 @@ one) and a pick from the weapon list (`Choice::Weapon`) against the inventory
 (`Arsenal::tool`), not by name. Switching deploys the new weapon, and
 cancels whatever the old one was doing.
 
-The mouse wheel and the number keys (cycling through the weapons of a slot,
-as HL2DM's `hud_fastswitch 0` does) do not switch by themselves: they open a weapon list above the
-ammo counter and moves a cursor through the usable weapons
-(`Inventory::cycle`). Primary fire confirms the pick (and does not fire);
-after a second without scrolling the list fades and the pick is forgotten,
-so the fire button fires as usual. Moving the cursor, picking and the list
-timing out each play a sound (`weapon_select` in `sounds.ron`), and each row
-shows the weapon's icon, a glyph of the game's icon font.
+The mouse wheel and the number keys (the weapons of a slot in turn, as
+HL2DM's `hud_fastswitch 0` does) do not switch by themselves: they open a
+weapon list above the ammo counter and move a cursor through the usable
+weapons (`Inventory::cycle`). Either fire button confirms the pick (and does
+not fire), and `Esc` closes the list. Half a second after the last scroll
+the list fades out over 0.75 s; it can still be picked from while it fades.
+Each row shows the weapon's icon, a glyph of the game's icon font.
+
+The list sounds as HL2DM's (`weapon_select` in `sounds.ron`; all on one
+channel, each cutting off the one before):
+
+| Action | Sound |
+|--------|-------|
+| A scroll that finds a weapon, including the one that opens the list | step |
+| Any slot key, even for an empty slot | step |
+| A click on a weapon with no ammo (the list stays up) | deny |
+| A click that picks | pick, then close a frame later |
+| `Esc` with the list up | close |
+| Timing out, `Q`, `G` | none |
 
 The **Gravity Gun** is a weapon whose fire modes are `Shot::Manipulator`.
 The inventory never fires it: once it is deployed, the simulation runs the

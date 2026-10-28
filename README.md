@@ -96,7 +96,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Left / right mouse | Primary / secondary fire |
 | R | Reload |
 | 1 – 9 | Choose a weapon by slot |
-| Mouse wheel | Browse the weapon list; left mouse confirms the pick |
+| Mouse wheel | Browse the weapon list; either mouse button confirms the pick, Esc closes it |
 | Q | Last weapon |
 | G | Gravity Gun; again to go back to the weapon held before it |
 | Tab | Scoreboard |

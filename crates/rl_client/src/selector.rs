@@ -1,45 +1,65 @@
 //! The weapon list: scrolling the mouse wheel or pressing a slot key moves a
 //! cursor through the carried weapons without changing weapon, and a click
-//! confirms the pick, as in Half-Life 2 (`hud_fastswitch 0`, its default).
+//! (either fire button) confirms the pick, as in Half-Life 2
+//! (`hud_fastswitch 0`, its default).
 //!
-//! The list is open while the wheel keeps turning and for [`HOLD_SECS`]
-//! after the last notch, then fades over [`FADE_SECS`]. Once the hold is
-//! over the pick is forgotten and the fire button fires again. The click
-//! that confirms a pick does not fire: [`WeaponSelector::swallows_attack`]
-//! masks the fire button until it is released.
+//! The list stays up for [`HOLD_SECS`] after the last scroll or slot key,
+//! then fades over [`FADE_SECS`]; it can still be picked from while it
+//! fades, and a scroll brings it back. The click that confirms a pick does
+//! not fire: [`WeaponSelector::swallows_fire`] masks both fire buttons
+//! until they are released.
+//!
+//! Its sounds are HL2DM's `CHudWeaponSelection`'s:
+//!
+//! | Action | Sound |
+//! |--------|-------|
+//! | A scroll that finds a weapon (opening the list or within it) | [`Cue::Step`] |
+//! | A scroll that finds none | none |
+//! | A slot key, even for an empty slot | [`Cue::Step`] |
+//! | A click on a weapon that cannot be used | [`Cue::Deny`]; the list stays up |
+//! | A click that picks | [`Cue::Pick`], then [`Cue::Close`] a frame later |
+//! | `Esc` with the list up | [`Cue::Close`] |
+//! | The list timing out, the last-weapon and Gravity Gun keys | none |
+//!
+//! HL2DM never plays its "selection open" sound. The pick's close is the
+//! `cancelselect` command the pick queues, which the console runs on the
+//! next frame.
 
 use bevy::prelude::*;
 use rl_sim::weapons::{Arsenal, Inventory, WeaponId};
 
-/// Seconds the list stays up after the last scroll.
-pub(crate) const HOLD_SECS: f32 = 1.0;
-/// Seconds the list takes to fade away once the hold is over.
-pub(crate) const FADE_SECS: f32 = 0.2;
+/// Seconds the list stays up after the last scroll or slot key
+/// (`SELECTION_TIMEOUT_THRESHOLD`).
+pub(crate) const HOLD_SECS: f32 = 0.5;
+/// Seconds the list takes to fade away once the hold is over
+/// (`SELECTION_FADEOUT_TIME`).
+pub(crate) const FADE_SECS: f32 = 0.75;
 
 /// Something that happened to the list, for its sounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Cue {
-    /// The cursor moved.
+    /// The cursor moved, or a slot key was pressed.
     Step,
     /// A weapon was picked.
     Pick,
-    /// The hold ran out with no pick.
+    /// The list was closed: after a pick, or cancelled.
     Close,
-    /// A slot key was pressed for a slot with nothing to select.
+    /// A click on a weapon that cannot be selected.
     Deny,
 }
 
 /// Where the player is in picking a weapon with the wheel.
 #[derive(Resource, Debug, Clone, PartialEq)]
 pub(crate) struct WeaponSelector {
-    /// The weapon the cursor is on; kept after the hold for the fade.
+    /// The weapon the cursor is on, while the list is up.
     cursor: Option<WeaponId>,
-    /// Seconds since the last scroll.
+    /// Seconds since the last scroll or slot key.
     idle: f32,
-    /// A click just confirmed a pick and the button is still down.
-    swallow_attack: bool,
-    /// What happened since the sounds last looked.
-    cues: Vec<Cue>,
+    /// A click just confirmed a pick and a fire button is still down.
+    swallow_fire: bool,
+    /// What happened since the sounds last looked, each with whether it
+    /// waits a frame (a queued console command).
+    cues: Vec<(Cue, bool)>,
 }
 
 impl Default for WeaponSelector {
@@ -47,36 +67,35 @@ impl Default for WeaponSelector {
         Self {
             cursor: None,
             idle: f32::INFINITY,
-            swallow_attack: false,
+            swallow_fire: false,
             cues: Vec::new(),
         }
     }
 }
 
 impl WeaponSelector {
-    /// Lets `secs` pass.
+    /// Lets `secs` pass; once the list has faded it closes, silently.
     pub(crate) fn advance(&mut self, secs: f32) {
-        let was_open = self.is_open();
         self.idle += secs;
-        if was_open && !self.is_open() {
-            self.cues.push(Cue::Close);
+        if self.idle >= HOLD_SECS + FADE_SECS {
+            self.cursor = None;
         }
     }
 
-    /// Records a sound for something done outside the list (a slot key).
-    pub(crate) fn cue(&mut self, cue: Cue) {
-        self.cues.push(cue);
-    }
-
-    /// What happened to the list since this was last called.
+    /// The sounds due this frame: what happened since this was last
+    /// called, but for what waits a frame, which is due next time.
     pub(crate) fn take_cues(&mut self) -> Vec<Cue> {
-        std::mem::take(&mut self.cues)
+        let (due, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.cues)
+            .into_iter()
+            .partition(|&(_, waits)| !waits);
+        self.cues = later.into_iter().map(|(cue, _)| (cue, false)).collect();
+        due.into_iter().map(|(cue, _)| cue).collect()
     }
 
-    /// Whether a pick is under way: the fire button confirms it instead of
-    /// firing.
+    /// Whether a pick is under way (the list is up, fading or not): a fire
+    /// button confirms it instead of firing.
     pub(crate) fn is_open(&self) -> bool {
-        self.cursor.is_some() && self.idle < HOLD_SECS
+        self.cursor.is_some()
     }
 
     /// How opaque the list is drawn, from 0 (hidden) to 1.
@@ -87,84 +106,104 @@ impl WeaponSelector {
         (1.0 - (self.idle - HOLD_SECS) / FADE_SECS).clamp(0.0, 1.0)
     }
 
-    /// The weapon the cursor is on, while the list is showing.
+    /// The weapon the cursor is on, while the list is up.
     pub(crate) fn cursor(&self) -> Option<WeaponId> {
-        self.cursor.filter(|_| self.opacity() > 0.0)
+        self.cursor
     }
 
-    /// Moves the cursor one weapon on (`forward`) or back, opening the list
-    /// on the weapon in hand if it was closed.
+    /// Moves the cursor one usable weapon on (`forward`) or back, opening
+    /// the list from the weapon in hand if it was closed. Finding none
+    /// changes nothing and makes no sound.
     pub(crate) fn scroll(&mut self, inventory: &Inventory, arsenal: &Arsenal, forward: bool) {
-        let from = if self.is_open() {
-            self.cursor
-        } else {
-            inventory.active()
+        let from = self.cursor.or(inventory.active());
+        let Some(next) = inventory
+            .cycle(arsenal, from, forward)
+            .filter(|&weapon| inventory.usable(arsenal, weapon))
+        else {
+            return;
         };
-        self.cues.push(Cue::Step);
-        self.cursor = inventory.cycle(arsenal, from, forward).or(from);
+        self.cursor = Some(next);
         self.idle = 0.0;
+        self.cues.push((Cue::Step, false));
     }
 
-    /// Opens the list on a weapon of `slot`, or moves on to the next one
-    /// there if the cursor (or the weapon in hand) is already in it,
-    /// wrapping round. A slot with nothing usable in it only cues a denial.
+    /// Puts the cursor on the first usable weapon of `slot`, or the next
+    /// one there if the cursor is already in it, wrapping round, and opens
+    /// the list. A slot with nothing usable in it changes nothing, but
+    /// sounds the same.
     pub(crate) fn select_slot(&mut self, inventory: &Inventory, arsenal: &Arsenal, slot: u8) {
         let order = |weapon: &WeaponId| {
             arsenal
                 .weapon(*weapon)
                 .map_or((u8::MAX, u8::MAX), |config| (config.slot, config.position))
         };
-        let from = if self.is_open() {
-            self.cursor
-        } else {
-            inventory.active()
-        };
         let mut in_slot: Vec<WeaponId> = inventory
             .weapons()
             .filter(|weapon| order(weapon).0 == slot)
-            .filter(|&weapon| inventory.usable(arsenal, weapon) || Some(weapon) == from)
+            .filter(|&weapon| inventory.usable(arsenal, weapon))
             .collect();
         in_slot.sort_by_key(order);
-        let at = from.and_then(|from| in_slot.iter().position(|&weapon| weapon == from));
-        let pick = match at {
-            Some(at) => in_slot.get((at + 1) % in_slot.len()),
-            None => in_slot.first(),
-        };
-        let Some(&pick) = pick else {
-            self.cues.push(Cue::Deny);
-            return;
-        };
-        self.cues.push(Cue::Step);
-        self.cursor = Some(pick);
+        let at = self
+            .cursor
+            .and_then(|cursor| in_slot.iter().position(|&weapon| weapon == cursor));
+        let pick = at.and_then(|at| in_slot.get(at + 1)).or(in_slot.first());
+        if let Some(&pick) = pick {
+            self.cursor = Some(pick);
+        }
         self.idle = 0.0;
+        self.cues.push((Cue::Step, false));
     }
 
-    /// Takes the pick: closes the list and returns the weapon to switch to.
-    /// The fire button stays masked until released.
-    pub(crate) fn confirm(&mut self) -> Option<WeaponId> {
-        if !self.is_open() {
+    /// A fire button pressed with the list up: returns the weapon to switch
+    /// to and closes the list, or denies a weapon that cannot be used and
+    /// leaves the list up. Either way the fire buttons stay masked until
+    /// released. `None`, and nothing done, with the list down.
+    pub(crate) fn confirm(&mut self, inventory: &Inventory, arsenal: &Arsenal) -> Option<WeaponId> {
+        let cursor = self.cursor?;
+        self.swallow_fire = true;
+        if !inventory.has(cursor) {
+            // Gone from the inventory: HL2's pick of nothing just cancels.
+            self.cursor = None;
+            self.cues.push((Cue::Close, true));
             return None;
         }
-        self.swallow_attack = true;
-        self.cues.push(Cue::Pick);
-        self.dismiss()
+        if !inventory.usable(arsenal, cursor) {
+            self.cues.push((Cue::Deny, false));
+            return None;
+        }
+        self.cursor = None;
+        self.cues.push((Cue::Pick, false));
+        self.cues.push((Cue::Close, true));
+        Some(cursor)
     }
 
-    /// Closes the list without a pick, returning what the cursor was on.
+    /// `Esc`: closes the list with its sound. Returns whether it was up
+    /// (else `Esc` does what it otherwise does).
+    pub(crate) fn cancel(&mut self) -> bool {
+        let open = self.dismiss().is_some();
+        if open {
+            self.cues.push((Cue::Close, false));
+        }
+        open
+    }
+
+    /// Closes the list without a pick or a sound, returning what the cursor
+    /// was on.
     pub(crate) fn dismiss(&mut self) -> Option<WeaponId> {
         self.idle = f32::INFINITY;
         self.cursor.take()
     }
 
-    /// Whether the fire button must be ignored this tick: it is the click
-    /// that confirmed a pick, held on. `held` is whether the button is
-    /// down and `pressed` whether it went down this frame. Ticks run before
-    /// the frame's input is latched, so the click that confirms is seen
-    /// here, with the list still open, before [`Self::confirm`] takes it.
-    pub(crate) fn swallows_attack(&mut self, held: bool, pressed: bool) -> bool {
-        self.swallow_attack |= pressed && self.is_open();
-        self.swallow_attack &= held;
-        self.swallow_attack
+    /// Whether the fire buttons must be ignored this tick: a click that
+    /// confirmed (or was denied) a pick, held on. `held` is whether either
+    /// button is down and `pressed` whether one went down this frame. Ticks
+    /// run before the frame's input is latched, so the click that confirms
+    /// is seen here, with the list still up, before [`Self::confirm`] takes
+    /// it.
+    pub(crate) fn swallows_fire(&mut self, held: bool, pressed: bool) -> bool {
+        self.swallow_fire |= pressed && self.is_open();
+        self.swallow_fire &= held;
+        self.swallow_fire
     }
 }
 
@@ -178,12 +217,26 @@ mod tests {
         Arsenal::new(&GameData::builtin().expect("builtin"))
     }
 
-    /// The loadout: Manipulator, bar, sidearm, SMG in hand, frag.
+    /// The loadout: Crowbar, Stun Baton, Gravity Gun (in hand), pistol,
+    /// SMG, frag.
     fn loadout(arsenal: &Arsenal) -> Inventory {
         Inventory::loadout(
             arsenal,
             &GameData::builtin().expect("builtin").rules.loadout,
         )
+    }
+
+    /// The loadout's weapons with no ammo at all.
+    fn unloaded(arsenal: &Arsenal) -> Inventory {
+        let mut empty = Inventory::empty(arsenal);
+        for weapon in loadout(arsenal).weapons() {
+            empty.give_weapon(arsenal, weapon);
+        }
+        empty
+    }
+
+    fn id(arsenal: &Arsenal, name: &str) -> WeaponId {
+        arsenal.find_weapon(name).expect("weapon")
     }
 
     #[test]
@@ -211,20 +264,22 @@ mod tests {
     }
 
     #[test]
-    fn the_list_holds_then_fades_and_forgets_the_pick() {
+    fn the_list_holds_fades_while_still_picking_then_closes() {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
         selector.scroll(&inventory, &arsenal, true);
         selector.advance(HOLD_SECS - 0.01);
-        assert!(selector.is_open());
         assert_eq!(selector.opacity(), 1.0);
-        selector.advance(0.02 + FADE_SECS / 2.0);
-        assert!(!selector.is_open(), "firing is back while it fades");
-        assert!((selector.opacity() - 0.5).abs() < 0.1);
-        assert_eq!(selector.confirm(), None, "a click now is not a pick");
-        selector.advance(FADE_SECS);
+        selector.advance(0.01 + FADE_SECS / 2.0);
+        assert!((selector.opacity() - 0.5).abs() < 0.05);
+        assert!(selector.is_open(), "a click while it fades still picks");
+        let mut fading = selector.clone();
+        assert!(fading.confirm(&inventory, &arsenal).is_some());
+        selector.advance(FADE_SECS / 2.0);
+        assert!(!selector.is_open());
         assert_eq!(selector.opacity(), 0.0);
+        assert_eq!(selector.confirm(&inventory, &arsenal), None);
         // The next scroll starts over from the weapon in hand.
         selector.scroll(&inventory, &arsenal, true);
         let mut again = WeaponSelector::default();
@@ -233,14 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn a_scroll_renews_the_hold() {
+    fn a_scroll_renews_the_hold_even_while_fading() {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
         selector.scroll(&inventory, &arsenal, true);
-        selector.advance(0.9);
+        selector.advance(HOLD_SECS + FADE_SECS - 0.05);
         selector.scroll(&inventory, &arsenal, true);
-        selector.advance(0.9);
+        assert_eq!(selector.opacity(), 1.0);
+        selector.advance(HOLD_SECS + FADE_SECS - 0.05);
         assert!(selector.is_open());
     }
 
@@ -251,39 +307,85 @@ mod tests {
         let mut selector = WeaponSelector::default();
         selector.scroll(&inventory, &arsenal, true);
         let picked = selector.cursor();
-        assert_eq!(selector.confirm(), picked);
+        assert_eq!(selector.confirm(&inventory, &arsenal), picked);
         assert!(!selector.is_open());
-        assert!(
-            selector.swallows_attack(true, false),
-            "still the same click"
-        );
-        assert!(selector.swallows_attack(true, false));
-        assert!(!selector.swallows_attack(false, false), "released");
-        assert!(!selector.swallows_attack(true, true), "a new press fires");
+        assert!(selector.swallows_fire(true, false), "still the same click");
+        assert!(selector.swallows_fire(true, false));
+        assert!(!selector.swallows_fire(false, false), "released");
+        assert!(!selector.swallows_fire(true, true), "a new press fires");
     }
 
     #[test]
-    fn the_list_cues_its_sounds() {
+    fn the_list_cues_its_sounds_as_hl2dm() {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
+        // Opening the list is a step, not an "open" sound.
         selector.scroll(&inventory, &arsenal, true);
         selector.scroll(&inventory, &arsenal, true);
         assert_eq!(selector.take_cues(), [Cue::Step, Cue::Step]);
         assert!(selector.take_cues().is_empty(), "taken");
-        selector.confirm();
-        selector.advance(HOLD_SECS + 1.0);
-        assert_eq!(selector.take_cues(), [Cue::Pick], "no close after a pick");
-
+        // A pick, and the close its queued `cancelselect` makes a frame on.
+        selector.confirm(&inventory, &arsenal);
+        assert_eq!(selector.take_cues(), [Cue::Pick]);
+        assert_eq!(selector.take_cues(), [Cue::Close]);
+        assert!(selector.take_cues().is_empty());
+        // Timing out is silent.
         selector.scroll(&inventory, &arsenal, true);
         selector.take_cues();
-        selector.advance(HOLD_SECS + 0.1);
-        selector.advance(0.1);
-        assert_eq!(
-            selector.take_cues(),
-            [Cue::Close],
-            "once, when the hold ends"
+        selector.advance(HOLD_SECS + FADE_SECS + 0.1);
+        assert!(!selector.is_open());
+        assert!(selector.take_cues().is_empty(), "no sound on the timeout");
+        // Esc closes it with the close sound, and only while it is up.
+        selector.scroll(&inventory, &arsenal, true);
+        selector.take_cues();
+        assert!(selector.cancel());
+        assert_eq!(selector.take_cues(), [Cue::Close]);
+        assert!(!selector.cancel(), "Esc with the list down pauses");
+        assert!(selector.take_cues().is_empty());
+        // The last-weapon key closes it silently.
+        selector.scroll(&inventory, &arsenal, true);
+        selector.take_cues();
+        selector.dismiss();
+        assert!(selector.take_cues().is_empty());
+    }
+
+    #[test]
+    fn a_scroll_that_finds_nothing_is_silent() {
+        let arsenal = arsenal();
+        let mut selector = WeaponSelector::default();
+        selector.scroll(&Inventory::empty(&arsenal), &arsenal, true);
+        // The tools need no ammo; take a list with nothing usable.
+        let mut dry = Inventory::empty(&arsenal);
+        dry.give_weapon(&arsenal, id(&arsenal, "frag"));
+        selector.scroll(&dry, &arsenal, true);
+        assert!(!selector.is_open());
+        assert!(selector.take_cues().is_empty());
+    }
+
+    #[test]
+    fn a_weapon_that_cannot_be_used_is_denied_and_the_list_stays_up() {
+        let arsenal = arsenal();
+        let mut selector = WeaponSelector::default();
+        selector.select_slot(&loadout(&arsenal), &arsenal, 5);
+        assert_eq!(selector.cursor(), Some(id(&arsenal, "frag")));
+        selector.take_cues();
+        // The last grenade went before the click.
+        assert_eq!(selector.confirm(&unloaded(&arsenal), &arsenal), None);
+        assert_eq!(selector.take_cues(), [Cue::Deny]);
+        assert!(selector.is_open());
+        assert!(
+            selector.swallows_fire(true, false),
+            "the click does not fire"
         );
+        // A weapon no longer carried just closes the list.
+        assert_eq!(
+            selector.confirm(&Inventory::empty(&arsenal), &arsenal),
+            None
+        );
+        assert!(!selector.is_open());
+        selector.take_cues();
+        assert_eq!(selector.take_cues(), [Cue::Close]);
     }
 
     #[test]
@@ -295,7 +397,7 @@ mod tests {
         assert!(selector.dismiss().is_some());
         assert!(!selector.is_open());
         assert_eq!(selector.opacity(), 0.0);
-        assert!(!selector.swallows_attack(true, false));
+        assert!(!selector.swallows_fire(true, false));
     }
 
     #[test]
@@ -304,10 +406,10 @@ mod tests {
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
         selector.scroll(&inventory, &arsenal, true);
-        assert!(selector.swallows_attack(true, true), "the confirming press");
-        selector.confirm();
-        assert!(selector.swallows_attack(true, false), "and its later ticks");
-        assert!(!selector.swallows_attack(false, false));
+        assert!(selector.swallows_fire(true, true), "the confirming press");
+        selector.confirm(&inventory, &arsenal);
+        assert!(selector.swallows_fire(true, false), "and its later ticks");
+        assert!(!selector.swallows_fire(false, false));
     }
 
     #[test]
@@ -315,18 +417,19 @@ mod tests {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
-        let slot = arsenal
-            .weapon(inventory.active().expect("armed"))
-            .expect("weapon")
-            .slot;
-        // Another slot than the one in hand holds the manipulator (slot 1).
-        let other = if slot == 1 { 2 } else { 1 };
-        selector.select_slot(&inventory, &arsenal, other);
+        // The Gravity Gun is in hand, last in slot 1; the list still opens
+        // on the slot's first weapon, as HL2's buckets do.
+        selector.select_slot(&inventory, &arsenal, 1);
         assert!(selector.is_open());
-        let cursor = selector.cursor().expect("a weapon");
-        assert_eq!(arsenal.weapon(cursor).expect("weapon").slot, other);
+        assert_eq!(selector.cursor(), Some(id(&arsenal, "bar")));
         assert_eq!(selector.take_cues(), [Cue::Step]);
-        assert_eq!(selector.confirm(), Some(cursor), "a click picks it");
+        selector.select_slot(&inventory, &arsenal, 2);
+        assert_eq!(selector.cursor(), Some(id(&arsenal, "sidearm")));
+        assert_eq!(
+            selector.confirm(&inventory, &arsenal),
+            Some(id(&arsenal, "sidearm")),
+            "a click picks it"
+        );
     }
 
     #[test]
@@ -334,42 +437,30 @@ mod tests {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
-        let mut counts = std::collections::BTreeMap::new();
-        for weapon in inventory.weapons() {
-            if let Some(config) = arsenal.weapon(weapon) {
-                *counts.entry(config.slot).or_insert(0usize) += 1;
-            }
+        let slot_one = ["bar", "stunstick", "manipulator", "bar"];
+        for name in slot_one {
+            selector.select_slot(&inventory, &arsenal, 1);
+            assert_eq!(selector.cursor(), Some(id(&arsenal, name)));
         }
-        let (&crowded, &count) = counts
-            .iter()
-            .find(|&(_, &count)| count > 1)
-            .expect("the loadout has two weapons in one slot");
-        let mut seen = Vec::new();
-        for _ in 0..count {
-            selector.select_slot(&inventory, &arsenal, crowded);
-            seen.push(selector.cursor().expect("a weapon"));
-        }
-        let mut distinct = seen.clone();
-        distinct.sort_by_key(|weapon| weapon.index());
-        distinct.dedup();
-        assert_eq!(distinct.len(), count, "each weapon once: {seen:?}");
-        selector.select_slot(&inventory, &arsenal, crowded);
-        assert_eq!(selector.cursor(), seen.first().copied(), "wrapped round");
     }
 
     #[test]
-    fn an_empty_slot_is_denied() {
+    fn an_empty_slot_still_sounds_a_step_and_moves_nothing() {
         let arsenal = arsenal();
         let inventory = loadout(&arsenal);
         let mut selector = WeaponSelector::default();
         selector.select_slot(&inventory, &arsenal, 9);
         assert!(!selector.is_open());
-        assert_eq!(selector.take_cues(), [Cue::Deny]);
+        assert_eq!(selector.take_cues(), [Cue::Step], "never a denial");
+        selector.select_slot(&inventory, &arsenal, 2);
+        selector.select_slot(&inventory, &arsenal, 4);
+        assert_eq!(selector.cursor(), Some(id(&arsenal, "sidearm")));
+        assert_eq!(selector.take_cues(), [Cue::Step, Cue::Step]);
     }
 
     #[test]
     fn a_press_without_a_list_fires() {
         let mut selector = WeaponSelector::default();
-        assert!(!selector.swallows_attack(true, true));
+        assert!(!selector.swallows_fire(true, true));
     }
 }

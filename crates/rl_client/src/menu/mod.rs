@@ -27,6 +27,7 @@ use rl_level::maps::MapEntry;
 use crate::camera::CursorGrab;
 use crate::content::Content;
 use crate::net::{Game, NetSettings, NetStatus};
+use crate::selector::WeaponSelector;
 use crate::ui::{Curtain, Fonts, theme};
 use crate::{AppState, GameVfs};
 
@@ -206,13 +207,15 @@ fn open_pause_for_capture(mut menu: ResMut<Menu>, mut start: ResMut<StartScreen>
     }
 }
 
-/// `Esc` backs out of a screen; in a game with no menu up it opens the
-/// pause menu. It is left alone while a key is being captured for a
-/// binding, which uses it to cancel.
+/// `Esc` backs out of a screen; in a game with no menu up it closes the
+/// weapon list if that is up (HL2's `cancelselect`), else opens the pause
+/// menu. It is left alone while a key is being captured for a binding,
+/// which uses it to cancel.
 fn escape(
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<State<AppState>>,
     capturing: Res<settings_screen::Rebinding>,
+    selector: Option<ResMut<WeaponSelector>>,
     mut menu: ResMut<Menu>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) || capturing.0.is_some() {
@@ -222,7 +225,7 @@ fn escape(
         AppState::InGame => {
             if menu.is_open() {
                 menu.pop();
-            } else {
+            } else if !selector.is_some_and(|mut selector| selector.cancel()) {
                 menu.push(Screen::Pause);
             }
         }
