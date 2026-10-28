@@ -27,6 +27,7 @@ use rl_sim::tools::manipulator::ToolEvent;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::effects::Scene;
 use crate::lightning::{self, BeamShape};
 use crate::net::Game;
@@ -169,10 +170,10 @@ fn start_effects(
     time: Res<Time>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut sparks: MessageWriter<Sparks>,
     mut fades: MessageWriter<ScreenFade>,
-    mut material: Local<Option<Handle<StandardMaterial>>>,
+    mut material: Local<Option<Handle<EffectMaterial>>>,
 ) {
     let Some(sim) = game.sim() else {
         impacts.clear();
@@ -204,14 +205,14 @@ fn start_effects(
                         ..ImageSamplerDescriptor::linear()
                     });
                 }
-                materials.add(StandardMaterial {
+                materials.add(effect_material(StandardMaterial {
                     base_color_texture: Some(beam.image.clone()),
                     unlit: true,
                     double_sided: true,
                     cull_mode: None,
                     alpha_mode: AlphaMode::Add,
                     ..default()
-                })
+                }))
             })
             .clone();
         let mesh = meshes.add(Mesh::new(

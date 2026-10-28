@@ -3,7 +3,8 @@
 //! The map's pakfile is mounted, its geometry spawned as one entity per
 //! material and cube of the map, and each surface's `StandardMaterial` is
 //! built from the resolved
-//! VMT ([`rl_assets::SourceMaterial`]) as it streams in. World surfaces are lit
+//! VMT ([`rl_assets::SourceMaterial`]) as it streams in (an additive one's an
+//! [`EffectMaterial`], so that fog fades it as Source's does). World surfaces are lit
 //! by the map's baked lightmap; models (see [`crate::props`]) by its ambient
 //! cubes, through an irradiance volume that leaves lightmapped surfaces alone.
 //!
@@ -28,6 +29,7 @@ use rl_assets::{MapAsset, MapMesh, SOURCE, SinePulse, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
 
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::{AppState, CurrentMap, GameVfs};
 
 /// The render layer of the 3D skybox, which only the sky camera sees.
@@ -58,7 +60,7 @@ pub(crate) struct MaterialMaps {
     resolved: HashMap<String, Resolved>,
     /// Materials whose texture slides (`TextureScroll`): the Bevy materials
     /// built for them, and the proxy's rate and angle.
-    scrolling: Vec<(Vec<Handle<StandardMaterial>>, f32, f32)>,
+    scrolling: Vec<(Vec<SurfaceMaterial>, f32, f32)>,
     /// Glow layers that pulse (a `Sine` proxy on `$selfillumtint`): the
     /// material, how bright it is when the pulse is at its full, and the pulse.
     pulsing: Vec<(Handle<StandardMaterial>, LinearRgba, SinePulse)>,
@@ -75,14 +77,24 @@ impl MaterialMaps {
     }
 }
 
+/// The Bevy material a surface is drawn with.
+#[derive(Clone, Debug, PartialEq)]
+enum SurfaceMaterial {
+    /// Most surfaces'.
+    Standard(Handle<StandardMaterial>),
+    /// An additive surface's (energy, glows): fogged to nothing rather than
+    /// to the fog's colour.
+    Effect(Handle<EffectMaterial>),
+}
+
 /// The Bevy materials built for one Source material.
 #[derive(Clone)]
 struct Resolved {
     /// The surface's own (base) material.
-    base: Handle<StandardMaterial>,
+    base: SurfaceMaterial,
     /// The same material drawn unlit, for meshes whose vertex colours carry
     /// baked light ([`VertexLit`]).
-    vertex_lit: Handle<StandardMaterial>,
+    vertex_lit: SurfaceMaterial,
     /// For `WorldVertexTransition`: the alpha-blended `$basetexture2` layer.
     blend: Option<Handle<StandardMaterial>>,
     /// For `$selfillum`: the surface's own colour, over it where its alpha
@@ -482,6 +494,12 @@ fn spawn_surface(
     surface.id()
 }
 
+/// The material a surface is drawn with now, of either kind.
+type DrawnWith = (
+    Option<&'static MeshMaterial3d<StandardMaterial>>,
+    Option<&'static MeshMaterial3d<EffectMaterial>>,
+);
+
 /// What [`resolve_materials`] needs from each map surface: its mesh and
 /// lightmap (shared with a blend layer), its current material, and whether its
 /// blend layer already exists.
@@ -490,7 +508,7 @@ type SurfaceItems = (
     &'static Surface,
     &'static Mesh3d,
     Option<&'static Lightmap>,
-    &'static mut MeshMaterial3d<StandardMaterial>,
+    DrawnWith,
     Has<BlendLayered>,
     Has<VertexLit>,
     Has<GlowLayered>,
@@ -506,24 +524,25 @@ type SurfaceItems = (
 /// by the mesh's vertex alpha.
 fn resolve_materials(
     mut commands: Commands,
-    mut surfaces: Query<SurfaceItems>,
+    surfaces: Query<SurfaceItems>,
     mut material_maps: ResMut<MaterialMaps>,
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
+    mut effect_materials: ResMut<Assets<EffectMaterial>>,
 ) {
     for (
         entity,
         surface,
         mesh,
         lightmap,
-        mut material,
+        drawn_with,
         layered,
         vertex_lit,
         glowing,
         parent,
         skin,
         unlit,
-    ) in &mut surfaces
+    ) in &surfaces
     {
         let name = &surface.0;
 
@@ -536,7 +555,12 @@ fn resolve_materials(
             let Some(source) = source_materials.get(&source_handle) else {
                 continue;
             };
-            let resolved = build_materials(source, &mut standard_materials, &mut material_maps);
+            let resolved = build_materials(
+                source,
+                &mut standard_materials,
+                &mut effect_materials,
+                &mut material_maps,
+            );
             material_maps
                 .resolved
                 .insert(name.clone(), resolved.clone());
@@ -548,9 +572,7 @@ fn resolve_materials(
         } else {
             &resolved.base
         };
-        if material.0 != *wanted {
-            material.0 = wanted.clone();
-        }
+        draw_with(&mut commands, entity, drawn_with, wanted);
         if let (Some(blend), false) = (resolved.blend, layered) {
             let mut layer = commands.spawn((Mesh3d(mesh.0.clone()), MeshMaterial3d(blend)));
             if let Some(lightmap) = lightmap {
@@ -587,15 +609,27 @@ fn resolve_materials(
 fn build_materials(
     source: &SourceMaterial,
     standard_materials: &mut Assets<StandardMaterial>,
+    effect_materials: &mut Assets<EffectMaterial>,
     material_maps: &mut MaterialMaps,
 ) -> Resolved {
     let base = standard_from(source);
-    let resolved = Resolved {
-        vertex_lit: standard_materials.add(StandardMaterial {
+    let (base, vertex_lit) = if source.additive {
+        // Unlit already, so one material serves both.
+        let effect = SurfaceMaterial::Effect(effect_materials.add(effect_material(base)));
+        (effect.clone(), effect)
+    } else {
+        let vertex_lit = standard_materials.add(StandardMaterial {
             unlit: true,
             ..base.clone()
-        }),
-        base: standard_materials.add(base),
+        });
+        (
+            SurfaceMaterial::Standard(standard_materials.add(base)),
+            SurfaceMaterial::Standard(vertex_lit),
+        )
+    };
+    let resolved = Resolved {
+        vertex_lit,
+        base,
         blend: source
             .base_color2
             .clone()
@@ -608,27 +642,67 @@ fn build_materials(
         material_maps.pulsing.push((handle.clone(), full, pulse));
     }
     if let Some((rate, angle)) = source.scroll {
-        material_maps.scrolling.push((
-            vec![resolved.base.clone(), resolved.vertex_lit.clone()],
-            rate,
-            angle,
-        ));
+        let mut handles = vec![resolved.base.clone()];
+        if resolved.vertex_lit != resolved.base {
+            handles.push(resolved.vertex_lit.clone());
+        }
+        material_maps.scrolling.push((handles, rate, angle));
     }
     resolved
+}
+
+/// Gives surface `entity`, drawn with `current` now, the material `wanted`,
+/// swapping the kind of material component if it must.
+fn draw_with(
+    commands: &mut Commands,
+    entity: Entity,
+    current: (
+        Option<&MeshMaterial3d<StandardMaterial>>,
+        Option<&MeshMaterial3d<EffectMaterial>>,
+    ),
+    wanted: &SurfaceMaterial,
+) {
+    match (wanted, current) {
+        (SurfaceMaterial::Standard(handle), (Some(now), _)) if now.0 == *handle => {}
+        (SurfaceMaterial::Effect(handle), (_, Some(now))) if now.0 == *handle => {}
+        (SurfaceMaterial::Standard(handle), _) => {
+            commands
+                .entity(entity)
+                .remove::<MeshMaterial3d<EffectMaterial>>()
+                .insert(MeshMaterial3d(handle.clone()));
+        }
+        (SurfaceMaterial::Effect(handle), _) => {
+            commands
+                .entity(entity)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial3d(handle.clone()));
+        }
+    }
 }
 
 /// Slides the textures of materials with a `TextureScroll` proxy.
 fn scroll_textures(
     time: Res<Time>,
     maps: Res<MaterialMaps>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    mut effects: ResMut<Assets<EffectMaterial>>,
 ) {
     for (handles, rate, angle) in &maps.scrolling {
         let heading = angle.to_radians();
         let offset = Vec2::new(heading.cos(), heading.sin()) * (rate * time.elapsed_secs());
+        let slid = Affine2::from_translation(offset.fract());
         for handle in handles {
-            if let Some(mut material) = materials.get_mut(handle) {
-                material.uv_transform = Affine2::from_translation(offset.fract());
+            match handle {
+                SurfaceMaterial::Standard(handle) => {
+                    if let Some(mut material) = standard.get_mut(handle) {
+                        material.uv_transform = slid;
+                    }
+                }
+                SurfaceMaterial::Effect(handle) => {
+                    if let Some(mut material) = effects.get_mut(handle) {
+                        material.base.uv_transform = slid;
+                    }
+                }
             }
         }
     }
@@ -798,6 +872,36 @@ mod tests {
     fn a_cutout_or_translucent_texture_uses_its_alpha_for_that_not_for_shining() {
         assert!(self_lit(&lit_material(|m| m.translucent = true)).is_none());
         assert!(self_lit(&lit_material(|m| m.alpha_test = Some(0.5))).is_none());
+    }
+
+    #[test]
+    fn additive_surfaces_are_drawn_as_effects_and_the_rest_as_standard() {
+        let mut standard = Assets::<StandardMaterial>::default();
+        let mut effects = Assets::<EffectMaterial>::default();
+        let mut maps = MaterialMaps::default();
+        let additive = SourceMaterial {
+            base_color: Some(Handle::default()),
+            additive: true,
+            ..default()
+        };
+        let resolved = build_materials(&additive, &mut standard, &mut effects, &mut maps);
+        let SurfaceMaterial::Effect(handle) = &resolved.base else {
+            panic!("an additive surface is an effect");
+        };
+        assert_eq!(resolved.vertex_lit, resolved.base, "unlit either way");
+        let effect = effects.get(handle).expect("added");
+        assert_eq!(effect.base.alpha_mode, AlphaMode::Add);
+        assert!(effect.base.unlit);
+
+        let plain = build_materials(
+            &SourceMaterial::default(),
+            &mut standard,
+            &mut effects,
+            &mut maps,
+        );
+        assert!(matches!(plain.base, SurfaceMaterial::Standard(_)));
+        assert!(matches!(plain.vertex_lit, SurfaceMaterial::Standard(_)));
+        assert_ne!(plain.base, plain.vertex_lit);
     }
 
     #[test]

@@ -24,6 +24,7 @@ use crate::audio::SoundPlugin;
 use crate::camera::{CursorGrab, FlyCamPlugin};
 use crate::capture::{Capture, CapturePlugin};
 use crate::decals::DecalsPlugin;
+use crate::effect_material::EffectMaterialPlugin;
 use crate::effects::EffectsPlugin;
 use crate::fog::FogPlugin;
 use crate::grenades::GrenadesPlugin;
@@ -49,6 +50,7 @@ pub mod capture;
 pub mod content;
 pub mod debris;
 pub mod decals;
+pub mod effect_material;
 pub mod effects;
 pub mod explosion;
 pub mod fog;
@@ -169,7 +171,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         ..default()
     }));
     app.add_plugins(SourceLoadersPlugin);
-    app.add_plugins(UiPlugin);
+    app.add_plugins((UiPlugin, EffectMaterialPlugin));
     app.insert_resource(CurrentMap(options.map.unwrap_or_default()));
     app.insert_state(start);
     app.insert_resource(CursorGrab(options.capture.is_none()));

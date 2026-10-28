@@ -77,6 +77,9 @@ vbsp = "0.9"
 vmdl = "0.2"
 vmt-parser = "0.2"
 vtf = "0.4"
+# WESL, the shader language Bevy compiles; the version it uses, so the
+# client's tests parse its shaders as Bevy will.
+wesl = { version = "0.6", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }

@@ -29,6 +29,7 @@ use rl_sim::simulation::{GrenadeView, Simulation};
 use crate::AppState;
 use crate::audio::SoundPlayer;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::{Drawn, Game};
 use crate::particles::Looks;
 use crate::props::{ModelHandles, Moving, spawn_model};
@@ -138,7 +139,7 @@ fn draw_grenades(
     game: Game,
     looks: Option<Res<Looks>>,
     mut models: ResMut<ModelHandles>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     asset_server: Res<AssetServer>,
     mut views: Query<(Entity, &GrenadeEntity, &mut Transform)>,
@@ -192,7 +193,7 @@ fn draw_grenades(
             .insert((GrenadeEntity(grenade.id), Moving));
         commands.spawn((
             Mesh3d(looks.quad.clone()),
-            MeshMaterial3d(materials.add(StandardMaterial {
+            MeshMaterial3d(materials.add(effect_material(StandardMaterial {
                 base_color: Color::NONE,
                 base_color_texture: Some(looks.dot.clone()),
                 unlit: true,
@@ -200,20 +201,20 @@ fn draw_grenades(
                 cull_mode: None,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            })),
+            }))),
             Transform::from_scale(Vec3::ZERO),
             Dot(grenade.id),
             MapScoped,
         ));
         commands.spawn((
             Mesh3d(meshes.add(empty_ribbon())),
-            MeshMaterial3d(materials.add(StandardMaterial {
+            MeshMaterial3d(materials.add(effect_material(StandardMaterial {
                 unlit: true,
                 double_sided: true,
                 cull_mode: None,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            })),
+            }))),
             Transform::IDENTITY,
             // Its vertices are in the world, and change every frame.
             NoFrustumCulling,
@@ -240,7 +241,7 @@ fn draw_beams(
     mut commands: Commands,
     drawn: Res<Drawn>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut beams: Query<(Entity, &Beam, &mut Transform)>,
 ) {
     let Some(world) = &drawn.0 else {
@@ -268,12 +269,12 @@ fn draw_beams(
         };
         commands.spawn((
             Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-            MeshMaterial3d(materials.add(StandardMaterial {
+            MeshMaterial3d(materials.add(effect_material(StandardMaterial {
                 base_color: Color::linear_rgba(1.6, 0.04, 0.02, 0.7),
                 unlit: true,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            })),
+            }))),
             beam_transform(start, end),
             NoFrustumCulling,
             Beam(view.id),
@@ -349,8 +350,8 @@ fn flash_dots(
     game: Game,
     fuses: Res<Fuses>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
-    mut dots: Query<(&Dot, &MeshMaterial3d<StandardMaterial>, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut dots: Query<(&Dot, &MeshMaterial3d<EffectMaterial>, &mut Transform)>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let (Some(world), Some(sim), Ok(camera)) = (&drawn.0, game.sim(), camera.single()) else {
         return;
@@ -384,7 +385,7 @@ fn flash_dots(
         };
         if let Some(mut material) = materials.get_mut(&material.0) {
             let [r, g, b] = effects.dot_color;
-            material.base_color = Color::linear_rgba(r, g, b, brightness);
+            material.base.base_color = Color::linear_rgba(r, g, b, brightness);
         }
     }
 }

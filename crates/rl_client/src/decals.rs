@@ -25,6 +25,7 @@ use rl_sim::combat::hitscan::Struck;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::{Game, LevelBodies};
 use crate::props::{PhysicsBody, Prop};
 use crate::surfaces::SurfaceClass;
@@ -89,7 +90,7 @@ struct Decal {
 #[derive(Resource)]
 struct DecalAssets {
     handles: HashMap<String, Handle<DecalAsset>>,
-    materials: HashMap<String, Handle<StandardMaterial>>,
+    materials: HashMap<String, Handle<EffectMaterial>>,
     live: Vec<Entity>,
     loaded: bool,
     rng: Rng,
@@ -113,13 +114,13 @@ impl DecalAssets {
         &mut self,
         name: &str,
         decals: &Assets<DecalAsset>,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Option<Handle<StandardMaterial>> {
+        materials: &mut Assets<EffectMaterial>,
+    ) -> Option<Handle<EffectMaterial>> {
         if let Some(material) = self.materials.get(name) {
             return Some(material.clone());
         }
         let decal = decals.get(self.handles.get(name)?)?;
-        let material = materials.add(StandardMaterial {
+        let material = materials.add(effect_material(StandardMaterial {
             base_color_texture: Some(decal.image.clone()),
             unlit: true,
             cull_mode: None,
@@ -127,7 +128,7 @@ impl DecalAssets {
             alpha_mode: AlphaMode::Multiply,
             depth_bias: 4.0,
             ..default()
-        });
+        }));
         self.materials.insert(name.to_owned(), material.clone());
         Some(material)
     }
@@ -362,7 +363,7 @@ fn spawn_decals(
     mut meshes: ResMut<Assets<Mesh>>,
     models: Res<Assets<ModelAsset>>,
     decal_assets: Res<Assets<DecalAsset>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     scene: DecalScene,
 ) {
     let Some(sim) = game.sim() else {

@@ -23,6 +23,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::explosion::Explosion;
 use crate::net::Game;
 use crate::pcf_particles::{Pcf, PcfSpawn};
@@ -222,7 +223,7 @@ struct Particle {
     roll: f32,
     spin: f32,
     resting: bool,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// The textures and quad every particle is made from.
@@ -515,12 +516,12 @@ fn spawn_blasts(
 fn spawn_particle(
     commands: &mut Commands,
     looks: &Looks,
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<EffectMaterial>,
     rng: &mut Rng,
     at: Vec3,
     spec: &Spec,
 ) {
-    let material = materials.add(StandardMaterial {
+    let material = materials.add(effect_material(StandardMaterial {
         base_color: Color::NONE,
         base_color_texture: Some(looks.texture(spec.kind)),
         unlit: true,
@@ -532,7 +533,7 @@ fn spawn_particle(
             AlphaMode::Blend
         },
         ..default()
-    });
+    }));
     commands.spawn((
         Particle {
             kind: spec.kind,
@@ -617,7 +618,7 @@ fn burn_props(
     live: Query<(), With<Particle>>,
     mut since: Local<f32>,
     mut rng: Local<Option<Rng>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let (Some(sim), Some(looks)) = (game.sim(), looks) else {
         return;
@@ -657,7 +658,7 @@ fn move_particles(
     game: Game,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut particles: Query<(Entity, &mut Particle, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let dt = time.delta_secs();
     let facing = camera
@@ -703,7 +704,7 @@ fn move_particles(
         let mut color = gradient(&particle.color, t);
         color[3] *= envelope(t);
         if let Some(mut material) = materials.get_mut(&particle.material) {
-            material.base_color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
+            material.base.base_color = Color::linear_rgba(color[0], color[1], color[2], color[3]);
         }
     }
 }

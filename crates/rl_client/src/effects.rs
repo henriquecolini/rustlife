@@ -41,6 +41,7 @@ use crate::actors::PlayerView;
 use crate::animation::Attachment;
 use crate::camera::FlyCam;
 use crate::decals::{DecalKind, DecalRequest, trace_stain};
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::Game;
 use crate::particles::Blast;
 use crate::pcf_particles::{Pcf, PcfSpawn};
@@ -104,7 +105,7 @@ struct Sprites {
     handles: HashMap<String, Handle<SpriteAsset>>,
     /// A material per sprite, tint and lighting, showing its first frame,
     /// made once it loads.
-    materials: HashMap<(String, [u32; 3], bool), Handle<StandardMaterial>>,
+    materials: HashMap<(String, [u32; 3], bool), Handle<EffectMaterial>>,
     /// The unit quad every effect is drawn on.
     quad: Option<Handle<Mesh>>,
     /// Picks flashes and their roll.
@@ -128,8 +129,8 @@ impl Sprites {
         &mut self,
         name: &str,
         sprites: &Assets<SpriteAsset>,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Option<Handle<StandardMaterial>> {
+        materials: &mut Assets<EffectMaterial>,
+    ) -> Option<Handle<EffectMaterial>> {
         self.still_tinted(name, [1.0; 3], false, sprites, materials)
     }
 
@@ -140,14 +141,14 @@ impl Sprites {
         color: [f32; 3],
         lit: bool,
         sprites: &Assets<SpriteAsset>,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Option<Handle<StandardMaterial>> {
+        materials: &mut Assets<EffectMaterial>,
+    ) -> Option<Handle<EffectMaterial>> {
         let key = (name.to_owned(), color.map(f32::to_bits), lit);
         if let Some(material) = self.materials.get(&key) {
             return Some(material.clone());
         }
         let sprite = sprites.get(self.handles.get(name)?)?;
-        let material = materials.add(sprite_material(sprite, color, lit));
+        let material = materials.add(effect_material(sprite_material(sprite, color, lit)));
         self.materials.insert(key, material.clone());
         Some(material)
     }
@@ -201,7 +202,7 @@ struct SurfaceFlash {
     size_bias: f32,
     alpha: (f32, f32),
     alpha_bias: f32,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// The game's `Bias`: `t^-log2(bias)`. Below one half the value lags behind
@@ -350,7 +351,7 @@ pub(crate) fn as_seen_by_main(point: Vec3, camera: &GlobalTransform, main_fov: f
 /// The quad of an effect: drawn with `material`, scaled to `size` metres.
 fn quad_bundle(
     quad: &Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
     at: Vec3,
     size: Vec2,
     until: f32,
@@ -435,7 +436,7 @@ struct Painter<'w, 's> {
     time: Res<'w, Time>,
     sprites: ResMut<'w, Sprites>,
     sprite_assets: Res<'w, Assets<SpriteAsset>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
+    materials: ResMut<'w, Assets<EffectMaterial>>,
 }
 
 impl Painter<'_, '_> {
@@ -530,7 +531,9 @@ impl Painter<'_, '_> {
         let scale = coords::METERS_PER_UNIT;
         let start = flash.size.0 + (flash.size.1 - flash.size.0) * self.sprites.rng.unit();
         let roll = self.sprites.rng.unit() * std::f32::consts::TAU;
-        let material = self.materials.add(sprite_material(sprite, [1.0; 3], false));
+        let material = self
+            .materials
+            .add(effect_material(sprite_material(sprite, [1.0; 3], false)));
         let until = self.time.elapsed_secs() + flash.life;
         let turn = Quat::from_rotation_arc(Vec3::Z, normal.normalize_or(Vec3::Z))
             * Quat::from_rotation_z(roll);
@@ -871,7 +874,7 @@ fn tracer_pose(tracer: &Tracer, eye: Vec3) -> Option<(Vec3, Quat, f32)> {
 fn animate_flashes(
     time: Res<Time>,
     mut flashes: Query<(&mut SurfaceFlash, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     for (mut flash, mut transform) in &mut flashes {
         flash.age += time.delta_secs();
@@ -880,7 +883,7 @@ fn animate_flashes(
         transform.scale = Vec3::new(2.0 * half, 2.0 * half, 1.0);
         let alpha = flash.alpha.0 + (flash.alpha.1 - flash.alpha.0) * bias(t, flash.alpha_bias);
         if let Some(mut material) = materials.get_mut(&flash.material) {
-            material.base_color = Color::linear_rgba(1.0, 1.0, 1.0, alpha);
+            material.base.base_color = Color::linear_rgba(1.0, 1.0, 1.0, alpha);
         }
     }
 }

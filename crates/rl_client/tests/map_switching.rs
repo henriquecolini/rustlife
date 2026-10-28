@@ -15,6 +15,7 @@ use bevy::pbr::StandardMaterial;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
+use rl_client::effect_material::EffectMaterial;
 use rl_client::world::WorldPlugin;
 use rl_client::{AppState, CurrentMap, GameVfs};
 use source_fs::MountOrigin;
@@ -71,6 +72,7 @@ fn switching_maps_unloads_the_previous_one() {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
     app.init_asset::<StandardMaterial>();
+    app.init_asset::<EffectMaterial>();
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CurrentMap("dm_lockdown".into()));
     app.insert_state(AppState::InGame);

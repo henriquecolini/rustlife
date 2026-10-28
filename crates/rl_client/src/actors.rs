@@ -28,6 +28,7 @@ use rl_sim::simulation::{PlayerId, Simulation};
 
 use crate::AppState;
 use crate::animation::{Animated, SequencePlayer};
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::{Drawn, Game};
 use crate::player::Gameplay;
 use crate::props::{LightAt, ModelHandles, Moving, PhysicsBody, spawn_model};
@@ -547,7 +548,7 @@ const GLOW_FPS: f32 = 25.0;
 struct GlowQuad {
     projectile: u32,
     /// The material, whose texture steps through `frames` side by side.
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
     frames: u32,
     /// Half-size, metres.
     size: f32,
@@ -567,7 +568,7 @@ fn glow_projectiles(
     camera: Query<&GlobalTransform, With<crate::camera::FlyCam>>,
     mut quads: Query<(Entity, &GlowQuad, &mut Transform)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut loaded: Local<HashMap<String, Handle<rl_assets::SpriteAsset>>>,
     mut quad_mesh: Local<Option<Handle<Mesh>>>,
 ) {
@@ -596,7 +597,7 @@ fn glow_projectiles(
             let frame = (time.elapsed_secs() * GLOW_FPS) as u32 % quad.frames;
             if let Some(mut material) = materials.get_mut(&quad.material) {
                 let frames = quad.frames as f32;
-                material.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
+                material.base.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
                     Vec2::new(1.0 / frames, 1.0),
                     0.0,
                     Vec2::new(frame as f32 / frames, 0.0),
@@ -635,7 +636,7 @@ fn glow_projectiles(
             let Some(sprite) = sprites.get(&handle) else {
                 continue;
             };
-            let material = materials.add(StandardMaterial {
+            let material = materials.add(effect_material(StandardMaterial {
                 base_color: Color::WHITE,
                 base_color_texture: Some(sprite.image.clone()),
                 unlit: true,
@@ -643,7 +644,7 @@ fn glow_projectiles(
                 cull_mode: None,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            });
+            }));
             commands.spawn((
                 GlowQuad {
                     projectile: projectile.id,

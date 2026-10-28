@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 use rl_assets::{SourceAssetPlugin, SourceLoadersPlugin};
 use rl_client::content::Content;
+use rl_client::effect_material::EffectMaterial;
 use rl_client::menu::Menu;
 use rl_client::net::{Connection, NetPlugin, NetSettings, Network};
 use rl_client::player::{LocalPlayer, PlayerPlugin, ViewMode};
@@ -79,6 +80,7 @@ fn client(spawn: usize, dummies: usize) -> Option<App> {
     app.init_asset::<Mesh>();
     app.init_asset::<Image>();
     app.init_asset::<StandardMaterial>();
+    app.init_asset::<EffectMaterial>();
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CurrentMap("dm_lockdown".into()));
     app.insert_resource(Content {

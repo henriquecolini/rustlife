@@ -10,6 +10,7 @@ use rl_sim::simulation::PlayerId;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::Game;
 use crate::particles::Looks;
 use crate::world::MapScoped;
@@ -42,7 +43,7 @@ fn draw_dots(
     game: Game,
     looks: Option<Res<Looks>>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut dots: Query<(Entity, &LaserDot, &mut Transform, &mut Visibility)>,
 ) {
     let (Some(sim), Some(looks), Ok(camera)) = (game.sim(), looks, camera.single()) else {
@@ -76,7 +77,7 @@ fn draw_dots(
         let [r, g, b] = DOT_COLOR;
         commands.spawn((
             Mesh3d(looks.quad.clone()),
-            MeshMaterial3d(materials.add(StandardMaterial {
+            MeshMaterial3d(materials.add(effect_material(StandardMaterial {
                 base_color: Color::linear_rgba(r, g, b, 1.0),
                 base_color_texture: Some(looks.dot.clone()),
                 unlit: true,
@@ -84,7 +85,7 @@ fn draw_dots(
                 cull_mode: None,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            })),
+            }))),
             Transform::from_scale(Vec3::ZERO),
             LaserDot(id),
             MapScoped,

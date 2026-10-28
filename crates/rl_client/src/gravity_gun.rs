@@ -45,6 +45,7 @@ use rl_sim::tools::manipulator::{Aim, liftable_target};
 use crate::AppState;
 use crate::animation::{Animated, Attachment, SequencePlayer};
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::lightning::{self, BeamShape, Random};
 use crate::net::Game;
 use crate::physcannon_impact::PhyscannonImpact;
@@ -343,7 +344,7 @@ struct Glow {
     size: Element,
     /// 0 to 1.
     strength: Element,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// What [`shine`] moves: each sprite and where it is.
@@ -396,10 +397,10 @@ fn attachment_of(
 
 /// A material for a sprite: its texture, added to what is behind it.
 fn sprite_material(
-    materials: &mut Assets<StandardMaterial>,
+    materials: &mut Assets<EffectMaterial>,
     sprite: &SpriteAsset,
-) -> Handle<StandardMaterial> {
-    materials.add(StandardMaterial {
+) -> Handle<EffectMaterial> {
+    materials.add(effect_material(StandardMaterial {
         base_color: Color::linear_rgba(1.0, 1.0, 1.0, 0.0),
         base_color_texture: Some(sprite.image.clone()),
         unlit: true,
@@ -407,7 +408,7 @@ fn sprite_material(
         cull_mode: None,
         alpha_mode: AlphaMode::Add,
         ..default()
-    })
+    }))
 }
 
 /// Makes the gun's sprites and arcs when it comes into hand, and removes
@@ -423,7 +424,7 @@ fn spawn_effects(
     arcs: Query<(Entity, &Arc)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     for (entity, glow) in &glows {
         if look.view != Some(glow.view) {
@@ -485,14 +486,14 @@ fn spawn_effects(
             ..ImageSamplerDescriptor::linear()
         });
     }
-    let material = materials.add(StandardMaterial {
+    let material = materials.add(effect_material(StandardMaterial {
         base_color_texture: Some(arc.image.clone()),
         unlit: true,
         double_sided: true,
         cull_mode: None,
         alpha_mode: AlphaMode::Add,
         ..default()
-    });
+    }));
     let Some(muzzle) = attachment_of(view, "muzzle", &attachments, &parents) else {
         return;
     };
@@ -529,7 +530,7 @@ fn shine(
     attachments: Query<&GlobalTransform, With<Attachment>>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut glows: Query<GlowItems, (Without<Attachment>, Without<FlyCam>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let now = time.elapsed_secs();
     for (mut glow, mut transform, mut global) in &mut glows {
@@ -556,7 +557,8 @@ fn shine(
         *global = GlobalTransform::from(*transform);
         if let Some(mut material) = materials.get_mut(&glow.material) {
             let tint = glow.kind.tint();
-            material.base_color = Color::linear_rgba(tint.x, tint.y, tint.z, strength.powf(2.2));
+            material.base.base_color =
+                Color::linear_rgba(tint.x, tint.y, tint.z, strength.powf(2.2));
         }
     }
 }

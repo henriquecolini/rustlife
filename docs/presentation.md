@@ -186,6 +186,15 @@ translucent and unlit, their texture tinted by their material's fog
 colour. With the eyes under
 water, the view fogs to that colour over the water material's distances.
 
+Effects fog as Source fogs them. Bevy's fog mixes every surface towards the
+fog's colour, which for an additive sprite adds fog-coloured light (a far
+explosion glowed through the fog) and for a multiplying decal darkens by
+it. Effects, decals and additive world surfaces are drawn with an
+`EffectMaterial` (`rl_client/src/effect_material.rs`): a `StandardMaterial`
+whose fragment shader fogs additive passes towards black (they fade out)
+and multiplying ones towards white (they leave the wall alone), with
+Bevy's own falloff. Blended ones fog as before.
+
 ### Textures
 
 DXT-compressed textures stay block-compressed on the GPU (BC1–3) where it
@@ -279,3 +288,4 @@ player's own volumes.
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
 | `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |
 | `rl_client/src/fog.rs`, `effects.rs` | Fog from entity keys, sprite frames, tracers' stretch and turn, view model points seen by the main camera |
+| `rl_client/src/effect_material.rs` | Fully fogged additive and multiplying effects leaving the frame alone, unfogged ones unchanged, the shader parsing |

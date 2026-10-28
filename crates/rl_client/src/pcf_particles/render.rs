@@ -22,6 +22,7 @@ use super::sim::{
     Collider, ControlPoint, EmptyWorld, Hit, Instance, Library, Particle, Renderer, material_key,
 };
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::Game;
 use crate::world::MapScoped;
 use crate::{AppState, GameVfs};
@@ -69,7 +70,7 @@ pub(crate) struct Pcf {
     library: Library,
     loaded: bool,
     sprites: HashMap<String, Handle<SpriteAsset>>,
-    materials: HashMap<String, Handle<StandardMaterial>>,
+    materials: HashMap<String, Handle<EffectMaterial>>,
     pending: Vec<(PcfSpawn, f32)>,
     spawned: u64,
 }
@@ -305,7 +306,7 @@ fn play_effects(
     mut effects: Query<(Entity, &mut PcfEffect)>,
     mut layers: Query<&mut Visibility>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
@@ -349,7 +350,7 @@ fn play_effects(
             let standard = pcf
                 .materials
                 .entry(material)
-                .or_insert_with(|| materials.add(sprite_material(sprite)))
+                .or_insert_with(|| materials.add(effect_material(sprite_material(sprite))))
                 .clone();
             list.sort_by(|a, b| {
                 let da = a.center().distance_squared(view.position);

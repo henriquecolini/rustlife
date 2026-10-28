@@ -26,6 +26,7 @@ tracing.workspace = true
 [dev-dependencies]
 source_fs = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
+wesl.workspace = true
 
 [lints]
 workspace = true

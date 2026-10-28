@@ -25,6 +25,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::explosion::{between, random_vector};
 use crate::world::MapScoped;
 
@@ -340,7 +341,7 @@ struct GlintAlive {
     /// Where it is, Source units.
     position: Vec3,
     age: f32,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// A spark alive.
@@ -354,7 +355,7 @@ struct Alive {
     gravity: f32,
     bounce: f32,
     fades: bool,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// Makes the sparks of each asked-for burst.
@@ -365,7 +366,7 @@ fn spawn_sparks(
     assets: Res<Assets<SpriteAsset>>,
     live: Query<(), With<Alive>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
     mut rng: Local<Option<Rng>>,
 ) {
@@ -392,7 +393,7 @@ fn spawn_sparks(
                     return;
                 }
                 room -= 1;
-                let material = materials.add(StandardMaterial {
+                let material = materials.add(effect_material(StandardMaterial {
                     base_color: Color::NONE,
                     base_color_texture: Some(sprite.image.clone()),
                     unlit: true,
@@ -404,7 +405,7 @@ fn spawn_sparks(
                         AlphaMode::Blend
                     },
                     ..default()
-                });
+                }));
                 commands.spawn((
                     Alive {
                         flight: Flight {
@@ -429,7 +430,7 @@ fn spawn_sparks(
             }
         }
         for glint in electric_glints(rng, 1) {
-            let material = materials.add(StandardMaterial {
+            let material = materials.add(effect_material(StandardMaterial {
                 base_color: Color::NONE,
                 base_color_texture: Some(glint_sprite.image.clone()),
                 unlit: true,
@@ -437,7 +438,7 @@ fn spawn_sparks(
                 cull_mode: None,
                 alpha_mode: AlphaMode::Add,
                 ..default()
-            });
+            }));
             commands.spawn((
                 GlintAlive {
                     position: origin + glint.offset,
@@ -470,7 +471,7 @@ fn move_sparks(
     time: Res<Time>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut sparks: Query<(Entity, &mut Alive, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     // A long frame must not age the briefest sparks to death unseen.
     let dt = time.delta_secs().min(MAX_STEP);
@@ -506,7 +507,7 @@ fn move_sparks(
         transform.translation = head - heading * (0.5 * transform.scale.y);
         let light = brightness(spark.age, spark.life, spark.fades);
         if let Some(mut material) = materials.get_mut(&spark.material) {
-            material.base_color = Color::linear_rgba(light, light, light, light);
+            material.base.base_color = Color::linear_rgba(light, light, light, light);
         }
     }
 }
@@ -518,7 +519,7 @@ fn move_glints(
     time: Res<Time>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut glints: Query<(Entity, &mut GlintAlive, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     let dt = time.delta_secs().min(MAX_STEP);
     let Ok(camera) = camera.single() else {
@@ -542,7 +543,7 @@ fn move_glints(
         transform.scale = Vec3::splat(2.0 * half * coords::METERS_PER_UNIT);
         if let Some(mut material) = materials.get_mut(&alive.material) {
             let [r, g, b] = glint.color.map(|c| c * alpha);
-            material.base_color = Color::linear_rgba(r, g, b, 1.0);
+            material.base.base_color = Color::linear_rgba(r, g, b, 1.0);
         }
     }
 }

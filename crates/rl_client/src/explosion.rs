@@ -34,6 +34,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::camera::FlyCam;
+use crate::effect_material::{EffectMaterial, effect_material};
 use crate::props::MapLightField;
 use crate::world::MapScoped;
 
@@ -583,7 +584,7 @@ struct Alive {
     origin: Vec3,
     roll: f32,
     roll_speed: f32,
-    material: Handle<StandardMaterial>,
+    material: Handle<EffectMaterial>,
 }
 
 /// Moves a chip for `dt`: it falls, and bounces off walls losing part of
@@ -621,7 +622,7 @@ fn spawn_puffs(
     assets: Res<Assets<SpriteAsset>>,
     live: Query<(), With<Alive>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
     mut quad: Local<Option<Handle<Mesh>>>,
     mut rng: Local<Option<Rng>>,
 ) {
@@ -645,7 +646,7 @@ fn spawn_puffs(
                 return;
             }
             room -= 1;
-            let material = materials.add(StandardMaterial {
+            let material = materials.add(effect_material(StandardMaterial {
                 base_color: Color::NONE,
                 base_color_texture: Some(sprite.image.clone()),
                 unlit: true,
@@ -663,7 +664,7 @@ fn spawn_puffs(
                     AlphaMode::Blend
                 },
                 ..default()
-            });
+            }));
             let offset = coords::direction(puff.offset.to_array()) * coords::METERS_PER_UNIT;
             commands.spawn((
                 Alive {
@@ -698,7 +699,7 @@ fn move_puffs(
     time: Res<Time>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut puffs: Query<(Entity, &mut Alive, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<EffectMaterial>>,
 ) {
     // A long frame must not age the briefest puffs to death unseen.
     let dt = time.delta_secs().min(MAX_STEP);
@@ -771,7 +772,7 @@ fn move_puffs(
         if let Some(mut material) = materials.get_mut(&puff.material) {
             let gain = if puff.glows { GLOW_GAIN } else { 1.0 };
             let [r, g, b] = puff.color.map(|c| c * shade * gain);
-            material.base_color = Color::linear_rgba(r, g, b, alpha);
+            material.base.base_color = Color::linear_rgba(r, g, b, alpha);
         }
     }
 }

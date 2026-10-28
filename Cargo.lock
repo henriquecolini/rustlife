@@ -5433,6 +5433,7 @@ dependencies = [
  "source_fs",
  "tempfile",
  "tracing",
+ "wesl",
 ]
 
 [[package]]
