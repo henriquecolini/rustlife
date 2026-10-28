@@ -21,10 +21,9 @@
 //! brought up (`ACT_VM_DRAW`) if there is one. It is lit like a moving prop,
 //! where the player's eyes are.
 
+use bevy::camera::CameraOutputMode;
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-use bevy::camera::{CameraOutputMode, Hdr};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
-use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
 use rl_data::{FireConfig, Shot};
@@ -50,24 +49,6 @@ pub(crate) const VIEW_FOV_DEGREES: f32 = 42.0;
 /// The view model camera's near plane, metres: weapons sit just in front
 /// of the eyes.
 const VIEW_NEAR: f32 = 0.01;
-
-/// The view model's bloom, which is what makes the Gravity Gun's cage and
-/// sprites glow: Source's HDR bloom, which lets the brightest parts of the
-/// frame bleed into the pixels around them. Only what is lit past
-/// `threshold` does; the metal of the weapons stays as it is.
-fn view_bloom() -> Bloom {
-    Bloom {
-        intensity: 0.5,
-        low_frequency_boost: 0.6,
-        low_frequency_boost_curvature: 0.9,
-        prefilter: BloomPrefilter {
-            threshold: 0.45,
-            threshold_softness: 0.5,
-        },
-        composite_mode: BloomCompositeMode::Additive,
-        ..Bloom::NATURAL
-    }
-}
 
 /// Draws and animates the view model.
 pub struct ViewModelPlugin;
@@ -151,9 +132,11 @@ fn add_view_camera(
         Camera3d::default(),
         Camera {
             order: 1,
-            // The view model is drawn over a clear, transparent frame of its
-            // own (HDR, so its glow can bloom), then laid over the world
-            // with its alpha, glow included, which adds to the world.
+            // The view model is drawn over a clear, transparent frame, then
+            // laid over the world with its alpha. The world camera has
+            // already written its frame out by then, so clearing a frame it
+            // shares (same target, format and samples) loses nothing. Like
+            // the world's, the frame is not HDR and has no bloom.
             clear_color: ClearColorConfig::Custom(Color::NONE),
             output_mode: CameraOutputMode::Write {
                 blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -161,8 +144,6 @@ fn add_view_camera(
             },
             ..default()
         },
-        Hdr,
-        view_bloom(),
         Projection::Perspective(PerspectiveProjection {
             fov: VIEW_FOV_DEGREES.to_radians(),
             near: VIEW_NEAR,

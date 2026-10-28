@@ -28,7 +28,6 @@ use rl_assets::{MapAsset, MapMesh, SOURCE, SinePulse, SourceMaterial};
 use source_fs::{MountOrigin, Vfs, ZipMount};
 
 use crate::camera::FlyCam;
-use crate::viewmodel::ViewModel;
 use crate::{AppState, CurrentMap, GameVfs};
 
 /// The render layer of the 3D skybox, which only the sky camera sees.
@@ -89,8 +88,6 @@ struct Resolved {
     /// For `$selfillum`: the surface's own colour, over it where its alpha
     /// says so, whatever the light.
     glow: Option<Handle<StandardMaterial>>,
-    /// The same for the view model, brighter, which its bloom feeds on.
-    view_glow: Option<Handle<StandardMaterial>>,
 }
 
 /// The root of a brush entity (door, breakable, ...).
@@ -510,7 +507,6 @@ type SurfaceItems = (
 fn resolve_materials(
     mut commands: Commands,
     mut surfaces: Query<SurfaceItems>,
-    views: Query<(), With<ViewModel>>,
     mut material_maps: ResMut<MaterialMaps>,
     source_materials: Res<Assets<SourceMaterial>>,
     mut standard_materials: ResMut<Assets<StandardMaterial>>,
@@ -567,13 +563,7 @@ fn resolve_materials(
                 .insert(BlendLayered)
                 .add_child(layer);
         }
-        let in_view = parent.is_some_and(|parent| views.contains(parent.parent()));
-        let glow = if in_view {
-            resolved.view_glow
-        } else {
-            resolved.glow
-        };
-        if let (Some(glow), false) = (glow, glowing) {
+        if let (Some(glow), false) = (resolved.glow, glowing) {
             // The same mesh, skin included, drawn again in its own colour
             // where it shines. Beside the surface rather than under it, where
             // it is a part of its model like the surface.
@@ -610,19 +600,12 @@ fn build_materials(
             .base_color2
             .clone()
             .map(|texture| standard_materials.add(blend_layer(texture))),
-        glow: self_lit(source)
-            .map(|texture| standard_materials.add(glow_layer(texture, source, 1.0))),
-        view_glow: self_lit(source)
-            .map(|texture| standard_materials.add(glow_layer(texture, source, VIEW_GLOW_GAIN))),
+        glow: self_lit(source).map(|texture| standard_materials.add(glow_layer(texture, source))),
     };
-    if let Some(pulse) = source.self_illum_pulse {
+    if let (Some(pulse), Some(handle)) = (source.self_illum_pulse, &resolved.glow) {
         let tint = source.self_illum_tint.unwrap_or([1.0; 3]);
-        for (handle, gain) in [(&resolved.glow, 1.0), (&resolved.view_glow, VIEW_GLOW_GAIN)] {
-            if let Some(handle) = handle {
-                let full = LinearRgba::rgb(tint[0] * gain, tint[1] * gain, tint[2] * gain);
-                material_maps.pulsing.push((handle.clone(), full, pulse));
-            }
-        }
+        let full = LinearRgba::rgb(tint[0], tint[1], tint[2]);
+        material_maps.pulsing.push((handle.clone(), full, pulse));
     }
     if let Some((rate, angle)) = source.scroll {
         material_maps.scrolling.push((
@@ -680,12 +663,6 @@ fn pulse_glows(
 /// faintly, tinted by the water's fog.
 const WATER_OPACITY: f32 = 0.75;
 
-/// How bright a `$selfillum` view model shines, over the 1.0 of its colour:
-/// Source's HDR lets it exceed what the lit surface can, which is what the
-/// bloom of a view model feeds on. (Elsewhere it shines as bright as its
-/// colour, there being no bloom.)
-const VIEW_GLOW_GAIN: f32 = 2.0;
-
 /// The base texture of a `$selfillum` material, whose alpha says how much of
 /// the surface shines (an alpha-tested or translucent one uses it for that).
 fn self_lit(source: &SourceMaterial) -> Option<Handle<Image>> {
@@ -698,10 +675,10 @@ fn self_lit(source: &SourceMaterial) -> Option<Handle<Image>> {
 /// Source's `$selfillum`: a surface's lit colour is mixed with its own, lit
 /// by nothing, by the texture's alpha. Drawn over the lit surface, it is the
 /// own colour blended in by that alpha.
-fn glow_layer(texture: Handle<Image>, source: &SourceMaterial, gain: f32) -> StandardMaterial {
+fn glow_layer(texture: Handle<Image>, source: &SourceMaterial) -> StandardMaterial {
     let tint = source.self_illum_tint.unwrap_or([1.0; 3]);
     StandardMaterial {
-        base_color: Color::linear_rgb(tint[0] * gain, tint[1] * gain, tint[2] * gain),
+        base_color: Color::linear_rgb(tint[0], tint[1], tint[2]),
         base_color_texture: Some(texture),
         unlit: true,
         cull_mode: None,
@@ -825,7 +802,7 @@ mod tests {
 
     #[test]
     fn the_glow_layer_blends_the_unlit_colour_by_the_alpha() {
-        let layer = glow_layer(Handle::default(), &SourceMaterial::default(), 1.0);
+        let layer = glow_layer(Handle::default(), &SourceMaterial::default());
         assert!(layer.unlit);
         assert_eq!(layer.alpha_mode, AlphaMode::Blend);
         assert_eq!(layer.emissive, LinearRgba::BLACK);
