@@ -194,7 +194,8 @@ See [docs/combat.md](docs/combat.md).
    server's gameplay data, Ready), runs their queued commands within a
    per-tick budget, and sends each player a snapshot of the world as they
    see it, as a delta from a state they acknowledged, with the tick's
-   events. `rustlife-server` serves a map over UDP.
+   events. `rustlife-server` serves a map over UDP; `deploy/` packages it
+   as a container image ([docs/deploy.md](docs/deploy.md)).
 3. **The client endpoint** (`rl_net::NetClient`) keeps a replica
    simulation that snapshots overwrite. It predicts its own player with
    the shared movement and weapon code, replays unacknowledged commands
