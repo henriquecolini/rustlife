@@ -17,6 +17,11 @@ const GHOST_RATE: f32 = 2.5;
 /// How fast the bars follow the value, per second.
 const BAR_RATE: f32 = 18.0;
 
+/// The bottom-left column holding the auxiliary power readout and, below
+/// it, the health and armor cards.
+#[derive(Component)]
+pub(super) struct VitalsColumn;
+
 /// The whole auxiliary power readout: shown only while the power is not full.
 #[derive(Component)]
 pub(super) struct AuxPanel;
@@ -49,6 +54,13 @@ pub(super) struct VitalGhost {
     shown: f32,
 }
 
+/// Gap between the auxiliary power readout and the health card below it.
+const AUX_GAP: f32 = 10.0;
+
+/// Spawns the bottom-left column: the auxiliary power readout stacked
+/// above the health and armor cards. They share one flex column, so the
+/// readout always sits clear of the cards, whatever their size or the UI
+/// scale, and takes no room while hidden.
 pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
     commands
         .spawn(anchored(
@@ -57,64 +69,70 @@ pub(super) fn spawn(commands: &mut Commands, fonts: &Fonts) {
             UiRect::new(Val::Px(32.0), Val::Px(0.0), Val::Px(0.0), Val::Px(30.0)),
         ))
         .with_children(|root| {
-            root.spawn(Node {
-                column_gap: Val::Px(26.0),
-                align_items: AlignItems::FlexEnd,
-                ..default()
-            })
-            .with_children(|row| {
-                vital(row, fonts, Vital::Health, "HEALTH", theme::TEXT);
-                vital(row, fonts, Vital::Armor, "ARMOR", ARMOR);
-            });
-        });
-    aux_power(commands, fonts);
-}
-
-/// The auxiliary power readout, just above the health card.
-fn aux_power(commands: &mut Commands, fonts: &Fonts) {
-    commands
-        .spawn(anchored(
-            JustifyContent::FlexStart,
-            AlignItems::FlexEnd,
-            UiRect::new(Val::Px(32.0), Val::Px(0.0), Val::Px(0.0), Val::Px(138.0)),
-        ))
-        .with_children(|root| {
             root.spawn((
-                AuxPanel,
+                VitalsColumn,
                 Node {
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::axes(Val::Px(18.0), Val::Px(8.0)),
-                    row_gap: Val::Px(4.0),
-                    min_width: Val::Px(200.0),
-                    border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS)),
-                    display: Display::None,
+                    align_items: AlignItems::FlexStart,
+                    row_gap: Val::Px(AUX_GAP),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.62)),
             ))
-            .with_children(|card| {
-                card.spawn(fonts.bold("AUX POWER", 14.0, theme::TEXT_DIM));
-                card.spawn((
+            .with_children(|column| {
+                aux_power(column, fonts);
+                column
+                    .spawn(Node {
+                        column_gap: Val::Px(26.0),
+                        align_items: AlignItems::FlexEnd,
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        vital(row, fonts, Vital::Health, "HEALTH", theme::TEXT);
+                        vital(row, fonts, Vital::Armor, "ARMOR", ARMOR);
+                    });
+            });
+        });
+}
+
+/// The auxiliary power readout, at the top of the column (just above the
+/// health card).
+fn aux_power(column: &mut ChildSpawnerCommands, fonts: &Fonts) {
+    column
+        .spawn((
+            AuxPanel,
+            Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::axes(Val::Px(18.0), Val::Px(8.0)),
+                row_gap: Val::Px(4.0),
+                min_width: Val::Px(200.0),
+                border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS)),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.62)),
+        ))
+        .with_children(|card| {
+            card.spawn(fonts.bold("AUX POWER", 14.0, theme::TEXT_DIM));
+            card.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(7.0),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
+            ))
+            .with_children(|bar| {
+                bar.spawn((
+                    AuxFill,
                     Node {
+                        height: Val::Percent(100.0),
                         width: Val::Percent(100.0),
-                        height: Val::Px(7.0),
                         border_radius: BorderRadius::MAX,
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.12)),
-                ))
-                .with_children(|bar| {
-                    bar.spawn((
-                        AuxFill,
-                        Node {
-                            height: Val::Percent(100.0),
-                            width: Val::Percent(100.0),
-                            border_radius: BorderRadius::MAX,
-                            ..default()
-                        },
-                        BackgroundColor(theme::ACCENT),
-                    ));
-                });
+                    BackgroundColor(theme::ACCENT),
+                ));
             });
         });
 }
@@ -260,5 +278,49 @@ pub(super) fn update(
             smooth_toward(ghost.shown, wanted, GHOST_RATE, dt)
         };
         node.width = Val::Percent(ghost.shown * 100.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The auxiliary power readout is laid out in the same column as the
+    /// health card, above it, rather than placed at a fixed height that
+    /// the card can grow into.
+    #[test]
+    fn aux_power_sits_above_the_health_card_in_one_column() {
+        let mut world = World::new();
+        let fonts = Fonts {
+            regular: Handle::default(),
+            bold: Handle::default(),
+        };
+        spawn(&mut world.commands(), &fonts);
+        world.flush();
+
+        let (panel, node, parent) = world
+            .query_filtered::<(Entity, &Node, &ChildOf), With<AuxPanel>>()
+            .single(&world)
+            .expect("one aux power readout");
+        assert_eq!(node.position_type, PositionType::Relative, "in the flow");
+        let column = parent.parent();
+        assert!(world.get::<VitalsColumn>(column).is_some());
+        let layout = world.get::<Node>(column).expect("a node");
+        assert_eq!(layout.flex_direction, FlexDirection::Column);
+        assert_eq!(layout.row_gap, Val::Px(AUX_GAP));
+
+        let children: Vec<Entity> = world.get::<Children>(column).expect("children").to_vec();
+        assert_eq!(children.first(), Some(&panel), "the readout comes first");
+        let health_row = world
+            .query::<(&VitalText, &ChildOf)>()
+            .iter(&world)
+            .find(|(text, _)| text.0 == Vital::Health)
+            .and_then(|(_, card)| world.get::<ChildOf>(card.parent()))
+            .map(ChildOf::parent);
+        assert_eq!(
+            children.get(1).copied(),
+            health_row,
+            "the health card is right below it"
+        );
     }
 }
