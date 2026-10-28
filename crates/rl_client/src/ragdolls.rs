@@ -1425,6 +1425,7 @@ mod tests {
                 name: name.to_owned(),
                 parent,
                 rest: Transform::IDENTITY,
+                pose: Transform::IDENTITY,
             })
             .collect();
         let positions = specs

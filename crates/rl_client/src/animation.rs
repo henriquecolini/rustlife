@@ -1,7 +1,8 @@
 //! Animated models: skeletons, and sequences played and blended on them.
 //!
 //! A skeletal model (`rl_assets::skeleton`) is spawned with an entity per
-//! joint, at rest, which its meshes are skinned to (`spawn_skeleton`).
+//! joint, in the model's idle pose, which its meshes are skinned to
+//! (`spawn_skeleton`).
 //! Its root then gets an [`AnimationPlayer`] over a graph holding every clip
 //! of the model ([`Graphs`]) and a [`SequencePlayer`], through which the
 //! game says what to play: a sequence by index, a value for its blend axis
@@ -10,8 +11,8 @@
 //! one sequence to the next, writing all of that into the animation player
 //! every frame.
 //!
-//! Models nothing plays a sequence on (most skeletal props) stay at rest,
-//! as they were drawn before animation.
+//! Models nothing plays a sequence on (most skeletal props) stay in that
+//! idle pose, as the game draws them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -90,7 +91,7 @@ pub(crate) fn spawn_skeleton(
         let entity = commands
             .spawn((
                 Name::new(joint.name.clone()),
-                joint.rest,
+                joint.pose,
                 Visibility::default(),
                 skeleton.target(index),
                 AnimatedBy(root),

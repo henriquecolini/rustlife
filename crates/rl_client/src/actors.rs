@@ -116,7 +116,7 @@ fn spawn_pickups(
     for (index, pickup) in sim.pickups().iter().enumerate() {
         let transform = Transform {
             translation: coords::position(pickup.origin.to_array()),
-            rotation: coords::rotation(pickup.model_angles()),
+            rotation: coords::rotation(pickup.angles),
             ..default()
         };
         let entity = spawn_model(
@@ -384,7 +384,7 @@ const HELD_LIGHT_HEIGHT: f32 = 40.0 * coords::METERS_PER_UNIT;
 /// Lays each newly loaded held weapon on its holder's hand, as the engine
 /// merges bones: the first of the weapon's bones that the holder also has
 /// (`ValveBiped.Bip01_R_Hand`) is laid on the holder's, by placing the
-/// weapon's root at the inverse of that bone's rest pose.
+/// weapon's root at the inverse of where that bone's idle pose puts it.
 fn grip_weapons(
     mut commands: Commands,
     mut weapons: Query<(Entity, &HeldWeapon, &crate::props::Prop, &mut Transform), With<Gripping>>,
@@ -404,9 +404,13 @@ fn grip_weapons(
             continue;
         };
         let Some(animation) = &model.animation else {
-            // A one-bone weapon model: in the hand as it is, if the holder
-            // has one.
+            // A one-bone weapon model: its bone laid on the holder's hand,
+            // if the holder has one. The model is drawn as its idle pose
+            // places that bone, so undo that pose.
             if let Some(hand) = find_joint(children, &joints, HAND_BONE) {
+                *transform = model.root_idle.map_or(Transform::IDENTITY, |idle| {
+                    Transform::from_matrix(idle.to_matrix().inverse())
+                });
                 commands
                     .entity(entity)
                     .insert((ChildOf(hand), Visibility::Inherited));
@@ -424,8 +428,9 @@ fn grip_weapons(
         let Some((bone, joint)) = shared else {
             continue;
         };
-        if let Some(rest) = skeleton.rest_globals().get(bone) {
-            *transform = Transform::from_matrix(rest.inverse());
+        // Its joints start in the idle pose (`spawn_skeleton`).
+        if let Some(pose) = skeleton.pose_globals().get(bone) {
+            *transform = Transform::from_matrix(pose.inverse());
         }
         commands
             .entity(entity)

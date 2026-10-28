@@ -23,11 +23,6 @@ pub struct ItemConfig {
     pub name: String,
     /// Model drawn for it.
     pub model: String,
-    /// Degrees added to the yaw the map places it at, for models that do not
-    /// face along their entity's forward axis (the wall chargers' backs face
-    /// it).
-    #[serde(default)]
-    pub model_yaw: f32,
     /// What it gives.
     pub gives: ItemEffect,
     /// Seconds before it comes back once taken.
@@ -113,7 +108,6 @@ mod tests {
         ItemConfig {
             name: "Station".to_owned(),
             model: "models/station.mdl".to_owned(),
-            model_yaw: 0.0,
             gives,
             respawn: 60.0,
             radius: 40.0,

@@ -5,7 +5,9 @@
 //!
 //! - a [`Skeleton`] of joints, each with its rest transform relative to its
 //!   parent in Bevy space, and the inverse bind poses its skinned meshes
-//!   need;
+//!   need; and each with the transform it starts at, the model's idle pose
+//!   (the first frame of its first sequence, as the game draws a model
+//!   nothing animates: see `ModelAnimation::idle_pose`);
 //! - one [`AnimationClip`] per blend of every sequence ([`SequenceClips`]),
 //!   with a translation and a rotation curve for each joint, keyed by the
 //!   joint's name ([`Skeleton::target`]).
@@ -37,8 +39,12 @@ pub struct Joint {
     pub name: String,
     /// The joint it hangs from.
     pub parent: Option<usize>,
-    /// Its rest transform relative to the parent, Bevy space.
+    /// Its rest (bind) transform relative to the parent, Bevy space, which
+    /// the vertices are stored in.
     pub rest: Transform,
+    /// Its transform relative to the parent in the model's idle pose, Bevy
+    /// space: where it is drawn until something animates it.
+    pub pose: Transform,
 }
 
 /// A skeleton in Bevy space.
@@ -56,10 +62,12 @@ impl Skeleton {
             joints: model
                 .bones
                 .iter()
-                .map(|bone| Joint {
+                .zip(model.idle_pose())
+                .map(|(bone, (position, rotation))| Joint {
                     name: bone.name.clone(),
                     parent: bone.parent,
                     rest: local_transform(bone.position, bone.rotation),
+                    pose: local_transform(position, rotation),
                 })
                 .collect(),
         }
@@ -79,9 +87,20 @@ impl Skeleton {
     /// Each joint's rest transform relative to the model's origin.
     #[must_use]
     pub fn rest_globals(&self) -> Vec<Mat4> {
+        self.globals(|joint| joint.rest)
+    }
+
+    /// Each joint's idle-pose transform relative to the model's origin.
+    #[must_use]
+    pub fn pose_globals(&self) -> Vec<Mat4> {
+        self.globals(|joint| joint.pose)
+    }
+
+    /// Each joint's `local` transform chained through its parents'.
+    fn globals(&self, local: impl Fn(&Joint) -> Transform) -> Vec<Mat4> {
         let mut globals: Vec<Mat4> = Vec::with_capacity(self.joints.len());
         for joint in &self.joints {
-            let local = joint.rest.to_matrix();
+            let local = local(joint).to_matrix();
             let global = match joint.parent.and_then(|parent| globals.get(parent)) {
                 Some(parent) => *parent * local,
                 None => local,
@@ -114,7 +133,7 @@ pub fn target_of(name: &str) -> AnimationTargetId {
 }
 
 /// A Source-space local transform as a Bevy one.
-fn local_transform(position: [f32; 3], rotation: [f32; 4]) -> Transform {
+pub(crate) fn local_transform(position: [f32; 3], rotation: [f32; 4]) -> Transform {
     Transform {
         translation: coords::position(position),
         rotation: coords::rotation_from_source(quat(rotation)),
@@ -421,6 +440,41 @@ mod tests {
         assert!((inverse[1] * globals[1]).abs_diff_eq(Mat4::IDENTITY, 1e-5));
         assert_eq!(skeleton.find("arm"), Some(1), "by name, any case");
         assert_eq!(skeleton.target(1), target_of("ARM"));
+    }
+
+    #[test]
+    fn joints_start_in_the_idle_pose_and_bind_in_the_rest_pose() {
+        let mut model = model();
+        // The first sequence's first frame turns the root a quarter about
+        // Source Z and lowers it to 5 units.
+        let half = std::f32::consts::FRAC_1_SQRT_2;
+        model.animations[0].tracks.push(BoneTrack {
+            bone: 0,
+            positions: vec![[0.0, 0.0, 5.0]],
+            rotations: vec![[0.0, 0.0, half, half]],
+        });
+        let skeleton = Skeleton::of(&model);
+        let unit = coords::METERS_PER_UNIT;
+        let root = &skeleton.joints[0];
+        assert!((root.rest.translation - Vec3::new(0.0, 10.0 * unit, 0.0)).length() < 1e-6);
+        assert_eq!(root.rest.rotation, Quat::IDENTITY);
+        assert!((root.pose.translation - Vec3::new(0.0, 5.0 * unit, 0.0)).length() < 1e-6);
+        assert!(
+            root.pose
+                .rotation
+                .abs_diff_eq(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2), 1e-6),
+            "Source's Z is Bevy's Y"
+        );
+        let posed = skeleton.pose_globals();
+        assert!(
+            (posed[1].w_axis.y - 15.0 * unit).abs() < 1e-6,
+            "the arm rides the root"
+        );
+        let rest = skeleton.rest_globals();
+        assert!(
+            (skeleton.inverse_bindposes()[0] * rest[0]).abs_diff_eq(Mat4::IDENTITY, 1e-5),
+            "skinning binds to the rest pose"
+        );
     }
 
     #[test]

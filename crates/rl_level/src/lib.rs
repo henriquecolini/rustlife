@@ -271,7 +271,7 @@ fn pickup_body(
     let placement = PropPlacement::new(
         pickup.model.clone(),
         pickup.origin.to_array(),
-        pickup.model_angles(),
+        pickup.angles,
         PropKind::Physics,
     );
     let mut desc = prop_desc(

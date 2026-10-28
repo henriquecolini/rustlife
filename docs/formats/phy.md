@@ -82,8 +82,11 @@ ledge is convex.
 
 IVP works in metres with Y pointing down. A point `(x, y, z)` is Source
 `(x, z, −y) / 0.0254`. The points are in the model's frame, and the same
-frame as its meshes once the root bone's transform is applied (for 97.6% of
-stock props; the rest are animated models posed differently at rest).
+frame as its meshes once they are posed as the game draws them: the first
+frame of the model's first sequence, not its rest (bind) pose. The model
+compiler turns the root bone a quarter about Z in animations and not at
+rest, so a weapon or item drawn in its rest pose lies a quarter turn off
+its collision model (`w_357`'s meshes run along −Y, its `.phy` along +X).
 
 ## Text section
 

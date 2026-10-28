@@ -196,6 +196,24 @@ fn skeletons_animations_and_sequences_are_read() {
 }
 
 #[test]
+fn the_idle_pose_is_the_first_frame_of_the_first_sequence() {
+    let model = read(&Builder::new().bones().animation().sequence().build(), None).expect("model");
+    let pose = model.idle_pose();
+    assert_eq!(pose.len(), 2);
+    assert_eq!(pose[0], ([0.0; 3], [0.0, 0.0, 0.0, 1.0]), "the root rests");
+    assert_eq!(pose[1].0, [1.0, 2.0, 3.0], "the arm where frame 0 puts it");
+    assert_eq!(pose[1].1, [0.0, 0.0, 0.0, 1.0]);
+
+    let still = read(&Builder::new().bones().animation().build(), None).expect("model");
+    let rest: Vec<_> = still
+        .bones
+        .iter()
+        .map(|bone| (bone.position, bone.rotation))
+        .collect();
+    assert_eq!(still.idle_pose(), rest, "no sequence: the rest pose");
+}
+
+#[test]
 fn run_length_streams_repeat_their_last_value_and_chain_runs() {
     // Two runs: frames 0–3 with values 5, 6 stored (frames 2, 3 repeat 6),
     // then frames 4–5 with 9.

@@ -33,6 +33,18 @@ skinned. `rl_assets::skeleton` turns all of it into Bevy terms: joints with
 rest transforms and inverse bind poses, and one `AnimationClip` per blend
 of each sequence, keyed by joint name.
 
+**The pose a model is drawn in.** Vertices are stored in the rest (bind)
+pose, but the game draws a model as the first frame of its first sequence
+places its bones, and the model compiler turns the root bone there (a
+quarter turn about Z for most) and not at rest. Drawn at rest, weapons on
+the floor, wall chargers and the HEV-case teleporters of `halls3` lay a
+quarter turn off their entity angles and their collision models. So a
+skeletal model's joints start in that idle pose (its meshes stay bound to
+the rest pose), and a single-bone model's vertices are moved from its
+bone's rest placement to its idle one when it loads; static props
+(`$staticprop`) have no bones applied and stay as stored. A weapon held by
+its hand bone is placed at the inverse of that bone's idle pose.
+
 ### Playing it
 
 A skeletal model is spawned with an entity per joint, which its meshes are
@@ -278,7 +290,8 @@ player's own volumes.
 | Test | Covers |
 |------|--------|
 | `source_formats/src/anim/tests.rs` | Skeletons, animations and sequences read from a built model, run-length streams, packed quaternions, garbage refused |
-| `rl_assets/src/skeleton.rs` | Rest poses converted and inverted, one clip per animation shared between sequences, blends split between neighbours |
+| `rl_assets/src/skeleton.rs` | Rest poses converted and inverted, joints starting in the idle pose, one clip per animation shared between sequences, blends split between neighbours |
+| `source_formats/src/mdl.rs`, `anim/tests.rs` | The idle pose (first frame of the first sequence), single-bone models moved from rest to idle as the game draws them, static props and skeletons left alone |
 | `rl_client/src/animation.rs` | Looping and holding sequences, fading one into the next |
 | `rl_client/src/actors.rs`, `viewmodel.rs` | Stances following movement, runs blended by direction, view models facing the view, swings playing hit or miss |
 | `source_formats/src/wav.rs` | 8- and 16-bit PCM, Microsoft ADPCM, loops from cue points, garbage refused |

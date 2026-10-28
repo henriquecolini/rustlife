@@ -217,6 +217,46 @@ pub struct ModelAnimation {
     pub static_prop: bool,
 }
 
+impl ModelAnimation {
+    /// Each bone's placement relative to its parent, `(position,
+    /// rotation)`, as the game shows the model while nothing animates it:
+    /// the first frame of its default sequence (sequence 0, the engine's
+    /// `m_nSequence` until something sets it). Bones that frame does not
+    /// hold, and every bone of a model without sequences or whose first is a
+    /// delta, rest.
+    ///
+    /// This is not the rest (bind) pose the vertices are stored in: the
+    /// model compiler turns a model's root bone in its animations (a
+    /// quarter turn about Z for most) and not in its rest pose, so drawing
+    /// the rest pose turns the model away from where the game draws it and
+    /// its collision model lies.
+    #[must_use]
+    pub fn idle_pose(&self) -> Vec<([f32; 3], [f32; 4])> {
+        let mut pose: Vec<_> = self
+            .bones
+            .iter()
+            .map(|bone| (bone.position, bone.rotation))
+            .collect();
+        let first = self
+            .sequences
+            .first()
+            .and_then(|sequence| sequence.blends.first())
+            .and_then(|&index| self.animations.get(index))
+            .filter(|animation| !animation.delta);
+        for track in first.map_or(&[][..], |animation| &animation.tracks) {
+            if let Some(slot) = pose.get_mut(track.bone) {
+                if let Some(&position) = track.positions.first() {
+                    slot.0 = position;
+                }
+                if let Some(&rotation) = track.rotations.first() {
+                    slot.1 = rotation;
+                }
+            }
+        }
+        pose
+    }
+}
+
 /// Reads a model's skeleton, animations and sequences from its `.mdl`
 /// bytes, with the bytes of its `.ani` file if it streams animation
 /// blocks. Never panics; animations whose data cannot be read are left

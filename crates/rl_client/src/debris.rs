@@ -432,6 +432,7 @@ mod tests {
             surface_prop: "wood".to_owned(),
             physics: None,
             animation: None,
+            root_idle: None,
         }
     }
 

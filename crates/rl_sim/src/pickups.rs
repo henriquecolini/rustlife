@@ -55,11 +55,9 @@ pub struct Pickup {
     pub model: String,
     /// Where it lies, Source space.
     pub origin: Vec3,
-    /// Its orientation, `[pitch, yaw, roll]` degrees, as the map placed it.
+    /// Its orientation, `[pitch, yaw, roll]` degrees, as the map placed it:
+    /// its model is drawn and its body lies at these, as in the game.
     pub angles: [f32; 3],
-    /// Degrees added to the yaw of `angles` to turn the model the way the map
-    /// means it to face.
-    pub model_yaw: f32,
     /// A player touches it within this distance of their box, units.
     pub radius: f32,
     /// Seconds it takes to come back once taken.
@@ -77,14 +75,6 @@ pub struct Pickup {
 }
 
 impl Pickup {
-    /// The orientation to draw its model at: `angles` with `model_yaw`
-    /// added to the yaw, normalized to `[0, 360)`.
-    #[must_use]
-    pub fn model_angles(&self) -> [f32; 3] {
-        let [pitch, yaw, roll] = self.angles;
-        [pitch, (yaw + self.model_yaw).rem_euclid(360.0), roll]
-    }
-
     /// Whether it is there to be taken.
     #[must_use]
     pub fn available(&self) -> bool {
@@ -241,7 +231,6 @@ fn weapon_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup>
         model: config.world_model.clone(),
         origin: Vec3::ZERO,
         angles: [0.0; 3],
-        model_yaw: 0.0,
         radius: pickup.radius,
         respawn: pickup.respawn,
         away: 0.0,
@@ -271,7 +260,6 @@ fn item_pickup(id: &str, data: &GameData, arsenal: &Arsenal) -> Option<Pickup> {
         model: item.model.clone(),
         origin: Vec3::ZERO,
         angles: [0.0; 3],
-        model_yaw: item.model_yaw,
         radius: item.radius,
         respawn: item.respawn,
         away: 0.0,
@@ -299,12 +287,16 @@ mod tests {
     }
 
     #[test]
-    fn wall_chargers_are_drawn_turned_off_their_entity_angles() {
+    fn pickups_keep_their_entity_angles() {
+        // Wall chargers included: their models face their entity's forward
+        // axis once drawn in their idle pose, as every model is.
         let mut charger = MapEntity::new("item_healthcharger", [0.0; 3]);
         charger.angles = [0.0, 270.0, 0.0];
-        let (_, _, pickups) = pickups(&[charger]);
+        let mut shotgun = MapEntity::new("weapon_shotgun", [0.0; 3]);
+        shotgun.angles = [0.0, 90.0, -90.0];
+        let (_, _, pickups) = pickups(&[charger, shotgun]);
         assert_eq!(pickups[0].angles, [0.0, 270.0, 0.0]);
-        assert_eq!(pickups[0].model_angles(), [0.0, 0.0, 0.0]);
+        assert_eq!(pickups[1].angles, [0.0, 90.0, -90.0]);
     }
 
     #[test]

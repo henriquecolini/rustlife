@@ -7,13 +7,25 @@
 //! mesh, with the material table needed to texture them.
 //!
 //! Positions and normals stay in Source space (Z up, inches), in the model's
-//! own frame. A single-bone model (a prop) has its bone's idle placement
-//! applied, so it rests the way it appears in the game; a skeletal model
-//! stays in its reference pose, each vertex with the bones that move it and
-//! their weights, to be skinned by its skeleton ([`crate::anim`]).
+//! own frame. The vertices are stored in the model's rest (bind) pose, but
+//! the game draws a model as the first frame of its first sequence places
+//! its bones ([`crate::anim::ModelAnimation::idle_pose`]), and the model
+//! compiler turns the root bone there (a quarter turn about Z for most
+//! models) and not in the rest pose. So a single-bone model (a prop, an
+//! item) has its bone moved from its rest placement to its idle one here,
+//! and lies as it does in the game and as its collision model does. A
+//! skeletal model stays in its rest pose, each vertex with the bones that
+//! move it and their weights, to be skinned by its skeleton, which starts
+//! in the idle pose. Static props (`$staticprop`) are drawn without bones
+//! at all and stay as they are.
 
 use thiserror::Error;
 use vmdl::{Mdl, Model, Vtx, Vvd};
+
+use crate::anim;
+
+/// A bone's placement: its position and `[x, y, z, w]` rotation.
+pub type Placement = ([f32; 3], [f32; 4]);
 
 /// One mesh of a model: a triangle list using one material slot.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +69,10 @@ pub struct ModelGeometry {
     /// order (body part, model, mesh, strip group). Baked static-prop
     /// lighting stores one colour per entry, in this order.
     pub strip_vertex_ids: Vec<u32>,
+    /// For a single-bone model whose vertices were moved to its idle pose:
+    /// where that pose puts its bone, model frame. Undoing it gives the
+    /// bone's own frame, which a weapon held by that bone is laid in.
+    pub root_idle: Option<Placement>,
 }
 
 impl ModelGeometry {
@@ -152,24 +168,21 @@ pub fn load_model(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry, M
 
 fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry, ModelError> {
     let parse = |error: vmdl::ModelError| ModelError::Parse(error.to_string());
+    let repose = anim::read(mdl, None)
+        .ok()
+        .and_then(|model| Repose::of(&model));
     let mdl = Mdl::read(mdl).map_err(parse)?;
     let vtx = Vtx::read(vtx).map_err(parse)?;
     let checksum = u32::from_le_bytes(vtx.header.checksum);
     let strip_vertex_ids = strip_vertex_ids(&mdl, &vtx);
     let model = Model::from_parts(mdl, vtx, Vvd::read(vvd).map_err(parse)?);
-    // Vertices are stored in model space, in the bind pose. A single-bone
-    // model (a prop) is drawn as its idle sequence places that bone, which
-    // may turn it. A skeletal model's root bone is its pelvis, whose own
-    // rotation describes the skeleton's axes rather than a turn of the whole
-    // model: applying it would lay a character on its back, so skeletal
-    // models stay in their bind pose (until they are animated).
-    let skeletal = model.bones().nth(1).is_some();
-    let place = |vector| {
-        if skeletal {
-            vector
-        } else {
-            model.apply_root_transform(vector)
-        }
+    let place = |vector: vmdl::Vector| {
+        let vector = <[f32; 3]>::from(vector);
+        repose.map_or(vector, |repose| repose.point(vector))
+    };
+    let turn = |vector: vmdl::Vector| {
+        let vector = <[f32; 3]>::from(vector);
+        repose.map_or(vector, |repose| repose.direction(vector))
     };
 
     let meshes: Vec<ModelMesh> = model
@@ -193,9 +206,9 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
                 for (id, vertex) in [triangle[0], triangle[2], triangle[1]] {
                     vertex_ids.push(u32::try_from(id).unwrap_or(u32::MAX));
                     let position = place(vertex.position);
-                    let normal = place(vertex.normal);
-                    positions.push([position.x, position.y, position.z]);
-                    normals.push([normal.x, normal.y, normal.z]);
+                    let normal = turn(vertex.normal);
+                    positions.push(position);
+                    normals.push(normal);
                     uvs.push(vertex.texture_coordinates);
                     let (joint, weight) = skin_weights(vertex);
                     joints.push(joint);
@@ -255,7 +268,77 @@ fn load_model_inner(mdl: &[u8], vtx: &[u8], vvd: &[u8]) -> Result<ModelGeometry,
         surface_prop: model.surface_prop().to_owned(),
         checksum,
         strip_vertex_ids,
+        root_idle: repose.map(|repose| repose.idle),
     })
+}
+
+/// How a single-bone model's vertices move from where its rest pose puts
+/// them to where its idle pose does: out of the bone's rest placement into
+/// its own frame, then out of that by its idle placement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Repose {
+    rest: Placement,
+    idle: Placement,
+}
+
+impl Repose {
+    /// The move of a model with one bone that is not a static prop; `None`
+    /// for skeletal models (their skeleton poses them) and static props (no
+    /// bones are applied to them).
+    fn of(model: &anim::ModelAnimation) -> Option<Self> {
+        if model.static_prop || model.bones.len() != 1 {
+            return None;
+        }
+        let bone = model.bones.first()?;
+        let idle = *model.idle_pose().first()?;
+        Some(Self {
+            rest: (bone.position, normalized(bone.rotation)),
+            idle: (idle.0, normalized(idle.1)),
+        })
+    }
+
+    fn point(&self, point: [f32; 3]) -> [f32; 3] {
+        let local = std::array::from_fn(|axis| point[axis] - self.rest.0[axis]);
+        let moved = self.direction_from(local);
+        std::array::from_fn(|axis| moved[axis] + self.idle.0[axis])
+    }
+
+    fn direction(&self, direction: [f32; 3]) -> [f32; 3] {
+        self.direction_from(direction)
+    }
+
+    fn direction_from(&self, vector: [f32; 3]) -> [f32; 3] {
+        rotate(self.idle.1, rotate(conjugate(self.rest.1), vector))
+    }
+}
+
+fn normalized(q: [f32; 4]) -> [f32; 4] {
+    let length = q.iter().map(|c| c * c).sum::<f32>().sqrt();
+    if length > f32::EPSILON {
+        q.map(|c| c / length)
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    }
+}
+
+fn conjugate([x, y, z, w]: [f32; 4]) -> [f32; 4] {
+    [-x, -y, -z, w]
+}
+
+/// `vector` turned by unit quaternion `[x, y, z, w]`:
+/// `v + 2w(u × v) + 2u × (u × v)`, `u` being the quaternion's axis part.
+fn rotate([x, y, z, w]: [f32; 4], vector: [f32; 3]) -> [f32; 3] {
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let axis = [x, y, z];
+    let twice = cross(axis, vector).map(|c| 2.0 * c);
+    let second = cross(axis, twice);
+    std::array::from_fn(|i| vector[i] + w * twice[i] + second[i])
 }
 
 /// A vertex's bones and their weights, normalised to sum to 1; a vertex
@@ -318,6 +401,94 @@ mod tests {
         assert!(read_header(&[]).is_err());
     }
 
+    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4)
+    }
+
+    fn one_bone(rest: Placement, idle: Placement, static_prop: bool) -> anim::ModelAnimation {
+        anim::ModelAnimation {
+            bones: vec![anim::Bone {
+                name: "root".into(),
+                parent: None,
+                position: rest.0,
+                rotation: rest.1,
+                euler: [0.0; 3],
+                position_scale: [1.0; 3],
+                rotation_scale: [1.0; 3],
+            }],
+            animations: vec![anim::Animation {
+                name: "@idle".into(),
+                fps: 30.0,
+                frames: 1,
+                looping: false,
+                delta: false,
+                tracks: vec![anim::BoneTrack {
+                    bone: 0,
+                    positions: vec![idle.0],
+                    rotations: vec![idle.1],
+                }],
+            }],
+            sequences: vec![anim::Sequence {
+                label: "idle".into(),
+                activity: String::new(),
+                looping: false,
+                delta: false,
+                blends: vec![0],
+                group: [1, 1],
+                parameters: [None, None],
+                ranges: [(0.0, 0.0); 2],
+                fade: (0.0, 0.0),
+                events: Vec::new(),
+            }],
+            static_prop,
+            ..Default::default()
+        }
+    }
+
+    /// Half of √2: the quaternion components of a quarter turn.
+    const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+    #[test]
+    fn a_compiled_quarter_turn_moves_vertices_as_the_game_draws_them() {
+        // What studiomdl writes for most items (`items/healthvial`,
+        // `weapons/w_357`'s root): a rest rotation of 90° about X and an
+        // idle one of 120° about (1, 1, 1). Together they turn the model a
+        // quarter about Z, where its collision model lies.
+        let model = one_bone(
+            ([0.0; 3], [H, 0.0, 0.0, H]),
+            ([0.0; 3], [0.5, 0.5, 0.5, 0.5]),
+            false,
+        );
+        let repose = Repose::of(&model).expect("one bone");
+        assert!(close(repose.point([1.0, 0.0, 0.0]), [0.0, 1.0, 0.0]));
+        assert!(close(repose.point([0.0, -14.0, 3.0]), [14.0, 0.0, 3.0]));
+        assert!(close(repose.direction([0.0, 0.0, 1.0]), [0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn a_repose_moves_points_out_of_the_rest_placement() {
+        // `weapons/w_crowbar`'s hand bone, rounded: rest and idle differ by
+        // the same quarter turn about Z, positions included.
+        let model = one_bone(
+            ([-0.63, -6.66, -3.65], [-0.467, 0.557, -0.563, -0.394]),
+            ([6.66, -0.63, -3.65], [-0.724, 0.064, -0.676, 0.12]),
+            false,
+        );
+        let repose = Repose::of(&model).expect("one bone");
+        let rough = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.05);
+        assert!(rough(repose.point([0.0; 3]), [0.0; 3]), "no shift");
+        assert!(rough(repose.point([0.0, 19.0, 0.0]), [-19.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn static_props_and_skeletons_are_not_moved() {
+        let quarter = ([0.0; 3], [0.5, 0.5, 0.5, 0.5]);
+        assert!(Repose::of(&one_bone(([0.0; 3], [0.0, 0.0, 0.0, 1.0]), quarter, true)).is_none());
+        let mut skeletal = one_bone(([0.0; 3], [0.0, 0.0, 0.0, 1.0]), quarter, false);
+        skeletal.bones.push(skeletal.bones[0].clone());
+        assert!(Repose::of(&skeletal).is_none());
+    }
+
     #[test]
     fn material_candidates_follow_the_search_directories() {
         let geometry = ModelGeometry {
@@ -331,6 +502,7 @@ mod tests {
             surface_prop: String::new(),
             checksum: 0,
             strip_vertex_ids: Vec::new(),
+            root_idle: None,
         };
         assert_eq!(
             geometry.material_candidates(0, 0),

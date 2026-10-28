@@ -83,6 +83,10 @@ pub struct ModelAsset {
     pub physics: Option<Arc<PhysicsModel>>,
     /// A skeletal model's skeleton and animation.
     pub animation: Option<Arc<ModelAnimationAsset>>,
+    /// For a single-bone model, drawn in its idle pose: where that pose puts
+    /// its bone, Bevy space, model frame. A weapon held by that bone is
+    /// placed at its inverse.
+    pub root_idle: Option<bevy_transform::components::Transform>,
 }
 
 /// What animating a skeletal model takes.
@@ -204,6 +208,9 @@ impl AssetLoader for MdlLoader {
             surface_prop: geometry.surface_prop.to_ascii_lowercase(),
             physics,
             animation: animation.map(Arc::new),
+            root_idle: geometry
+                .root_idle
+                .map(|(position, rotation)| skeleton::local_transform(position, rotation)),
         })
     }
 
@@ -478,6 +485,7 @@ mod tests {
             surface_prop: String::new(),
             physics: None,
             animation: None,
+            root_idle: None,
         };
         assert_eq!(model.material(1, 0), Some("b"));
         assert_eq!(model.material(7, 0), Some("a"));
