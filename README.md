@@ -112,9 +112,12 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | F11 | Switch between a window and fullscreen (anywhere, menus included) |
 | 1 – 4 | Vote for the next map while the scoreboard is up |
 
-Keys are the defaults; rebind them in Settings. F11 is reserved and cannot be
-rebound; it changes the same Window mode setting Settings does, so the game
-opens the way you left it.
+Keys are the defaults; rebind them in Settings. Mouse-wheel up and down can
+also be bound, for example to jump: select the action and scroll in that
+direction. Wheel bindings are pulses, not held buttons; a bound direction
+no longer browses the weapon list. F11 is reserved and cannot be rebound;
+it changes the same Window mode setting Settings does, so the game opens
+the way you left it.
 
 Every game runs on a server. Playing a map from the menu or with
 `--map` hosts it in-process; to play with others:

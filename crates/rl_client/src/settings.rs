@@ -40,6 +40,10 @@ pub enum Binding {
     Key(KeyCode),
     /// A mouse button (left, right or middle).
     Mouse(MouseButton),
+    /// An upward mouse-wheel pulse, never held.
+    WheelUp,
+    /// A downward mouse-wheel pulse, never held.
+    WheelDown,
 }
 
 const KEYS: &[(KeyCode, &str, &str)] = &[
@@ -135,6 +139,15 @@ const KEYS: &[(KeyCode, &str, &str)] = &[
 ];
 
 impl Binding {
+    /// The wheel pulse represented by a frame's vertical scroll delta.
+    pub(crate) fn from_scroll(delta: f32) -> Option<Self> {
+        match delta {
+            delta if delta > 0.0 => Some(Self::WheelUp),
+            delta if delta < 0.0 => Some(Self::WheelDown),
+            _ => None,
+        }
+    }
+
     /// The input called `name` in the config file (`"KeyW"`,
     /// `"Mouse Left"`), if there is one.
     #[must_use]
@@ -143,6 +156,8 @@ impl Binding {
             "Mouse Left" => Some(Self::Mouse(MouseButton::Left)),
             "Mouse Right" => Some(Self::Mouse(MouseButton::Right)),
             "Mouse Middle" => Some(Self::Mouse(MouseButton::Middle)),
+            "Mouse Wheel Up" => Some(Self::WheelUp),
+            "Mouse Wheel Down" => Some(Self::WheelDown),
             _ => KEYS
                 .iter()
                 .find(|(_, key, _)| *key == name)
@@ -158,6 +173,8 @@ impl Binding {
             Self::Mouse(MouseButton::Right) => Some("Mouse Right"),
             Self::Mouse(MouseButton::Middle) => Some("Mouse Middle"),
             Self::Mouse(_) => None,
+            Self::WheelUp => Some("Mouse Wheel Up"),
+            Self::WheelDown => Some("Mouse Wheel Down"),
             Self::Key(code) => KEYS
                 .iter()
                 .find(|(key, _, _)| *key == code)
@@ -184,6 +201,8 @@ impl Binding {
             Self::Mouse(MouseButton::Right) => "Right Mouse",
             Self::Mouse(MouseButton::Middle) => "Middle Mouse",
             Self::Mouse(_) => "Mouse",
+            Self::WheelUp => "Mouse Wheel Up",
+            Self::WheelDown => "Mouse Wheel Down",
             Self::Key(code) => KEYS
                 .iter()
                 .find(|(key, _, _)| *key == code)
@@ -201,19 +220,23 @@ impl Binding {
         match self {
             Self::Key(code) => keys.pressed(code),
             Self::Mouse(button) => mouse.is_some_and(|mouse| mouse.pressed(button)),
+            Self::WheelUp | Self::WheelDown => false,
         }
     }
 
-    /// Whether the input went down this frame.
+    /// Whether the input went down this frame, including a wheel pulse
+    /// from the frame's vertical `scroll` delta.
     #[must_use]
     pub fn just_pressed(
         self,
         keys: &ButtonInput<KeyCode>,
         mouse: Option<&ButtonInput<MouseButton>>,
+        scroll: f32,
     ) -> bool {
         match self {
             Self::Key(code) => keys.just_pressed(code),
             Self::Mouse(button) => mouse.is_some_and(|mouse| mouse.just_pressed(button)),
+            Self::WheelUp | Self::WheelDown => Self::from_scroll(scroll) == Some(self),
         }
     }
 }
@@ -260,16 +283,18 @@ impl Bindings {
             .is_some_and(|binding| binding.pressed(keys, mouse))
     }
 
-    /// Whether `action`'s input went down this frame.
+    /// Whether `action`'s input went down this frame, including a wheel
+    /// pulse from the frame's vertical `scroll` delta.
     #[must_use]
     pub fn just_pressed(
         &self,
         action: &str,
         keys: &ButtonInput<KeyCode>,
         mouse: Option<&ButtonInput<MouseButton>>,
+        scroll: f32,
     ) -> bool {
         self.get(action)
-            .is_some_and(|binding| binding.just_pressed(keys, mouse))
+            .is_some_and(|binding| binding.just_pressed(keys, mouse, scroll))
     }
 }
 
@@ -489,6 +514,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wheel_bindings_round_trip_without_becoming_held_buttons() {
+        let keys = ButtonInput::<KeyCode>::default();
+        for name in ["Mouse Wheel Up", "Mouse Wheel Down"] {
+            let binding = Binding::parse(name).expect("wheel binding");
+            assert_eq!(binding.name(), Some(name));
+            assert_eq!(binding.label(), name);
+            assert!(!binding.pressed(&keys, None));
+            assert!(!binding.just_pressed(&keys, None, 0.0));
+            let delta = if name == "Mouse Wheel Up" { 1.0 } else { -1.0 };
+            assert!(binding.just_pressed(&keys, None, delta));
+            assert!(!binding.just_pressed(&keys, None, -delta));
+        }
+    }
+
+    #[test]
+    fn wheel_direction_uses_the_sign_not_the_units_or_magnitude() {
+        for delta in [0.25, 1.0, 120.0] {
+            assert_eq!(Binding::from_scroll(delta), Some(Binding::WheelUp));
+            assert_eq!(Binding::from_scroll(-delta), Some(Binding::WheelDown));
+        }
+        assert_eq!(Binding::from_scroll(0.0), None);
+        assert_eq!(Binding::from_scroll(f32::NAN), None);
+    }
+
+    #[test]
     fn every_default_action_binding_parses_and_round_trips() {
         for action in ACTIONS {
             let binding = Binding::parse(action.default)
@@ -547,7 +597,7 @@ mod tests {
         keys.press(KeyCode::KeyW);
         mouse.press(MouseButton::Left);
         assert!(bindings.pressed("forward", &keys, Some(&mouse)));
-        assert!(bindings.just_pressed("attack", &keys, Some(&mouse)));
+        assert!(bindings.just_pressed("attack", &keys, Some(&mouse), 0.0));
         assert!(!bindings.pressed("attack", &keys, None), "no mouse input");
         assert!(!bindings.pressed("nonsense", &keys, Some(&mouse)));
     }

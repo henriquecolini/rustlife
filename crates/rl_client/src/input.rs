@@ -21,7 +21,7 @@
 //! | `Q` | Last weapon |
 //! | `G` | Gravity Gun, or back to the weapon held before it |
 //! | `1`–`9` | Weapons of that slot (fixed) |
-//! | Mouse wheel | Moves through the weapon list (fixed) |
+//! | Mouse wheel | Moves through the weapon list, unless rebound |
 //! | Either fire button, with the list up | Switches to the weapon picked in it |
 //! | `Esc`, with the list up | Closes it (else the pause menu) |
 
@@ -33,7 +33,7 @@ use rl_sim::weapons::Choice;
 use crate::net::Game;
 use crate::player::ViewAngles;
 use crate::selector::WeaponSelector;
-use crate::settings::Bindings;
+use crate::settings::{Binding, Bindings};
 
 /// Actions that hold a command button down.
 const ACTION_BUTTONS: [(&str, Buttons); 8] = [
@@ -83,6 +83,7 @@ pub(crate) fn latch_input(
     mut latched: ResMut<Latched>,
 ) {
     selector.advance(time.delta_secs());
+    let scroll = scroll.map_or(0.0, |scroll| scroll.delta.y);
     let carried = game
         .sim()
         .zip(game.local())
@@ -92,7 +93,7 @@ pub(crate) fn latch_input(
     let picking = selector.is_open()
         && ["attack", "attack2"]
             .iter()
-            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref()));
+            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref(), scroll));
     if picking {
         let chosen = match carried {
             Some((inventory, arsenal)) => selector.confirm(inventory, arsenal),
@@ -104,7 +105,7 @@ pub(crate) fn latch_input(
     }
     for (action, button) in ACTION_BUTTONS {
         let fire = button == Buttons::ATTACK || button == Buttons::ATTACK2;
-        if !(picking && fire) && bindings.just_pressed(action, &keys, mouse.as_deref()) {
+        if !(picking && fire) && bindings.just_pressed(action, &keys, mouse.as_deref(), scroll) {
             latched.buttons = latched.buttons | button;
         }
     }
@@ -118,24 +119,33 @@ pub(crate) fn latch_input(
         }
     }
     // These switch at once and silently, leaving the list (HL2's `lastinv`).
-    if bindings.just_pressed("last_weapon", &keys, mouse.as_deref()) {
+    if bindings.just_pressed("last_weapon", &keys, mouse.as_deref(), scroll) {
         selector.dismiss();
         latched.choice = Some(Choice::Last);
     }
-    if bindings.just_pressed("gravity_gun", &keys, mouse.as_deref()) {
+    if bindings.just_pressed("gravity_gun", &keys, mouse.as_deref(), scroll) {
         selector.dismiss();
         latched.choice = Some(Choice::ToggleTool);
     }
     // Wheel up goes back through the list, as in most shooters. It only
     // moves the list's cursor; a click picks.
-    let forward = match scroll.map_or(0.0, |scroll| scroll.delta.y) {
-        delta if delta > 0.0 => false,
-        delta if delta < 0.0 => true,
-        _ => return,
-    };
-    if let Some((inventory, arsenal)) = carried {
+    if let Some(forward) = weapon_scroll(&bindings, scroll)
+        && let Some((inventory, arsenal)) = carried
+    {
         selector.scroll(inventory, arsenal, forward);
     }
+}
+
+/// The weapon-list fallback for a wheel pulse.
+fn weapon_scroll(bindings: &Bindings, delta: f32) -> Option<bool> {
+    let wheel = Binding::from_scroll(delta)?;
+    if rl_config::ACTIONS
+        .iter()
+        .any(|action| bindings.get(action.id) == Some(wheel))
+    {
+        return None;
+    }
+    Some(wheel == Binding::WheelDown)
 }
 
 /// The command for a tick from the keys and mouse buttons held now plus
@@ -204,6 +214,66 @@ mod tests {
         keys.clear();
         keys.press(key);
         app.update();
+    }
+
+    #[test]
+    fn wheel_jump_is_latched_until_a_tick_without_staying_held() {
+        for (name, delta) in [("Mouse Wheel Up", 1.0), ("Mouse Wheel Down", -0.5)] {
+            let mut app = latching_app();
+            let mut controls = rl_config::ControlSettings::default();
+            controls.rebind("jump", name);
+            app.insert_resource(Bindings::from_controls(&controls));
+            app.init_resource::<AccumulatedMouseScroll>();
+            app.world_mut()
+                .resource_mut::<AccumulatedMouseScroll>()
+                .delta
+                .y = delta;
+            app.update();
+            assert_eq!(app.world().resource::<Latched>().buttons, Buttons::JUMP);
+
+            app.world_mut()
+                .resource_mut::<AccumulatedMouseScroll>()
+                .delta = Vec2::ZERO;
+            app.update();
+            let latched = app.world().resource::<Latched>().buttons;
+            let cmd = user_cmd(
+                app.world().resource::<ButtonInput<KeyCode>>(),
+                None,
+                app.world().resource::<Bindings>(),
+                latched,
+                ViewAngles::default(),
+            );
+            assert!(cmd.buttons.contains(Buttons::JUMP));
+
+            *app.world_mut().resource_mut::<Latched>() = Latched::default();
+            app.update();
+            assert_eq!(app.world().resource::<Latched>().buttons, Buttons::NONE);
+
+            app.world_mut()
+                .resource_mut::<AccumulatedMouseScroll>()
+                .delta
+                .y = -delta;
+            app.update();
+            assert_eq!(app.world().resource::<Latched>().buttons, Buttons::NONE);
+        }
+    }
+
+    #[test]
+    fn bound_wheel_directions_do_not_also_scroll_weapons() {
+        let mut controls = rl_config::ControlSettings::default();
+        controls.rebind("jump", "Mouse Wheel Down");
+        let bindings = Bindings::from_controls(&controls);
+        assert_eq!(weapon_scroll(&bindings, -1.0), None);
+        assert_eq!(weapon_scroll(&bindings, 1.0), Some(false));
+
+        controls.rebind("last_weapon", "Mouse Wheel Up");
+        let bindings = Bindings::from_controls(&controls);
+        assert_eq!(weapon_scroll(&bindings, 1.0), None);
+        assert_eq!(weapon_scroll(&bindings, 0.0), None);
+
+        let defaults = Bindings::default();
+        assert_eq!(weapon_scroll(&defaults, -1.0), Some(true));
+        assert_eq!(weapon_scroll(&defaults, 1.0), Some(false));
     }
 
     #[test]
