@@ -368,7 +368,7 @@ impl SoundPlayer<'_, '_> {
 
     /// Files an emitter under a volume slider other than the default one.
     pub fn categorize(&mut self, emitter: Entity, category: SoundCategory) {
-        self.commands.entity(emitter).insert(category);
+        self.commands.entity(emitter).try_insert(category);
     }
 
     /// Resolves `name` without playing it.
@@ -489,7 +489,7 @@ fn start_emitters(
             let failed = assets.load_state(&emitter.sound).is_failed();
             let stale = emitter.repeat == Repeat::Once && now - emitter.requested > STALE_SECS;
             if failed || stale {
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             }
             continue;
         };
@@ -511,7 +511,9 @@ fn start_emitters(
             settings.spatial = true;
             settings.spatial_scale = Some(SpatialScale::new(scale));
         }
-        commands.entity(entity).insert((
+        // A sound stopped this frame (a weapon-list sound cut off by the
+        // next one, say) is gone by the time this lands: skip it then.
+        commands.entity(entity).try_insert((
             AudioPlayer::<AudioSource>(sound.audio.clone()),
             settings,
             Started,
@@ -522,6 +524,48 @@ fn start_emitters(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Picking from the weapon list plays "selected" and, a frame later,
+    /// "close", which cuts the first off. When that stop lands in the same
+    /// frame as the first sound starts, the start must not panic on the
+    /// emitter it can no longer find (it crashed the game).
+    #[test]
+    fn a_sound_stopped_the_frame_it_starts_is_skipped() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<AudioSource>();
+        app.init_asset::<SoundAsset>();
+        app.insert_resource(Settings(rl_config::Settings::default()));
+        let sound = app
+            .world_mut()
+            .resource_mut::<Assets<SoundAsset>>()
+            .add(SoundAsset {
+                audio: Handle::default(),
+                looped: false,
+                duration: 0.5,
+            });
+        let emitter = app
+            .world_mut()
+            .spawn(Emitter {
+                sound,
+                volume: 1.0,
+                speed: 1.0,
+                spatial: None,
+                repeat: Repeat::Once,
+                requested: 0.0,
+            })
+            .id();
+        let stop = move |mut commands: Commands| commands.entity(emitter).try_despawn();
+        // Both see the emitter, then the stop is applied first.
+        app.add_systems(Update, (stop, start_emitters).chain_ignore_deferred());
+
+        app.update();
+
+        assert!(
+            app.world().get_entity(emitter).is_err(),
+            "the sound stays stopped"
+        );
+    }
 
     #[test]
     fn the_menus_follow_only_the_master_volume() {
