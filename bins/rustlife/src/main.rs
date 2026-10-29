@@ -4,12 +4,12 @@
 //! rustlife --map dm_lockdown                    # host a game, alone
 //! rustlife --map dm_lockdown --listen           # host it for others too (--port)
 //! rustlife --connect 192.168.1.20:27015         # join a server
+//! rustlife --connect play.example.com           # by name, on net.ron's port
 //! rustlife --connect 127.0.0.1:27015 --net-sim 100ms,10ms,2%
 //! ```
 
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -43,10 +43,11 @@ struct Cli {
     #[arg(long, conflicts_with = "connect")]
     map: Option<String>,
 
-    /// Join the server at this address (e.g. `127.0.0.1:27015`) instead of
-    /// hosting.
+    /// Join the server at this address (e.g. `127.0.0.1:27015` or
+    /// `play.example.com`) instead of hosting. Host names are looked up; the
+    /// port defaults to `net.ron`'s.
     #[arg(long, value_name = "ADDRESS")]
-    connect: Option<SocketAddr>,
+    connect: Option<String>,
 
     /// Open the hosted game to other players over UDP.
     #[arg(long, conflicts_with = "connect")]
@@ -268,8 +269,10 @@ fn main() -> Result<()> {
         path,
         warmup_secs: shot_secs,
     });
-    let network = match cli.connect {
-        Some(address) => Network::Join(address),
+    let network = match cli.connect.as_deref() {
+        Some(text) => Network::Join(
+            rl_client::menu::resolve(text, data.net.port).map_err(anyhow::Error::msg)?,
+        ),
         None => Network::Host {
             port: cli.listen.then(|| cli.port.unwrap_or(data.net.port)),
         },

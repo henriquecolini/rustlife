@@ -31,6 +31,7 @@ use crate::selector::WeaponSelector;
 use crate::ui::{Curtain, Fonts, theme};
 use crate::{AppState, GameVfs};
 
+pub use join::resolve;
 pub use settings_screen::SettingsTab;
 
 /// One screen of the menus.

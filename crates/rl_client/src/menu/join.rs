@@ -33,7 +33,7 @@ impl Plugin for JoinPlugin {
 /// # Errors
 ///
 /// Says in words what is wrong with `text`.
-pub(super) fn resolve(text: &str, default_port: u16) -> Result<SocketAddr, String> {
+pub fn resolve(text: &str, default_port: u16) -> Result<SocketAddr, String> {
     let text = text.trim();
     if text.is_empty() {
         return Err("Type the server's address first.".to_owned());
@@ -179,7 +179,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn addresses_default_their_port_and_reject_blanks() {
+    fn addresses_resolve_names_default_their_port_and_reject_blanks() {
         assert_eq!(
             resolve("127.0.0.1:4000", 27015).unwrap(),
             "127.0.0.1:4000".parse().unwrap()
@@ -192,6 +192,9 @@ mod tests {
             resolve("127.0.0.1:", 27015).unwrap(),
             "127.0.0.1:27015".parse().unwrap()
         );
+        let named = resolve("localhost", 27015).unwrap();
+        assert!(named.ip().is_loopback());
+        assert_eq!(named.port(), 27015);
         assert!(resolve("", 27015).is_err());
         assert!(resolve("   ", 27015).is_err());
         assert!(resolve("127.0.0.1:notaport", 27015).is_err());
