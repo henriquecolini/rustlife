@@ -199,10 +199,10 @@ impl WeaponSelector {
     /// button is down and `pressed` whether one went down this frame. Ticks
     /// run before the frame's input is latched, so the click that confirms
     /// is seen here, with the list still up, before [`Self::confirm`] takes
-    /// it.
+    /// it. A wheel pulse counts for this tick without a held button.
     pub(crate) fn swallows_fire(&mut self, held: bool, pressed: bool) -> bool {
         self.swallow_fire |= pressed && self.is_open();
-        self.swallow_fire &= held;
+        self.swallow_fire &= held || pressed;
         self.swallow_fire
     }
 }
@@ -313,6 +313,18 @@ mod tests {
         assert!(selector.swallows_fire(true, false));
         assert!(!selector.swallows_fire(false, false), "released");
         assert!(!selector.swallows_fire(true, true), "a new press fires");
+    }
+
+    #[test]
+    fn a_fire_pulse_without_a_held_button_confirms_instead_of_firing() {
+        let arsenal = arsenal();
+        let inventory = loadout(&arsenal);
+        let mut selector = WeaponSelector::default();
+        selector.scroll(&inventory, &arsenal, true);
+        assert!(selector.swallows_fire(false, true));
+        assert!(selector.confirm(&inventory, &arsenal).is_some());
+        assert!(!selector.swallows_fire(false, false));
+        assert!(!selector.swallows_fire(false, true), "a new pulse fires");
     }
 
     #[test]

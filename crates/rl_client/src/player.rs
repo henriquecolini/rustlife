@@ -22,7 +22,7 @@
 //! The simulation works in Source space; [`rl_assets::coords`] converts at
 //! the camera, the one place rendering meets it.
 
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use rl_assets::coords;
@@ -354,6 +354,7 @@ fn tick(
     clock: Res<Time<Virtual>>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
+    scroll: Option<Res<AccumulatedMouseScroll>>,
     bindings: Res<Bindings>,
     menu: Res<Menu>,
     mut latched: ResMut<Latched>,
@@ -376,12 +377,13 @@ fn tick(
     } else {
         user_cmd(&keys, mouse.as_deref(), &bindings, latched.buttons, *angles)
     };
+    let scroll = scroll.map_or(0.0, |scroll| scroll.delta.y);
     let fire = ["attack", "attack2"];
     let (fire_held, fire_pressed) = (
         fire.iter()
             .any(|action| bindings.pressed(action, &keys, mouse.as_deref())),
         fire.iter()
-            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref())),
+            .any(|action| bindings.just_pressed(action, &keys, mouse.as_deref(), scroll)),
     );
     if selector.swallows_fire(fire_held, fire_pressed) {
         cmd.buttons = cmd

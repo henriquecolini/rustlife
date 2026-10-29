@@ -5,6 +5,7 @@
 //! [`apply_setting`]; the settings systems take it from there.
 
 use bevy::input::keyboard::KeyboardInput;
+use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 use rl_config::{ACTIONS, Antialiasing, Quality, WindowMode};
 
@@ -478,12 +479,14 @@ fn on_value_changed(
     }
 }
 
-/// While an action is being rebound, takes the next key or mouse button.
+/// While an action is being rebound, takes the next key, mouse button or
+/// wheel pulse.
 /// `Esc` cancels.
 fn capture_binding(
     mut rebinding: ResMut<Rebinding>,
     mut typed: MessageReader<KeyboardInput>,
     mouse: Res<ButtonInput<MouseButton>>,
+    scroll: Res<AccumulatedMouseScroll>,
     mut settings: ResMut<Settings>,
     mut focus: ResMut<Focus>,
 ) {
@@ -505,6 +508,7 @@ fn capture_binding(
             chosen = chosen.or(Some(Binding::Mouse(button)));
         }
     }
+    chosen = chosen.or_else(|| Binding::from_scroll(scroll.delta.y));
     if let Some(name) = chosen.and_then(Binding::name) {
         settings.controls.rebind(action, name);
         rebinding.0 = None;
@@ -512,7 +516,7 @@ fn capture_binding(
     }
 }
 
-/// Shows each binding button's key, or "Press a key…" while it waits.
+/// Shows each binding button's input, or "Press an input…" while it waits.
 fn show_bindings(
     rebinding: Res<Rebinding>,
     settings: Res<Settings>,
@@ -524,7 +528,7 @@ fn show_bindings(
     }
     for (bind, children) in &buttons {
         let label = if rebinding.0 == Some(bind.0) {
-            "Press a key…".to_owned()
+            "Press an input…".to_owned()
         } else {
             Binding::label_of(settings.controls.binding(bind.0)).to_owned()
         };
@@ -539,6 +543,34 @@ fn show_bindings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_input_can_be_captured_as_a_binding() {
+        use bevy::input::mouse::MouseScrollUnit;
+
+        for (delta, unit, name) in [
+            (1.0, MouseScrollUnit::Line, "Mouse Wheel Up"),
+            (-0.5, MouseScrollUnit::Pixel, "Mouse Wheel Down"),
+        ] {
+            let mut app = App::new();
+            app.add_message::<KeyboardInput>()
+                .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<Focus>()
+                .insert_resource(Settings(rl_config::Settings::default()))
+                .insert_resource(Rebinding(Some("jump")))
+                .insert_resource(AccumulatedMouseScroll {
+                    unit,
+                    delta: Vec2::new(0.0, delta),
+                })
+                .add_systems(Update, capture_binding);
+            app.update();
+            assert_eq!(
+                app.world().resource::<Settings>().controls.binding("jump"),
+                name
+            );
+            assert!(app.world().resource::<Rebinding>().0.is_none());
+        }
+    }
 
     #[test]
     fn widget_values_land_in_the_right_setting() {

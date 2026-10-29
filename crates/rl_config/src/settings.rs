@@ -274,7 +274,8 @@ pub struct ControlSettings {
     /// Look up by pushing the mouse down.
     pub invert_y: bool,
     /// Inputs by action id (see [`ACTIONS`]): a key code name such as
-    /// `"KeyW"`, or `"Mouse Left"` / `"Mouse Right"` / `"Mouse Middle"`.
+    /// `"KeyW"`, `"Mouse Left"` / `"Mouse Right"` / `"Mouse Middle"`, or
+    /// `"Mouse Wheel Up"` / `"Mouse Wheel Down"`.
     /// Actions left out use their default.
     pub bindings: BTreeMap<String, String>,
 }
