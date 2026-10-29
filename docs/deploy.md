@@ -3,17 +3,22 @@
 rustlife's dedicated server, `rustlife-server`, ships as a container image
 built from this repository (`deploy/Dockerfile`), with a
 `docker-compose.yml` at the repository root that runs it. Any Docker host
-works; this page walks through [Coolify](https://coolify.io), which builds
+works, x86-64 or ARM64 (the image is built for the host's architecture); this
+page walks through [Coolify](https://coolify.io), which builds
 and runs the compose file straight from GitHub.
 
 ## What the container does
 
-The image holds rustlife's server and Valve's SteamCMD installer, and no game
-content. Each time the container starts, `deploy/entrypoint.sh`:
+The image holds rustlife's server and
+[DepotDownloader](https://github.com/SteamRE/DepotDownloader), a Steam
+download client, and no game content. (Valve's own SteamCMD is a 32-bit x86
+program that does not run on ARM64; DepotDownloader downloads the same files
+from Steam and runs on both.) Each time the container starts,
+`deploy/entrypoint.sh`:
 
 1. installs or updates the **Half-Life 2: Deathmatch Dedicated Server**
-   (Steam app 232370) with SteamCMD, logged in anonymously, into the `hl2dm`
-   volume (`/data/hl2dm`). It needs no Steam account and no game purchase;
+   (Steam app 232370, its Linux depots) with DepotDownloader, logged in
+   anonymously, into the `hl2dm` volume (`/data/hl2dm`). It needs no Steam account and no game purchase;
 2. checks that the install has what the server reads: `hl2mp/gameinfo.txt`,
    the `hl2mp/maps/dm_*.bsp` maps and the `hl2mp/hl2mp_pak` and
    `hl2/hl2_misc` VPKs (for the props' models, physics and `propdata`). The
@@ -30,12 +35,12 @@ exits.
 
 ### First start
 
-The first start downloads SteamCMD's update (about 200 MB) and then the
-dedicated server, about **900 MB** in some 1,100 files. That takes a few
-minutes, depending on the connection; nothing listens on the port until it
-finishes. SteamCMD's downloads sometimes fail on a fresh install, so the
-entrypoint retries them. Later starts only check for updates, which takes
-seconds. Allow about **1.2 GB** of disk for the volumes.
+The first start downloads the dedicated server, about **900 MB** in some
+1,100 files. That takes a few minutes, depending on the connection; nothing
+listens on the port until it finishes. If a download fails, the entrypoint
+retries it, and DepotDownloader resumes where it stopped. Later starts only
+check for updates, which takes seconds. Allow about **1 GB** of disk for the
+volumes.
 
 ## Deploying on Coolify
 
@@ -61,7 +66,7 @@ seconds. Allow about **1.2 GB** of disk for the volumes.
    |------------|---------------|------------------------------------------------------------|
    | `hl2dm`    | `/data/hl2dm` | the dedicated server install (900 MB)                      |
    | `config`   | `/config`     | `server.ron`                                               |
-   | `steamcmd` | `/home/steam` | SteamCMD (200 MB) and, for the fallback, its Steam login   |
+   | `steam`    | `/home/steam` | for the fallback only, DepotDownloader's Steam login       |
 
 6. **Set environment variables** if needed (*Environment Variables*; Coolify
    lists the compose file's variables with their defaults). See
@@ -135,13 +140,13 @@ port mapping to match.
 | Variable            | Default | Meaning                                                                                       |
 |---------------------|---------|-----------------------------------------------------------------------------------------------|
 | `RUST_LOG`          | `info`  | Log verbosity: `error`, `warn`, `info`, `debug`, `trace`, or per-module filters.              |
-| `HL2DM_SKIP_UPDATE` | `0`     | `1`: start on the content already in the volume, without running SteamCMD.                    |
-| `HL2DM_VALIDATE`    | `0`     | `1`: have SteamCMD check every installed file and repair the damaged ones (slow).              |
+| `HL2DM_SKIP_UPDATE` | `0`     | `1`: start on the content already in the volume, without downloading anything.                |
+| `HL2DM_VALIDATE`    | `0`     | `1`: have DepotDownloader check every installed file and repair the damaged ones (slow).       |
 | `RUSTLIFE_ARGS`     | empty   | Extra `rustlife-server` arguments, e.g. `--map dm_lockdown` (first map) or `--dummies 2`.      |
 | `STEAM_USER`        | empty   | Steam account owning Half-Life 2: Deathmatch, for the [fallback](#steam-account-fallback) only. |
 | `STEAM_PASS`        | empty   | Its password (only needed until a login succeeds).                                            |
 | `STEAM_GUARD`       | empty   | A current Steam Guard code for that login.                                                    |
-| `STEAMCMD_RETRIES`  | `3`     | Attempts per SteamCMD run.                                                                    |
+| `DOWNLOAD_RETRIES`  | `3`     | Attempts per DepotDownloader run.                                                             |
 
 `rustlife-server --help` lists the server's arguments. Arguments given to the
 container are passed on to it too: Compose's `command: ["--map",
@@ -162,30 +167,32 @@ Steam Guard makes an unattended first login awkward. Either:
   the code Steam e-mails (or the authenticator shows; it changes every 30
   seconds, so that is a race); or, more reliably,
 - log in once interactively on the host, which keeps the login in the
-  `steamcmd` volume. Once the container has started at least once (which
-  puts SteamCMD in that volume), find the volume's and the image's names
-  with `docker volume ls` and `docker images` (Coolify prefixes them with
-  the resource's id), then run the following; SteamCMD asks for the password
-  and the Steam Guard code:
+  `steam` volume. Find the volumes' and the image's names with
+  `docker volume ls` and `docker images` (Coolify prefixes them with the
+  resource's id), then run the following. DepotDownloader asks for the
+  password and the Steam Guard code, then downloads the game where the
+  container looks for it:
 
   ```sh
-  docker run --rm -it -v <steamcmd volume>:/home/steam \
-      --entrypoint /home/steam/steamcmd/steamcmd.sh <image> \
-      +login <user> +quit
+  docker run --rm -it -v <steam volume>:/home/steam -v <hl2dm volume>:/data/hl2dm \
+      --entrypoint /opt/depotdownloader/DepotDownloader <image> \
+      -app 320 -os linux -dir /data/hl2dm/app320 \
+      -username <user> -remember-password -no-mobile
   ```
 
-After one successful login SteamCMD remembers it, so `STEAM_USER` alone
-suffices: remove `STEAM_PASS` and `STEAM_GUARD`. The password is handed to
-SteamCMD in a temporary file, not on its command line; it is quoted there,
-so it must not contain a double quote (`"`). This path is untested (it needs
-a real account); the anonymous one is what normal deployments use.
+After one successful login DepotDownloader remembers it, so `STEAM_USER`
+alone suffices: remove `STEAM_PASS` and `STEAM_GUARD`. `STEAM_PASS` is passed
+on DepotDownloader's command line, where other processes in the container
+could read it; nothing else runs there, but prefer the interactive login
+above, which never stores the password. This path is untested (it needs a
+real account); the anonymous one is what normal deployments use.
 
 ## Updating
 
 - **rustlife:** push to the deployed branch and redeploy (Coolify can do it
   on every push through the GitHub App: *Automatic deployment*). The image
   rebuilds; the volumes, and so the game content and `server.ron`, stay.
-- **Game content:** restarting the container runs SteamCMD's update check.
+- **Game content:** restarting the container checks Steam for updates.
   Valve rarely updates Half-Life 2: Deathmatch, but when it changes a map,
   players with the new map are refused by a server with the old one (and the
   reverse) until both match.

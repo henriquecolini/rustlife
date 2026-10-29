@@ -1,8 +1,9 @@
 # The rustlife dedicated server, for `docker compose up -d` or Coolify's
 # "Docker Compose" build pack. See docs/deploy.md.
 #
-# The first start downloads the Half-Life 2: Deathmatch Dedicated Server
-# (several GB) into the `hl2dm` volume; later starts only check for updates.
+# Runs on x86-64 and ARM64 hosts. The first start downloads the Half-Life 2:
+# Deathmatch Dedicated Server (about 900 MB) into the `hl2dm` volume; later
+# starts only check for updates.
 services:
   rustlife-server:
     build:
@@ -15,9 +16,9 @@ services:
     environment:
       # Log verbosity: error, warn, info, debug, trace (or per-module filters).
       RUST_LOG: ${RUST_LOG:-info}
-      # 1: start without running SteamCMD (no update check).
+      # 1: start without downloading (no update check).
       HL2DM_SKIP_UPDATE: ${HL2DM_SKIP_UPDATE:-0}
-      # 1: have SteamCMD verify every installed file (slow).
+      # 1: verify every installed file (slow).
       HL2DM_VALIDATE: ${HL2DM_VALIDATE:-0}
       # Extra rustlife-server arguments, e.g. "--map dm_lockdown --dummies 2".
       RUSTLIFE_ARGS: ${RUSTLIFE_ARGS:-}
@@ -31,12 +32,12 @@ services:
       - hl2dm:/data/hl2dm
       # server.ron, created with commented defaults on the first start.
       - config:/config
-      # SteamCMD, its caches and, for the Steam fallback, the login.
-      - steamcmd:/home/steam
+      # For the Steam fallback: DepotDownloader's remembered login.
+      - steam:/home/steam
     # Lets the server tell players it is going away before it is killed.
     stop_grace_period: 15s
 
 volumes:
   hl2dm:
   config:
-  steamcmd:
+  steam:

@@ -2,7 +2,8 @@
 # Container entrypoint of the rustlife dedicated server.
 #
 # 1. Installs or updates the Half-Life 2: Deathmatch Dedicated Server (Steam
-#    app 232370, anonymous login) with SteamCMD into $HL2DM_INSTALL_DIR.
+#    app 232370, anonymous login) with DepotDownloader into
+#    $HL2DM_INSTALL_DIR.
 # 2. Checks that the install has the content rustlife's server reads.
 # 3. If it does not and Steam credentials are set, installs the game itself
 #    (app 320, which needs an account that owns it) and uses that instead.
@@ -13,9 +14,9 @@
 # Environment (see docs/deploy.md):
 #   HL2DM_INSTALL_DIR  where the game content is installed (/data/hl2dm)
 #   SERVER_CONFIG      the server's config file (/config/server.ron)
-#   HL2DM_SKIP_UPDATE  1: do not run SteamCMD, use the install as it is
-#   HL2DM_VALIDATE     1: have SteamCMD verify every installed file
-#   STEAMCMD_RETRIES   attempts per SteamCMD run (3)
+#   HL2DM_SKIP_UPDATE  1: do not download, use the install as it is
+#   HL2DM_VALIDATE     1: have DepotDownloader verify every installed file
+#   DOWNLOAD_RETRIES   attempts per DepotDownloader run (3)
 #   STEAM_USER, STEAM_PASS, STEAM_GUARD
 #                      an account owning Half-Life 2: Deathmatch, used only if
 #                      the dedicated server lacks needed content
@@ -28,9 +29,8 @@ INSTALL_DIR=${HL2DM_INSTALL_DIR:-/data/hl2dm}
 # server so that it lives on the same volume.
 GAME_INSTALL_DIR=$INSTALL_DIR/app320
 SERVER_CONFIG=${SERVER_CONFIG:-/config/server.ron}
-STEAMCMD_DIR=$HOME/steamcmd
-STEAMCMD=$STEAMCMD_DIR/steamcmd.sh
-RETRIES=${STEAMCMD_RETRIES:-3}
+DEPOTDOWNLOADER=/opt/depotdownloader/DepotDownloader
+RETRIES=${DOWNLOAD_RETRIES:-3}
 
 DEDICATED_SERVER_APP=232370
 GAME_APP=320
@@ -44,32 +44,30 @@ die() {
     exit 1
 }
 
-# Runs SteamCMD with the given arguments until it succeeds, at most $RETRIES
-# times: on a fresh volume its first run updates SteamCMD itself and often
-# fails the download that follows.
-steamcmd() {
+# Runs DepotDownloader with the given arguments until it succeeds, at most
+# $RETRIES times: Steam's content servers sometimes drop a download.
+# DepotDownloader resumes where the failed attempt stopped.
+depotdownloader() {
     attempt=1
     while :; do
-        if "$STEAMCMD" "$@"; then
+        if "$DEPOTDOWNLOADER" "$@"; then
             return 0
         fi
         if [ "$attempt" -ge "$RETRIES" ]; then
             return 1
         fi
         attempt=$((attempt + 1))
-        log "SteamCMD failed; retrying (attempt $attempt of $RETRIES)"
+        log "DepotDownloader failed; retrying (attempt $attempt of $RETRIES)"
         sleep 5
     done
 }
 
-# Prints the SteamCMD command that installs or updates app $1, verifying
-# every file if HL2DM_VALIDATE=1. On SteamCMD's command line it takes a
-# leading `+`; in a script it does not.
+# Prints DepotDownloader's options for installing or updating app $1: its
+# Linux depots (whatever the host), verifying every file if HL2DM_VALIDATE=1.
 app_update() {
+    printf -- '-app %s -os linux' "$1"
     if [ "${HL2DM_VALIDATE:-0}" = 1 ]; then
-        printf 'app_update %s validate' "$1"
-    else
-        printf 'app_update %s' "$1"
+        printf -- ' -validate'
     fi
 }
 
@@ -90,56 +88,32 @@ missing_content() {
 install_dedicated_server() {
     log "installing or updating the HL2DM Dedicated Server (app $DEDICATED_SERVER_APP) into $INSTALL_DIR"
     log "(a first install downloads about 900 MB, which can take a few minutes)"
+    # Nothing to type at an anonymous login: no standard input, so that an
+    # unexpected prompt fails the attempt rather than waiting forever.
     # shellcheck disable=SC2046 # app_update's words are meant to be split.
-    steamcmd +force_install_dir "$INSTALL_DIR" +login anonymous \
-        +$(app_update "$DEDICATED_SERVER_APP") +quit
+    depotdownloader $(app_update "$DEDICATED_SERVER_APP") -dir "$INSTALL_DIR" </dev/null
 }
 
-# Installs the game itself with the account in $STEAM_USER. The login is
-# passed in a script file rather than on the command line, so that the
-# password does not show in the process list.
+# Installs the game itself with the account in $STEAM_USER. With
+# -remember-password, DepotDownloader keeps the login in the home volume
+# after it first succeeds, and the user name alone suffices from then on. A
+# Steam Guard code is read from standard input, so $STEAM_GUARD is fed to it
+# there (an empty line if unset, so that it does not wait for one).
 install_game() {
     log "installing or updating Half-Life 2: Deathmatch (app $GAME_APP) as $STEAM_USER into $GAME_INSTALL_DIR"
-    script=$(mktemp)
-    # shellcheck disable=SC2064 # The path is fixed now on purpose.
-    trap "rm -f '$script'" EXIT
-    chmod 600 "$script"
-    {
-        echo "force_install_dir \"$GAME_INSTALL_DIR\""
-        # Once a login succeeds, SteamCMD remembers it in its volume,
-        # and the user name alone suffices.
-        printf 'login "%s"' "$STEAM_USER"
-        [ -n "${STEAM_PASS:-}" ] && printf ' "%s"' "$STEAM_PASS"
-        [ -n "${STEAM_GUARD:-}" ] && printf ' "%s"' "$STEAM_GUARD"
-        echo
-        app_update "$GAME_APP"
-        echo
-        echo quit
-    } >"$script"
-    steamcmd +runscript "$script"
-    rm -f "$script"
-    trap - EXIT
-}
-
-# Puts SteamCMD's bootstrapper, shipped in the image, where SteamCMD can
-# update itself: in the home volume, so the update is kept.
-install_steamcmd() {
-    if [ ! -x "$STEAMCMD" ]; then
-        log "installing SteamCMD into $STEAMCMD_DIR"
-        mkdir -p "$STEAMCMD_DIR"
-        cp -R /opt/steamcmd/. "$STEAMCMD_DIR"
-    fi
+    set -- -username "$STEAM_USER" -remember-password -no-mobile
+    [ -n "${STEAM_PASS:-}" ] && set -- "$@" -password "$STEAM_PASS"
+    # shellcheck disable=SC2046 # app_update's words are meant to be split.
+    printf '%s\n' "${STEAM_GUARD:-}" \
+        | depotdownloader $(app_update "$GAME_APP") -dir "$GAME_INSTALL_DIR" "$@"
 }
 
 # --- Content ----------------------------------------------------------------
 game_dir=$INSTALL_DIR
-if [ "${HL2DM_SKIP_UPDATE:-0}" != 1 ] || [ -n "${STEAM_USER:-}" ]; then
-    install_steamcmd
-fi
 if [ "${HL2DM_SKIP_UPDATE:-0}" = 1 ]; then
-    log "HL2DM_SKIP_UPDATE=1: not running SteamCMD"
+    log "HL2DM_SKIP_UPDATE=1: not downloading"
 elif ! install_dedicated_server; then
-    log "SteamCMD could not install app $DEDICATED_SERVER_APP; checking what is already there"
+    log "DepotDownloader could not install app $DEDICATED_SERVER_APP; checking what is already there"
 fi
 
 missing=$(missing_content "$INSTALL_DIR")
@@ -150,7 +124,7 @@ if [ -n "$missing" ]; then
         || die "set STEAM_USER (and STEAM_PASS, STEAM_GUARD) to an account owning Half-Life 2: Deathmatch to download the game instead"
     game_dir=$GAME_INSTALL_DIR
     if [ "${HL2DM_SKIP_UPDATE:-0}" != 1 ]; then
-        install_game || log "SteamCMD could not install app $GAME_APP"
+        install_game || log "DepotDownloader could not install app $GAME_APP"
     fi
     missing=$(missing_content "$game_dir")
     if [ -n "$missing" ]; then
