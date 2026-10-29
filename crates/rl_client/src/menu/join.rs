@@ -9,7 +9,8 @@ use crate::AppState;
 use crate::net::{NetSettings, NetStatus, Network};
 use crate::settings::Settings;
 use crate::ui::{
-    Activate, ButtonStyle, Reveal, TextField, ValueChanged, button, panel, text_field, theme,
+    Activate, ButtonStyle, Reveal, Submit, TextField, ValueChanged, button, panel, text_field,
+    theme,
 };
 
 /// The address typed so far.
@@ -94,7 +95,10 @@ pub(super) fn spawn(layer: &mut ChildSpawnerCommands, ctx: &Ctx) {
                                 draft.error = None;
                             }
                         },
-                    );
+                    )
+                    .observe(|_: On<Submit>, mut commands: Commands| {
+                        commands.queue(connect_typed);
+                    });
                 if !ctx.settings.player.recent_servers.is_empty() {
                     panel.spawn(ctx.fonts.bold("Recent", 18.0, theme::TEXT_DIM));
                     for server in &ctx.settings.player.recent_servers {
@@ -148,7 +152,8 @@ fn connect_typed(world: &mut World) {
     connect(&address, world);
 }
 
-/// Joins the server at `text`, or says why not.
+/// Joins the server at `text`, or says why not. `text` goes into the
+/// recent servers as typed, so a host name stays a name.
 fn connect(text: &str, world: &mut World) {
     let port = world.resource::<crate::player::Gameplay>().0.net.port;
     match resolve(text, port) {
@@ -157,7 +162,7 @@ fn connect(text: &str, world: &mut World) {
             world
                 .resource_mut::<Settings>()
                 .player
-                .remember_server(&address.to_string());
+                .remember_server(text.trim());
             let mut net = world.resource_mut::<NetSettings>();
             net.network = Network::Join(address);
             net.name = name;

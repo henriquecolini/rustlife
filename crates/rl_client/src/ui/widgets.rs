@@ -3,9 +3,17 @@
 //! Every interactive widget carries [`Interact`] (hover/press state),
 //! [`Look`] (its colours) and, for keyboard use, [`Focusable`]. Clicking a
 //! widget, or pressing Enter/Space on the focused one, triggers
-//! [`Activate`] on it; widgets with a value (toggle, slider, choice) change
-//! it and trigger [`ValueChanged`] so a screen can react, either with an
-//! observer on the widget or by watching the component.
+//! [`Activate`] on it; widgets with a value (toggle, slider, choice, text
+//! field) change it and trigger [`ValueChanged`] so a screen can react,
+//! either with an observer on the widget or by watching the component.
+//!
+//! A text field edits with Bevy's own text input (`EditableText`): a caret
+//! placed by clicking or the arrow keys, selection with the pointer or
+//! Shift, word jumps, the system clipboard and IME. Bevy routes keys to the
+//! entity in its [`InputFocus`]; the menus keep their own [`Focus`], and
+//! the two are kept in step: a field the menus focus gets Bevy's focus, and
+//! a click away or Escape, which clear Bevy's, take the menus' off it too.
+//! Enter in a field triggers [`Submit`] on it.
 //!
 //! The widgets are plain components and systems, so a screen is just a
 //! function that spawns them.
@@ -17,12 +25,16 @@
 //! silent; a widget is heard once as the pointer enters it however long it
 //! stays, and a slider dragged clicks once, when grabbed.
 
-use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input_focus::{AcquireFocus, FocusCause, InputFocus};
 use bevy::picking::Pickable;
 use bevy::picking::events::{
     PointerClick, PointerDrag, PointerEnter, PointerOut, PointerOver, PointerPress, PointerRelease,
 };
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::text::{EditableText, TextCursorStyle, TextEdit, TextEditChange};
+use bevy::ui_widgets::TextInput;
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 
 use super::anim::Smooth;
 use super::theme::{self, Fonts};
@@ -112,6 +124,13 @@ pub struct Activate {
 #[derive(EntityEvent)]
 pub struct ValueChanged {
     /// The widget.
+    pub entity: Entity,
+}
+
+/// Enter was pressed in a text field.
+#[derive(EntityEvent)]
+pub struct Submit {
+    /// The field.
     pub entity: Entity,
 }
 
@@ -225,7 +244,11 @@ impl Choice {
     }
 }
 
-/// A line of editable text.
+/// A line of editable text: a label and, beside it, the box it is typed
+/// into.
+///
+/// `value` follows the box as it is edited; setting it replaces the box's
+/// text.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct TextField {
     /// What was typed.
@@ -254,11 +277,15 @@ impl Plugin for WidgetsPlugin {
             .add_observer(activate_toggle)
             .add_observer(activate_choice)
             .add_observer(activate_field)
+            .add_observer(focus_clicked_field)
+            .add_observer(read_field_input)
             .add_systems(
                 Update,
                 (
                     navigate,
-                    type_into_fields,
+                    sync_input_focus,
+                    write_field_inputs,
+                    show_text_cursor,
                     show_toggles,
                     show_sliders,
                     show_choices,
@@ -467,7 +494,8 @@ pub fn choice(fonts: &Fonts, label: &str, choice: Choice) -> impl Bundle + use<>
 #[derive(Component)]
 struct ChoiceValueMark;
 
-/// A labelled text field.
+/// A labelled text field: the label on the left, and the box the text is
+/// typed into filling the rest of the row.
 #[must_use]
 pub fn text_field(
     fonts: &Fonts,
@@ -476,13 +504,11 @@ pub fn text_field(
     placeholder: &str,
     max_chars: usize,
 ) -> impl Bundle + use<> {
+    let mut editable = EditableText::new(value);
+    editable.max_characters = Some(max_chars);
     (
         row_node(),
         BackgroundColor(theme::CONTROL),
-        Outline::new(Val::Px(2.0), Val::Px(1.0), Color::NONE),
-        UiTransform::IDENTITY,
-        Smooth::new(theme::CONTROL),
-        Look::of(ButtonStyle::Secondary),
         Interact::default(),
         Focusable,
         TextField {
@@ -491,17 +517,87 @@ pub fn text_field(
             max_chars,
         },
         children![
-            fonts.text(label, theme::TEXT_SIZE, theme::TEXT),
             (
-                fonts.bold("", theme::TEXT_SIZE, theme::ACCENT),
-                FieldValueMark
+                fonts.text(label, theme::TEXT_SIZE, theme::TEXT),
+                Node {
+                    flex_shrink: 0.0,
+                    margin: UiRect::right(Val::Px(18.0)),
+                    ..default()
+                },
+            ),
+            (
+                Node {
+                    flex_grow: 1.0,
+                    min_width: Val::Px(0.0),
+                    height: Val::Px(FIELD_BOX_HEIGHT),
+                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(theme::CONTROL_RADIUS - 2.0)),
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                BackgroundColor(theme::FIELD),
+                BorderColor::all(theme::BORDER),
+                Hovered::default(),
+                FieldBox,
+                children![
+                    (
+                        Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        },
+                        editable,
+                        TextInput,
+                        TextFont {
+                            font: fonts.regular.clone().into(),
+                            font_size: FontSize::Px(theme::TEXT_SIZE),
+                            ..default()
+                        },
+                        TextColor(theme::TEXT),
+                        TextCursorStyle {
+                            color: theme::ACCENT,
+                            selection_color: theme::ACCENT.with_alpha(0.35),
+                            unfocused_selection_color: Color::NONE,
+                            selected_text_color: None,
+                            selection_radius: 0.15,
+                        },
+                        FieldInput,
+                    ),
+                    (
+                        fonts.text(placeholder, theme::TEXT_SIZE, theme::TEXT_DIM),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(12.0),
+                            ..default()
+                        },
+                        if value.is_empty() {
+                            Visibility::Inherited
+                        } else {
+                            Visibility::Hidden
+                        },
+                        FieldPlaceholder,
+                    ),
+                ],
             ),
         ],
     )
 }
 
+/// Height of the box a text field's text is typed into, px.
+const FIELD_BOX_HEIGHT: f32 = 34.0;
+
+/// The box of a text field, around its input.
 #[derive(Component)]
-struct FieldValueMark;
+struct FieldBox;
+
+/// The editable text of a text field.
+#[derive(Component)]
+struct FieldInput;
+
+/// The text shown in an empty field's box.
+#[derive(Component)]
+struct FieldPlaceholder;
 
 /// A row for a labelled setting.
 fn row_node() -> Node {
@@ -706,12 +802,16 @@ type Navigable = (With<Focusable>, Without<Disabled>);
 
 /// Moves focus with Up/Down (and Tab), activates with Enter/Space and
 /// adjusts the focused slider or choice with Left/Right, sounding each.
+/// Enter in a text field submits it instead (unless an IME is composing
+/// there).
 fn navigate(
     keys: Res<ButtonInput<KeyCode>>,
     mut focus: ResMut<Focus>,
     focusables: Query<(Entity, &UiGlobalTransform), Navigable>,
     mut values: Query<(Option<&mut Slider>, Option<&mut Choice>)>,
     fields: Query<(), With<TextField>>,
+    children: Query<&Children>,
+    inputs: Query<&EditableText, With<FieldInput>>,
     mut sounds: MessageWriter<UiSound>,
     mut commands: Commands,
 ) {
@@ -759,9 +859,18 @@ fn navigate(
     let activate = keys.just_pressed(KeyCode::Enter)
         || keys.just_pressed(KeyCode::NumpadEnter)
         || (!typing && keys.just_pressed(KeyCode::Space));
-    if activate && !fields.contains(focused) {
+    if !activate {
+        return;
+    }
+    if !fields.contains(focused) {
         sounds.write(UiSound::Click);
         commands.trigger(Activate { entity: focused });
+    } else if !children
+        .iter_descendants(focused)
+        .filter_map(|entity| inputs.get(entity).ok())
+        .any(EditableText::is_composing)
+    {
+        commands.trigger(Submit { entity: focused });
     }
 }
 
@@ -782,41 +891,139 @@ pub fn focus_after(order: &[(Entity, f32)], current: Option<Entity>, delta: i32)
     Some(order[target as usize].0)
 }
 
-fn type_into_fields(
-    mut typed: MessageReader<KeyboardInput>,
-    focus: Res<Focus>,
-    mut fields: Query<(&mut TextField, &Interact)>,
-    mut commands: Commands,
+/// The editable text inside the text field `field`, if it is one.
+fn field_input(
+    field: Entity,
+    children: &Query<&Children>,
+    inputs: &Query<(), With<FieldInput>>,
+) -> Option<Entity> {
+    children
+        .iter_descendants(field)
+        .find(|&entity| inputs.contains(entity))
+}
+
+/// The text field around `entity`, if it is in one.
+fn field_around(
+    entity: Entity,
+    parents: &Query<&ChildOf>,
+    fields: &Query<(), With<TextField>>,
+) -> Option<Entity> {
+    std::iter::once(entity)
+        .chain(parents.iter_ancestors(entity))
+        .find(|&entity| fields.contains(entity))
+}
+
+/// Keeps Bevy's [`InputFocus`], which decides where typed keys go, on the
+/// input of the text field the menus' [`Focus`] is on, and off everything
+/// else. When Bevy's focus moved by itself (a click away from the field,
+/// or Escape, clear it), a text field loses the menus' focus too.
+fn sync_input_focus(
+    mut focus: ResMut<Focus>,
+    mut input_focus: ResMut<InputFocus>,
+    fields: Query<(), With<TextField>>,
+    children: Query<&Children>,
+    parents: Query<&ChildOf>,
+    inputs: Query<(), With<FieldInput>>,
 ) {
-    let Some(entity) = focus.0 else {
-        typed.clear();
-        return;
-    };
-    let Ok((mut field, _)) = fields.get_mut(entity) else {
-        typed.clear();
-        return;
-    };
-    let mut changed = false;
-    for event in typed.read().filter(|event| event.state.is_pressed()) {
-        match &event.logical_key {
-            Key::Backspace => changed |= field.value.pop().is_some(),
-            Key::Character(text) => {
-                for character in text.chars().filter(|c| !c.is_control()) {
-                    if field.value.chars().count() < field.max_chars {
-                        field.value.push(character);
-                        changed = true;
-                    }
-                }
-            }
-            Key::Space if field.value.chars().count() < field.max_chars => {
-                field.value.push(' ');
-                changed = true;
-            }
-            _ => {}
+    if input_focus.is_changed() && !focus.is_changed() {
+        let owner = input_focus
+            .get()
+            .and_then(|entity| field_around(entity, &parents, &fields));
+        if focus.0.is_some_and(|entity| fields.contains(entity)) && owner != focus.0 {
+            focus.0 = owner;
         }
     }
-    if changed {
+    let wanted = focus
+        .0
+        .and_then(|entity| field_input(entity, &children, &inputs));
+    if input_focus.get() != wanted {
+        match wanted {
+            Some(input) => input_focus.set(input, FocusCause::Navigated),
+            None => input_focus.clear(),
+        }
+    }
+}
+
+/// A press anywhere on a text field (its label, its box or its text)
+/// focuses it, rather than letting the request reach the window, which
+/// would clear the focus.
+fn focus_clicked_field(
+    mut acquire: On<AcquireFocus>,
+    fields: Query<(), (With<TextField>, Without<Disabled>)>,
+    mut focus: ResMut<Focus>,
+) {
+    if fields.contains(acquire.focused_entity) {
+        acquire.propagate(false);
+        if focus.0 != Some(acquire.focused_entity) {
+            focus.0 = Some(acquire.focused_entity);
+        }
+    }
+}
+
+/// Copies an edited input's text into its [`TextField`], triggering
+/// [`ValueChanged`] when it changed (caret moves change nothing).
+fn read_field_input(
+    change: On<TextEditChange>,
+    inputs: Query<&EditableText, With<FieldInput>>,
+    parents: Query<&ChildOf>,
+    field_marks: Query<(), With<TextField>>,
+    mut fields: Query<&mut TextField>,
+    mut commands: Commands,
+) {
+    let input = change.event_target();
+    let Ok(editable) = inputs.get(input) else {
+        return;
+    };
+    let Some(entity) = field_around(input, &parents, &field_marks) else {
+        return;
+    };
+    let Ok(mut field) = fields.get_mut(entity) else {
+        return;
+    };
+    let value = editable.value().to_string();
+    if field.value != value {
+        field.value = value;
         commands.trigger(ValueChanged { entity });
+    }
+}
+
+/// Puts a [`TextField`]'s value into its input when a screen set it (an
+/// edit made in the input already matches), with the caret at the end.
+fn write_field_inputs(
+    fields: Query<(Entity, &TextField), Changed<TextField>>,
+    children: Query<&Children>,
+    mut inputs: Query<&mut EditableText, With<FieldInput>>,
+) {
+    for (entity, field) in &fields {
+        for descendant in children.iter_descendants(entity) {
+            if let Ok(mut editable) = inputs.get_mut(descendant)
+                && editable.value().to_string() != field.value
+            {
+                editable.editor_mut().set_text(&field.value);
+                editable.queue_edit(TextEdit::TextEnd(false));
+            }
+        }
+    }
+}
+
+/// Shows the text cursor (an I-beam) while the pointer is over a text
+/// field's box, and the arrow elsewhere.
+fn show_text_cursor(
+    boxes: Query<&Hovered, With<FieldBox>>,
+    windows: Query<(Entity, Option<&CursorIcon>), With<PrimaryWindow>>,
+    mut commands: Commands,
+) {
+    let Ok((window, current)) = windows.single() else {
+        return;
+    };
+    let wanted = if boxes.iter().any(Hovered::get) {
+        CursorIcon::System(SystemCursorIcon::Text)
+    } else {
+        CursorIcon::System(SystemCursorIcon::Default)
+    };
+    let showing = current.cloned().unwrap_or_default();
+    if showing != wanted {
+        commands.entity(window).insert(wanted);
     }
 }
 
@@ -942,22 +1149,33 @@ fn show_choices(
 /// A text field whose text or focus may have changed.
 type FieldChanged = Or<(Changed<TextField>, Changed<Interact>)>;
 
+/// Outlines a field's box in the accent while it is focused (lighter while
+/// hovered), and shows its placeholder while it is empty.
 fn show_fields(
     focus: Res<Focus>,
-    fields: Query<(Entity, &TextField, &Children), FieldChanged>,
-    mut values: Query<(&mut Text, &mut TextColor), With<FieldValueMark>>,
+    fields: Query<(Entity, &TextField, &Interact), FieldChanged>,
+    children: Query<&Children>,
+    mut borders: Query<&mut BorderColor, With<FieldBox>>,
+    mut placeholders: Query<&mut Visibility, With<FieldPlaceholder>>,
 ) {
-    for (entity, field, children) in &fields {
-        for &child in children {
-            if let Ok((mut text, mut color)) = values.get_mut(child) {
-                let caret = if focus.0 == Some(entity) { "|" } else { "" };
-                if field.value.is_empty() {
-                    text.0 = format!("{}{caret}", field.placeholder);
-                    color.0 = theme::TEXT_DIM;
+    for (entity, field, interact) in &fields {
+        let border = if focus.0 == Some(entity) {
+            theme::ACCENT
+        } else if interact.hovered {
+            theme::TEXT_DIM
+        } else {
+            theme::BORDER
+        };
+        for descendant in children.iter_descendants(entity) {
+            if let Ok(mut color) = borders.get_mut(descendant) {
+                *color = BorderColor::all(border);
+            }
+            if let Ok(mut visibility) = placeholders.get_mut(descendant) {
+                visibility.set_if_neq(if field.value.is_empty() {
+                    Visibility::Inherited
                 } else {
-                    text.0 = format!("{}{caret}", field.value);
-                    color.0 = theme::ACCENT;
-                }
+                    Visibility::Hidden
+                });
             }
         }
     }
@@ -1140,5 +1358,114 @@ mod tests {
         assert_eq!(slider_fraction_from_hit(0.5), 1.0);
         let middle = slider_fraction_from_hit(0.12);
         assert!((0.4..0.6).contains(&middle), "{middle}");
+    }
+
+    /// An app running the text field's focus and value systems, with one
+    /// field and one button; returns the app, the field, its input and its
+    /// label.
+    fn field_app() -> (App, Entity, Entity, Entity) {
+        let mut app = App::new();
+        app.init_resource::<Focus>()
+            .init_resource::<InputFocus>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Heard>()
+            .add_message::<UiSound>()
+            .add_observer(focus_clicked_field)
+            .add_observer(|submit: On<Submit>, mut heard: ResMut<Heard>| {
+                heard.0.push(("submit", submit.entity));
+            })
+            .add_observer(|activate: On<Activate>, mut heard: ResMut<Heard>| {
+                heard.0.push(("activate", activate.entity));
+            })
+            .add_systems(
+                Update,
+                (navigate, sync_input_focus, write_field_inputs).chain(),
+            );
+        let fonts = Fonts {
+            regular: Handle::default(),
+            bold: Handle::default(),
+        };
+        let field = app
+            .world_mut()
+            .spawn(text_field(&fonts, "Address", "", "host:port", 64))
+            .id();
+        let world = app.world_mut();
+        let mut inputs = world.query_filtered::<Entity, With<FieldInput>>();
+        let input = inputs.single(world).expect("one input");
+        let label = world.get::<Children>(field).expect("children")[0];
+        (app, field, input, label)
+    }
+
+    /// The events the field app's observers saw.
+    #[derive(Resource, Default)]
+    struct Heard(Vec<(&'static str, Entity)>);
+
+    fn input_focus(app: &App) -> Option<Entity> {
+        app.world().resource::<InputFocus>().get()
+    }
+
+    #[test]
+    fn bevy_focus_follows_the_menus_onto_a_field_and_off_it() {
+        let (mut app, field, input, _) = field_app();
+        let button = app.world_mut().spawn((Interact::default(), Focusable)).id();
+        app.world_mut().resource_mut::<Focus>().0 = Some(field);
+        app.update();
+        assert_eq!(input_focus(&app), Some(input));
+        app.world_mut().resource_mut::<Focus>().0 = Some(button);
+        app.update();
+        assert_eq!(input_focus(&app), None);
+    }
+
+    #[test]
+    fn a_click_away_or_escape_takes_the_menus_focus_off_the_field() {
+        let (mut app, field, _, _) = field_app();
+        app.world_mut().resource_mut::<Focus>().0 = Some(field);
+        app.update();
+        // Bevy clears its focus for a press outside any focusable, and
+        // for Escape in the field.
+        app.world_mut().resource_mut::<InputFocus>().clear();
+        app.update();
+        assert_eq!(app.world().resource::<Focus>().0, None);
+        assert_eq!(input_focus(&app), None);
+    }
+
+    #[test]
+    fn a_press_on_the_label_focuses_the_field() {
+        let (mut app, field, input, label) = field_app();
+        // Focus requests bubble up to the window that was pressed in.
+        let window = app.world_mut().spawn(Window::default()).id();
+        app.world_mut().trigger(AcquireFocus {
+            focused_entity: label,
+            window,
+        });
+        assert_eq!(app.world().resource::<Focus>().0, Some(field));
+        app.update();
+        assert_eq!(input_focus(&app), Some(input));
+    }
+
+    #[test]
+    fn a_value_set_by_a_screen_reaches_the_input() {
+        let (mut app, field, input, _) = field_app();
+        app.update();
+        app.world_mut()
+            .get_mut::<TextField>(field)
+            .expect("field")
+            .value = "play.colini.dev".to_owned();
+        app.update();
+        let editable = app.world().get::<EditableText>(input).expect("input");
+        assert_eq!(editable.value().to_string(), "play.colini.dev");
+        assert_eq!(editable.max_characters, Some(64));
+    }
+
+    #[test]
+    fn enter_in_a_field_submits_it_without_activating() {
+        let (mut app, field, _, _) = field_app();
+        app.world_mut().resource_mut::<Focus>().0 = Some(field);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+        assert_eq!(app.world().resource::<Heard>().0, [("submit", field)]);
     }
 }

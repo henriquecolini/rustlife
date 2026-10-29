@@ -15,6 +15,8 @@ pub const CONTROL: Color = Color::srgb(0.110, 0.137, 0.188);
 pub const CONTROL_HOVER: Color = Color::srgb(0.157, 0.192, 0.259);
 /// A control being pressed.
 pub const CONTROL_PRESSED: Color = Color::srgb(0.086, 0.106, 0.149);
+/// The inside of a text field's box: sunk below the controls.
+pub const FIELD: Color = Color::srgb(0.051, 0.063, 0.090);
 /// The accent: primary actions, selections, values.
 pub const ACCENT: Color = Color::srgb(1.0, 0.616, 0.118);
 /// The accent under the pointer.
