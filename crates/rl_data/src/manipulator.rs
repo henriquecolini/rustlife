@@ -49,6 +49,11 @@ pub struct GrabConfig {
     /// on, so that sweeping the view across props does not snap them open and
     /// shut. Looking back at something starts this over.
     pub ready_hold_secs: f32,
+    /// A prop the line of sight only just misses is taken if its centre is
+    /// within this cone of the view: the cosine of the cone's half-angle...
+    pub aim_cone: f32,
+    /// ...and this close to the eyes, units.
+    pub aim_cone_range: f32,
 }
 
 impl GrabConfig {
@@ -146,6 +151,8 @@ impl ManipulatorConfig {
         check.non_negative("grab.pull_accel", grab.pull_accel);
         check.positive("grab.open_range", grab.open_range);
         check.non_negative("grab.ready_hold_secs", grab.ready_hold_secs);
+        check.range("grab.aim_cone", grab.aim_cone, 0.0, 1.0);
+        check.non_negative("grab.aim_cone_range", grab.aim_cone_range);
 
         let hold = &self.hold;
         check.non_negative("hold.distance", hold.distance);
@@ -215,6 +222,8 @@ mod tests {
             pull_accel: 800.0,
             open_range: 250.0,
             ready_hold_secs: 2.5,
+            aim_cone: 0.97,
+            aim_cone_range: 251.0,
         };
         assert_eq!(grab.reach(), 1000.0);
         grab.pull_range = 0.0;

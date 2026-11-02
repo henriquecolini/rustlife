@@ -16,7 +16,7 @@ through adding a weapon and an item. How the game then uses them is in
 | `simulation.ron` | Tick rate |
 | `movement.ron` | Player movement physics |
 | `physics.ron` | Prop physics, surface materials, pushing, impact damage |
-| `tools/manipulator.ron` | The Manipulator's grip and throws |
+| `tools/manipulator.ron` | The Manipulator's reach and aim, when its claws open, its grip and its throws |
 | `ammo.ron` | Ammo types and how much of each a player carries |
 | `weapons/<id>.ron` | One weapon per file; the file name is its id |
 | `items/<id>.ron` | One health, armor or ammo pickup per file |

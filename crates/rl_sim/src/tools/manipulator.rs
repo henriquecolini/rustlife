@@ -16,10 +16,12 @@
 //!   ([`LaunchConfig`](rl_data::LaunchConfig)).
 //!
 //! Only props the physics world says are grabbable can be held or pulled;
-//! any dynamic prop can be punted. All tuning is in `tools/manipulator.ron`.
+//! any dynamic prop can be punted. The aim is thicker than a line, so that small
+//! props are easy to take: see [`find_target`]. All tuning is in
+//! `tools/manipulator.ron`.
 
 use glam::{Quat, Vec3};
-use rl_data::ManipulatorConfig;
+use rl_data::{GrabConfig, ManipulatorConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::collision::contents::{MOVEABLE, SOLID, WINDOW};
@@ -27,8 +29,22 @@ use crate::collision::{CollisionWorld, Hull};
 use crate::movement::{Buttons, view_direction};
 use crate::physics::{BodyId, PhysicsWorld};
 
-/// What the tool's aiming ray stops at.
+/// What the tool's aim stops at.
 const AIM_MASK: u32 = SOLID | WINDOW | MOVEABLE;
+
+/// The box a look for something to take tries when its ray finds nothing: 4
+/// units to each side (`FindObject`, `CheckForTarget`).
+const AIM_BOX: Hull = Hull {
+    mins: Vec3::splat(-4.0),
+    maxs: Vec3::splat(4.0),
+};
+
+/// The box a punt looks along its line with, 8 units to each side
+/// (`PrimaryAttack`).
+const PUNT_BOX: Hull = Hull {
+    mins: Vec3::splat(-8.0),
+    maxs: Vec3::splat(8.0),
+};
 
 /// Something the Manipulator did this tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,7 +209,7 @@ impl Manipulator {
         Some(ToolEvent::Launched(body))
     }
 
-    /// Knocks away the dynamic prop under the crosshair within punt range.
+    /// Knocks away the dynamic prop in the aim's way within punt range.
     fn punt(
         &mut self,
         aim: &Aim,
@@ -204,19 +220,16 @@ impl Manipulator {
     ) -> ToolEvent {
         self.primary_cooldown = intervals.primary;
         let forward = aim.forward();
-        let Some((body, point)) = aim_at(aim, config.punt.range, world, physics) else {
+        let Some((body, point)) = punt_target(aim, world, physics, config.punt.range) else {
             return ToolEvent::DryFire;
         };
-        if !physics.is_dynamic(body) {
-            return ToolEvent::DryFire;
-        }
         let mass = physics.mass(body).unwrap_or(1.0);
         physics.apply_impulse(body, forward * config.punt.speed_for(mass) * mass, point);
         ToolEvent::Punted(body)
     }
 
-    /// Grabs the prop under the crosshair if it is in grab range, or pulls
-    /// it closer if it is in pull range.
+    /// Grabs the prop in the aim's way if it is in grab range, or pulls it
+    /// closer if it is in pull range.
     fn reach(
         &mut self,
         player_body: BodyId,
@@ -228,7 +241,7 @@ impl Manipulator {
         intervals: Intervals,
     ) -> Option<ToolEvent> {
         let grab = &config.grab;
-        let (body, point) = liftable_target(aim, world, physics, config, grab.reach())?;
+        let (body, point) = find_target(aim, world, physics, config, grab.reach())?;
         if point.distance(aim.eye) <= grab.range {
             physics.set_held(body, Some(player_body));
             let rotation = physics
@@ -297,13 +310,18 @@ impl Manipulator {
     }
 }
 
-/// The prop under the crosshair the tool could grab or pull, within `range`,
-/// with the point hit: grabbable, light enough and not already held. Secondary
-/// fire reaches [`GrabConfig::reach`](rl_data::GrabConfig::reach) for one; the
-/// prongs open on one within the shorter
-/// [`open_range`](rl_data::GrabConfig::open_range).
+/// The prop the tool would take looking along `aim`, within `range` of the eyes,
+/// with the point it was found at: grabbable, light enough and not already held.
+/// Secondary fire reaches [`GrabConfig::reach`] for one; the prongs open on one
+/// within the shorter [`open_range`](GrabConfig::open_range).
+///
+/// The aim is thick, so that small props need not be under the very crosshair
+/// (`CWeaponPhysCannon::FindObject`). A ray comes first; if it finds nothing to
+/// take, a small box along the same line; if that finds nothing to take either,
+/// the nearest such prop in plain sight within the cone of `grab.aim_cone` about
+/// the view and `grab.aim_cone_range` of the eyes.
 #[must_use]
-pub fn liftable_target(
+pub fn find_target(
     aim: &Aim,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
@@ -311,29 +329,95 @@ pub fn liftable_target(
     range: f32,
 ) -> Option<(BodyId, Vec3)> {
     let grab = &config.grab;
-    let (body, point) = aim_at(aim, range, world, physics)?;
-    let liftable = physics.is_grabbable(body)
-        && physics.mass(body).is_some_and(|mass| mass <= grab.max_mass)
-        && physics.holder(body).is_none();
-    liftable.then_some((body, point))
+    let end = aim.eye + aim.forward() * range;
+    let liftable = |&(body, _): &(BodyId, Vec3)| is_liftable(body, physics, grab);
+    first_prop(aim.eye, end, &Hull::POINT, world, physics)
+        .filter(liftable)
+        .or_else(|| first_prop(aim.eye, end, &AIM_BOX, world, physics).filter(liftable))
+        .or_else(|| in_cone(aim, world, physics, grab, range))
 }
 
-/// The prop the aiming ray hits within `range`, with the point hit; `None`
-/// if it hits the map first, or nothing. Debris — which is how pickups lie —
-/// counts, so they can be grabbed and punted too.
-fn aim_at(
+/// Whether the tool could take a prop: grabbable, light enough and not already
+/// held.
+fn is_liftable(body: BodyId, physics: &PhysicsWorld, grab: &GrabConfig) -> bool {
+    physics.is_grabbable(body)
+        && physics.mass(body).is_some_and(|mass| mass <= grab.max_mass)
+        && physics.holder(body).is_none()
+}
+
+/// The nearest prop to take whose centre is within the aim's cone and `range`,
+/// which the line of sight to its centre reaches first
+/// (`CWeaponPhysCannon::FindObjectInCone`); of those equally near, the one with
+/// the lowest id. With the point the line of sight reaches it at.
+fn in_cone(
     aim: &Aim,
+    world: &CollisionWorld,
+    physics: &PhysicsWorld,
+    grab: &GrabConfig,
     range: f32,
+) -> Option<(BodyId, Vec3)> {
+    let forward = aim.forward();
+    let reach = grab.aim_cone_range.min(range);
+    let (mins, maxs) = cone_bounds(aim.eye, forward, reach, grab.aim_cone);
+    let mut inside: Vec<(f32, BodyId, Vec3)> = physics
+        .props_near(mins, maxs)
+        .into_iter()
+        .filter(|&body| is_liftable(body, physics, grab))
+        .filter_map(|body| {
+            let center = physics.center_of_mass(body)?;
+            let to = center - aim.eye;
+            let distance = to.length();
+            (distance < reach && to.dot(forward) > grab.aim_cone * distance)
+                .then_some((distance, body, center))
+        })
+        .collect();
+    inside.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    inside.into_iter().find_map(|(_, body, center)| {
+        first_prop(aim.eye, center, &Hull::POINT, world, physics).filter(|&(hit, _)| hit == body)
+    })
+}
+
+/// The bounds of the points within `reach` of `eye` and within the cone of
+/// cosine `cone` about `forward`, for a cone at most a hemisphere: those of the
+/// cylinder around the axis as wide as the cone gets.
+fn cone_bounds(eye: Vec3, forward: Vec3, reach: f32, cone: f32) -> (Vec3, Vec3) {
+    let tip = eye + forward * reach;
+    let radius = reach * (1.0 - cone * cone).max(0.0).sqrt();
+    (eye.min(tip) - radius, eye.max(tip) + radius)
+}
+
+/// The dynamic prop primary fire would knock away within `range`, with the point
+/// it was found at: a box first, then a ray, which finds what is too close to
+/// the map for the box to reach (`CWeaponPhysCannon::PrimaryAttack`).
+fn punt_target(
+    aim: &Aim,
+    world: &CollisionWorld,
+    physics: &PhysicsWorld,
+    range: f32,
+) -> Option<(BodyId, Vec3)> {
+    let end = aim.eye + aim.forward() * range;
+    let dynamic = |&(body, _): &(BodyId, Vec3)| physics.is_dynamic(body);
+    first_prop(aim.eye, end, &PUNT_BOX, world, physics)
+        .filter(dynamic)
+        .or_else(|| first_prop(aim.eye, end, &Hull::POINT, world, physics).filter(dynamic))
+}
+
+/// The prop `hull` hits going from `start` to `end`, with where it stopped;
+/// `None` if it hits the map first, or nothing. Debris — which is how pickups
+/// lie — counts, so they can be grabbed and punted too.
+fn first_prop(
+    start: Vec3,
+    end: Vec3,
+    hull: &Hull,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
 ) -> Option<(BodyId, Vec3)> {
-    let end = aim.eye + aim.forward() * range;
-    let map = world.trace_hull(aim.eye, end, &Hull::POINT, AIM_MASK);
+    let map = world.trace_hull(start, end, hull, AIM_MASK);
     if map.all_solid {
         return None;
     }
     // Nothing beyond the map's hit matters: trace props only that far.
-    let props = physics.trace_hull_including_debris(aim.eye, map.end, &Hull::POINT, AIM_MASK, None);
+    let props = physics.trace_hull_including_debris(start, map.end, hull, AIM_MASK, None);
     let trace = if props.hit() || props.start_solid {
         // Rescale the props' fraction of the shortened move to the whole
         // move, as `Scene` does.
@@ -347,4 +431,45 @@ fn aim_at(
         map
     };
     Some((trace.body?, trace.end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cones_bounds_hold_every_point_within_it() {
+        let cone = 0.97_f32;
+        let angle = cone.acos();
+        let forwards = [
+            Vec3::X,
+            Vec3::NEG_Z,
+            Vec3::new(0.6, -0.48, 0.64),
+            view_direction(35.0, 200.0),
+        ];
+        let eye = Vec3::new(10.0, -20.0, 30.0);
+        for forward in forwards {
+            let (mins, maxs) = cone_bounds(eye, forward, 251.0, cone);
+            let across = forward.any_orthonormal_vector();
+            for turn in 0..32 {
+                let around = Quat::from_axis_angle(forward, turn as f32 * 0.196);
+                let edge = Quat::from_axis_angle(around * across, angle) * forward;
+                for along in [0.0, 100.0, 250.0] {
+                    let point = eye + edge * along;
+                    assert!(
+                        point.cmpge(mins).all() && point.cmple(maxs).all(),
+                        "{point} outside {mins}..{maxs} along {forward}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cones_bounds_are_much_smaller_than_a_box_around_the_eyes() {
+        let (mins, maxs) = cone_bounds(Vec3::ZERO, Vec3::X, 251.0, 0.97);
+        let size = maxs - mins;
+        assert!(size.y < 125.0 && size.z < 125.0, "{size}");
+        assert!(size.x < 251.0 + 125.0, "{size}");
+    }
 }

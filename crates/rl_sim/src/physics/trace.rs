@@ -55,6 +55,12 @@ impl PhysicsWorld {
         candidates
     }
 
+    /// The props whose bounds overlap `mins..maxs`, debris included, by id.
+    #[must_use]
+    pub fn props_near(&self, mins: Vec3, maxs: Vec3) -> Vec<BodyId> {
+        self.candidates(mins, maxs, GROUP_PROP | GROUP_DEBRIS)
+    }
+
     /// The moves that take `hull`, standing at `origin`, out of the props it
     /// overlaps (all but debris, and `ignore`), shortest first; empty if it
     /// overlaps none.

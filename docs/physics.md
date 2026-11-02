@@ -216,8 +216,8 @@ clients can draw the flames (`rl_client::particles`).
 
 Each player carries a `Manipulator`, a weapon in slot 1 (see
 [combat.md](combat.md)). While it is in hand and deployed it aims along the
-view from the eyes, and its aiming ray stops at the map or at the first
-prop. Putting it away lets go of the held prop. After each action it rests
+view from the eyes, and its aim stops at the map or at the first prop. Putting
+it away lets go of the held prop. After each action it rests
 for its fire mode's `interval` from `weapons/manipulator.ron`: primary
 after a launch, punt or dry fire, secondary after a grab or drop.
 
@@ -226,10 +226,19 @@ after a launch, punt or dry fire, secondary after a grab or drop.
 | Secondary fire, held | Grab a grabbable prop within `grab.range` weighing at most `grab.max_mass`. Pull one within `grab.pull_range` (1000, four times HL2's `physcannon_tracelength`) towards you, picking up speed at `grab.pull_accel` to `grab.pull_speed`, until it is close enough to grab: far props gravitate slowly and arrive fast. |
 | Secondary fire, pressed while holding | Let go. Secondary fire must then be released before it reaches for another prop. |
 | Primary fire while holding | Launch the prop along the view at `launch.speed × mass_curve(mass)`. |
-| Primary fire otherwise | Punt the dynamic prop under the crosshair within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. |
+| Primary fire otherwise | Punt the dynamic prop in the aim's way within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. |
 
 The **mass curves** are `(kg, factor)` points, interpolated linearly and
 held flat past the ends. Heavier props leave slower.
+
+**The aim** is thicker than a line, so that small props need not be under the
+very crosshair. Looking for a prop to take (`find_target`, HL2DM's `FindObject`
+and `FindObjectInCone`) tries a ray, then a box 4 units to each side along the
+same line, then the nearest prop to take whose centre is within `grab.aim_cone`
+(the cosine, about 14 degrees) of the view and `grab.aim_cone_range` of the eyes,
+and which the line of sight to its centre reaches first. Ties go to the lowest
+body id. A prop the tool cannot take (too heavy, say) does not end the search. A
+punt uses a box 8 units to each side and then a ray, without a cone.
 
 **The claws.** The client opens the gun's claws, with their sound, on a prop it
 could lift within `grab.open_range` (250, how far HL2DM's `CheckForTarget`

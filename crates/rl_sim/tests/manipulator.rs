@@ -17,7 +17,7 @@ use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, Motion, PropDesc};
 use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
-use rl_sim::tools::manipulator::{Aim, ToolEvent, liftable_target};
+use rl_sim::tools::manipulator::{Aim, ToolEvent, find_target};
 
 #[expect(
     clippy::expect_used,
@@ -68,7 +68,18 @@ impl Room {
 
     /// The crate stands on a pedestal of `height` (0 for none).
     fn with_pedestal(data: &GameData, distance: f32, mass: f32, height: f32) -> Self {
-        let mut world = WorldBuilder::new().solid_box(
+        Self::in_world(data, distance, mass, height, WorldBuilder::new())
+    }
+
+    /// As [`Room::with_pedestal`], in `world` with the floor added.
+    fn in_world(
+        data: &GameData,
+        distance: f32,
+        mass: f32,
+        height: f32,
+        world: WorldBuilder,
+    ) -> Self {
+        let mut world = world.solid_box(
             Vec3::new(-4096.0, -4096.0, -64.0),
             Vec3::new(4096.0, 4096.0, 0.0),
         );
@@ -147,7 +158,7 @@ impl Room {
     fn target(&self, range: f32) -> Option<BodyId> {
         let manipulator = &self.sim.data().manipulator;
         let (physics, world) = (self.sim.physics(), self.sim.world());
-        liftable_target(
+        find_target(
             &self.view(self.aim_pitch()),
             world,
             physics,
@@ -155,6 +166,15 @@ impl Room {
             range,
         )
         .map(|(body, _)| body)
+    }
+
+    /// Looking level, `yaw` degrees to the side, pressing `buttons`.
+    fn level(yaw: f32, buttons: Buttons) -> UserCmd {
+        UserCmd {
+            yaw,
+            buttons,
+            ..UserCmd::default()
+        }
     }
 
     fn held(&self) -> Option<BodyId> {
@@ -275,6 +295,135 @@ fn the_claws_look_no_farther_than_the_open_range_but_a_pull_reaches_on() {
     let far = Room::new(&data, grab.open_range + 100.0, 10.0);
     assert_eq!(far.target(grab.open_range), None, "too far to open on");
     assert_eq!(far.target(grab.reach()), Some(far.prop), "not to pull");
+}
+
+/// A pedestal that puts a crate's centre level with the eyes, so that the view's
+/// yaw alone says how far off the crosshair it is.
+const EYE_LEVEL: f32 = 56.0;
+
+#[test]
+fn a_crate_just_off_the_crosshair_is_grabbed() {
+    let data = data();
+    // At 100 units, the crate's near face has its edge 8 units off the line at
+    // 92: a ray at 6 degrees misses it, by less than the box's 4 units.
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    let events = room.run(1, &Room::level(6.0, Buttons::ATTACK2));
+    assert_eq!(events, [ToolEvent::Grabbed(room.prop)], "the box finds it");
+
+    // At 9 degrees the box misses it too, and only the cone can find it.
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    let events = room.run(1, &Room::level(9.0, Buttons::ATTACK2));
+    assert_eq!(events, [ToolEvent::Grabbed(room.prop)], "the cone finds it");
+}
+
+#[test]
+fn a_crate_outside_the_cone_is_not_grabbed() {
+    let data = data();
+    assert!(data.manipulator.grab.aim_cone > 20_f32.to_radians().cos());
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    assert!(room.run(5, &Room::level(20.0, Buttons::ATTACK2)).is_empty());
+    assert_eq!(room.held(), None);
+}
+
+#[test]
+fn the_cone_stops_short_of_the_pull_range() {
+    let data = data();
+    // 3 degrees off at 400 units: 21 units off the line, in the cone's angle but
+    // past its range; a pull needs the ray or the box to find it.
+    let room = Room::with_pedestal(&data, 400.0, 10.0, EYE_LEVEL);
+    let aim = room.view(0.0);
+    let manipulator = &data.manipulator;
+    let found = |range: f32, yaw: f32| {
+        find_target(
+            &Aim { yaw, ..aim },
+            room.sim.world(),
+            room.sim.physics(),
+            manipulator,
+            range,
+        )
+    };
+    assert_eq!(found(1000.0, 3.0), None, "off to the side of a far crate");
+    assert!(found(1000.0, 0.0).is_some(), "under the crosshair");
+}
+
+#[test]
+fn a_crate_behind_a_wall_is_not_grabbed() {
+    let data = data();
+    // The view passes the wall's end at 9 degrees, the way to the crate does not.
+    let wall =
+        WorldBuilder::new().solid_box(Vec3::new(50.0, -100.0, 0.0), Vec3::new(60.0, 2.0, 300.0));
+    let mut room = Room::in_world(&data, 100.0, 10.0, EYE_LEVEL, wall);
+    assert!(room.run(5, &Room::level(9.0, Buttons::ATTACK2)).is_empty());
+    assert_eq!(room.held(), None);
+}
+
+#[test]
+fn a_crate_behind_another_is_not_taken_through_it() {
+    let data = data();
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    // A crate fixed in place stands in the way of the line to the light one's
+    // centre, but clear of the view, and cannot be taken itself.
+    let mut fixed = crate_desc(Vec3::new(60.0, 0.0, EYE_LEVEL), 10.0);
+    fixed.motion = Motion::Fixed;
+    let fixed = room.sim.add_prop(&fixed);
+    room.run(1, &UserCmd::default());
+    assert!(!room.sim.physics().is_grabbable(fixed));
+    assert!(room.run(5, &Room::level(13.5, Buttons::ATTACK2)).is_empty());
+    assert_eq!(room.held(), None);
+}
+
+#[test]
+fn the_nearest_of_the_crates_in_the_cone_is_taken_and_ties_go_to_the_first() {
+    let data = data();
+    let mut room = Room::new(&data, 1000.0, 10.0);
+    let at = |x: f32, y: f32| crate_desc(Vec3::new(x, y, 0.0), 10.0);
+    let (left, right) = (
+        room.sim.add_prop(&at(100.0, 20.0)),
+        room.sim.add_prop(&at(100.0, -20.0)),
+    );
+    let far = room.sim.add_prop(&at(150.0, 22.0));
+    room.sim.refresh_props();
+    assert!(left < right && right < far);
+    // Straight between the near two, whose centres are level with each other.
+    let eye = room.sim.eye_position(room.player).expect("player");
+    let pitch = -(8.0 - eye.z).atan2(100.0).to_degrees();
+    let found = find_target(
+        &room.view(pitch),
+        room.sim.world(),
+        room.sim.physics(),
+        &data.manipulator,
+        data.manipulator.grab.reach(),
+    );
+    assert_eq!(found.map(|(body, _)| body), Some(left));
+}
+
+#[test]
+fn a_punt_finds_a_crate_a_little_further_off_than_a_grab_does() {
+    let data = data();
+    // The box of a punt is 8 units to the side: at 7 degrees the near face's edge
+    // is 3.3 units from reaching the line.
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    let events = room.run(1, &Room::level(7.0, Buttons::ATTACK));
+    assert_eq!(events, [ToolEvent::Punted(room.prop)]);
+    // There is no cone for a punt.
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    let events = room.run(1, &Room::level(13.0, Buttons::ATTACK));
+    assert_eq!(events, [ToolEvent::DryFire]);
+}
+
+#[test]
+fn a_punt_along_the_floor_is_not_stopped_by_it() {
+    let data = data();
+    // Aimed at the foot of a crate on the floor: the box hits the floor first.
+    let mut room = Room::new(&data, 60.0, 10.0);
+    let eye = room.sim.eye_position(room.player).expect("player");
+    let pitch = -(1.0 - eye.z).atan2(52.0).to_degrees();
+    let punt = UserCmd {
+        pitch,
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    };
+    assert_eq!(room.run(1, &punt), [ToolEvent::Punted(room.prop)]);
 }
 
 #[test]

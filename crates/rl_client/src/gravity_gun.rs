@@ -43,7 +43,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
 use rl_data::Shot;
-use rl_sim::tools::manipulator::{Aim, liftable_target};
+use rl_sim::tools::manipulator::{Aim, find_target};
 
 use crate::AppState;
 use crate::animation::{Animated, Attachment, SequencePlayer};
@@ -296,7 +296,7 @@ fn gun_state(
     };
     let config = &sim.data().manipulator;
     let grab = &config.grab;
-    let target = |range| liftable_target(&aim, sim.world(), sim.physics(), config, range);
+    let target = |range| find_target(&aim, sim.world(), sim.physics(), config, range);
     if pulling_wanted
         && target(grab.reach()).is_some_and(|(_, point)| point.distance(eye) > grab.range)
     {

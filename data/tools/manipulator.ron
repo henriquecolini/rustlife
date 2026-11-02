@@ -27,6 +27,13 @@ Manipulator(
         // ...and stay open this long after the view leaves it, so that sweeping
         // across props does not snap them open and shut. HL2DM waits 0.5 s.
         ready_hold_secs: 2.5,
+        // The aim is thicker than a line: a look that finds nothing to take
+        // tries again with a small box, then takes the nearest prop in plain
+        // sight whose centre is within this cone of the view (the cosine of its
+        // half-angle, about 14 degrees: physcannon_cone), and closer than this
+        // (physcannon_tracelength + 1).
+        aim_cone: 0.97,
+        aim_cone_range: 251.0,
     ),
     hold: (
         // Gap between the eyes and the near side of the held prop.
