@@ -579,6 +579,14 @@ impl PhysicsWorld {
         self.prop(body).map(|prop| prop.radius)
     }
 
+    /// A prop's bounds as it stands, Source space: lowest and highest corners.
+    #[must_use]
+    pub fn bounds(&self, body: BodyId) -> Option<(Vec3, Vec3)> {
+        self.prop(body)?;
+        let aabb = body_compute_aabb(&self.b3_world(), self.handle(body)?);
+        Some((from_b3(aabb.lower_bound), from_b3(aabb.upper_bound)))
+    }
+
     /// Whether a prop is simulated (rather than fixed in place).
     #[must_use]
     pub fn is_dynamic(&self, body: BodyId) -> bool {

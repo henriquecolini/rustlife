@@ -24,6 +24,7 @@
 
 #![forbid(unsafe_code)]
 
+mod carry;
 pub mod client;
 pub mod clock;
 pub mod conditioner;

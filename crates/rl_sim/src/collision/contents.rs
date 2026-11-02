@@ -29,6 +29,8 @@ pub const LADDER: u32 = 0x2000_0000;
 
 /// Everything that blocks a player's movement.
 pub const MASK_PLAYER_SOLID: u32 = SOLID | WINDOW | GRATE | MOVEABLE | PLAYER_CLIP | MONSTER;
+/// Everything that always blocks a prop.
+pub const MASK_PROP_SOLID: u32 = SOLID | WINDOW | GRATE | MOVEABLE;
 /// Every liquid a player can swim in.
 pub const MASK_WATER: u32 = WATER | SLIME;
 /// What bullets and swings stop at: solids and windows, not grates or

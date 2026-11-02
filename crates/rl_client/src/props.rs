@@ -25,9 +25,9 @@
 //! ([`LevelBodies`]). Props that can move carry a [`PhysicsBody`] and are
 //! drawn each frame where [`Drawn`] puts them: interpolated between the
 //! server's snapshots, a little in the past. The prop the local player
-//! holds is the exception: it is drawn where the server last had it
-//! relative to the player's view, moved with the view as it turns now, so
-//! carrying feels immediate. A moving prop lit by the engine's model
+//! holds is the exception: it is run ahead with them and eases back on being
+//! let go of ([`rl_net::Session::held_pose`]), so carrying feels immediate
+//! and letting go does not snap it back. A moving prop lit by the engine's model
 //! lighting is relit when it has moved or turned noticeably, at most a few
 //! times a second.
 
@@ -43,13 +43,12 @@ use rl_assets::vertex_lighting::{
     colors_by_vertex, cube_lit_mesh, field_lit_mesh, vertex_lit_mesh,
 };
 use rl_assets::{MapAsset, ModelAsset, PlacedProp, PropKind, VertexLightingAsset};
-use rl_sim::physics::{BodyId, BodyPose};
+use rl_sim::physics::BodyId;
 
 use crate::AppState;
 use crate::actors::PickupView;
 use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
-use crate::player::{LocalPlayer, Movement, ViewAngles};
 use crate::world::{
     MapHandle, MapScoped, MaterialMaps, PartSlot, Placeholder, SKY_LAYER, Surface, UnlitMesh,
     VertexLit,
@@ -437,70 +436,27 @@ fn show_broken(
 }
 
 /// Places every moving prop where it is drawn this frame; the one the
-/// local player holds, relative to their view.
+/// local player holds or just let go of, where its prediction has it.
 fn follow_bodies(
     drawn: Res<Drawn>,
     game: Game,
-    held: HeldView,
+    time: Res<Time<Fixed>>,
     mut bodies: Query<(&PhysicsBody, &mut Transform)>,
 ) {
     let Some(world) = &drawn.0 else {
         return;
     };
-    let carried = held.carried(&game);
+    let session = game.session();
+    let alpha = time.overstep_fraction();
     for (body, mut transform) in &mut bodies {
-        let pose = match carried {
-            Some((id, pose)) if id == body.0 => pose,
-            _ => match world.props.get(&body.0) {
-                Some(pose) => *pose,
-                None => continue,
-            },
+        let pose = session
+            .and_then(|session| session.held_pose(body.0, world, alpha))
+            .or_else(|| world.props.get(&body.0).copied());
+        let Some(pose) = pose else {
+            continue;
         };
         transform.translation = coords::position(pose.position.to_array());
         transform.rotation = coords::rotation_from_source(pose.rotation);
-    }
-}
-
-/// What drawing the held prop by the view needs.
-#[derive(bevy::ecs::system::SystemParam)]
-struct HeldView<'w> {
-    local: Option<Res<'w, LocalPlayer>>,
-    angles: Res<'w, ViewAngles>,
-    movement: Res<'w, Movement>,
-    time: Res<'w, Time<Fixed>>,
-}
-
-impl HeldView<'_> {
-    /// The prop the local player holds and where to draw it: where the
-    /// newest snapshot has it relative to the player's eyes and view, moved
-    /// to their predicted eyes and current view.
-    fn carried(&self, game: &Game) -> Option<(BodyId, BodyPose)> {
-        let local = self.local.as_ref()?;
-        let session = game.session()?;
-        let body = session.sim().player(local.id)?.manipulator.held()?;
-        let latest = session.latest()?;
-        let then = latest.players.get(&local.id)?;
-        let pose = *latest.props.get(&body)?;
-        let config = &self.movement.0;
-        let eye = |state: &rl_sim::movement::PlayerState| {
-            state.origin + Vec3::Z * state.eye_height(config)
-        };
-        let view = |pitch: f32, yaw: f32| {
-            Quat::from_rotation_z(yaw.to_radians()) * Quat::from_rotation_y(pitch.to_radians())
-        };
-        let (pitch, yaw) = then.motion.look;
-        let offset = view(pitch, yaw).inverse() * (pose.position - eye(&then.motion.state));
-        let alpha = self.time.overstep_fraction();
-        let eye_now =
-            eye(&local.previous).lerp(eye(&local.current), alpha) + session.prediction_error();
-        let turn = Quat::from_rotation_z((self.angles.yaw - yaw).to_radians());
-        Some((
-            body,
-            BodyPose {
-                position: eye_now + view(self.angles.pitch, self.angles.yaw) * offset,
-                rotation: turn * pose.rotation,
-            },
-        ))
     }
 }
 

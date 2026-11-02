@@ -20,10 +20,8 @@ use glam::Vec3;
 
 use super::{GROUP_WORLD, MAP_BODY, collision_filter, to_b3};
 use crate::collision::CollisionWorld;
-use crate::collision::contents::{GRATE, MONSTER_CLIP, MOVEABLE, PLAYER_CLIP, SOLID, WINDOW};
+use crate::collision::contents::{MASK_PROP_SOLID, MONSTER_CLIP, PLAYER_CLIP};
 
-/// Contents that always block props.
-const PROP_SOLID: u32 = SOLID | WINDOW | GRATE | MOVEABLE;
 /// Clip brushes block props only when they clip everything.
 const FULL_CLIP: u32 = PLAYER_CLIP | MONSTER_CLIP;
 
@@ -45,7 +43,7 @@ pub(super) fn add_map(world: &mut b3::world::World, map: &CollisionWorld) -> usi
     let body = create_body(world, &body_def);
     let shape = static_shape(GROUP_WORLD);
     let mut count = 0;
-    for corners in map.convex_solids(PROP_SOLID | FULL_CLIP) {
+    for corners in map.convex_solids(MASK_PROP_SOLID | FULL_CLIP) {
         let points: Vec<B3Vec3> = corners.iter().map(|&corner| to_b3(corner)).collect();
         let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES) else {
             continue;
@@ -57,7 +55,7 @@ pub(super) fn add_map(world: &mut b3::world::World, map: &CollisionWorld) -> usi
 
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for triangles in map.displacement_triangles(PROP_SOLID) {
+    for triangles in map.displacement_triangles(MASK_PROP_SOLID) {
         for triangle in triangles {
             let first = i32::try_from(vertices.len()).unwrap_or(i32::MAX);
             for point in triangle {
@@ -104,7 +102,7 @@ pub(super) fn add_movers(world: &mut b3::world::World, map: &CollisionWorld) -> 
             let handle = create_body(world, &body_def);
             let shape_def = static_shape(GROUP_WORLD);
             let mut any = false;
-            for corners in map.model_solids(model, PROP_SOLID | FULL_CLIP) {
+            for corners in map.model_solids(model, MASK_PROP_SOLID | FULL_CLIP) {
                 let points: Vec<B3Vec3> = corners.iter().map(|&corner| to_b3(corner)).collect();
                 let Some(hull) = b3::hull::create_hull(&points, b3::constants::MAX_HULL_VERTICES)
                 else {

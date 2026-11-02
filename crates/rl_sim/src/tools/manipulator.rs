@@ -6,7 +6,7 @@
 //!   drawn all the way in, to be collected on touching them; one they cannot use
 //!   is grabbed like any prop. Pressing secondary fire again lets go.
 //! - **Holding.** The held prop's centre of mass is steered to a point in
-//!   front of the eyes ([`HoldConfig`](rl_data::HoldConfig)), and it turns
+//!   front of the eyes ([`HoldConfig`]), and it turns
 //!   with the view's yaw, keeping the orientation it had relative to the
 //!   player when grabbed. It is steered by setting its velocity each tick,
 //!   not by moving it, so it still collides: it shoves other props aside and
@@ -22,7 +22,7 @@
 //! `tools/manipulator.ron`.
 
 use glam::{Quat, Vec3};
-use rl_data::{GrabConfig, ManipulatorConfig};
+use rl_data::{GrabConfig, HoldConfig, ManipulatorConfig};
 use serde::{Deserialize, Serialize};
 
 use crate::collision::contents::{MOVEABLE, SOLID, WINDOW};
@@ -138,6 +138,13 @@ impl Manipulator {
     #[must_use]
     pub fn held(&self) -> Option<BodyId> {
         self.held.map(|held| held.body)
+    }
+
+    /// The held prop's orientation relative to the view's yaw when grabbed,
+    /// if one is held: see [`hold_rotation`].
+    #[must_use]
+    pub fn held_rotation(&self) -> Option<Quat> {
+        self.held.map(|held| held.relative_rotation)
     }
 
     /// Lets go of the held prop, if any, as when its holder dies or puts
@@ -302,8 +309,7 @@ impl Manipulator {
         ) else {
             return None;
         };
-        let target = aim.eye + aim.forward() * (tuning.distance + radius);
-        let error = target - center;
+        let error = hold_target(aim, radius, tuning) - center;
         if error.length() > tuning.break_distance {
             held.blocked_secs += dt;
             if held.blocked_secs > tuning.break_time {
@@ -315,8 +321,8 @@ impl Manipulator {
             held.blocked_secs = 0.0;
         }
 
-        let linear = (error / tuning.follow_time).clamp_length_max(tuning.max_speed);
-        let target_rotation = aim.yaw_rotation() * held.relative_rotation;
+        let linear = hold_velocity(error, tuning);
+        let target_rotation = hold_rotation(aim.yaw, held.relative_rotation);
         let (axis, mut angle) = (target_rotation * pose.rotation.inverse()).to_axis_angle();
         // The shorter way round.
         if angle > std::f32::consts::PI {
@@ -327,6 +333,27 @@ impl Manipulator {
         physics.set_velocity(held.body, linear, angular);
         None
     }
+}
+
+/// Where a prop of bounding `radius` is held, looking along `aim`: its centre of
+/// mass is steered there.
+#[must_use]
+pub fn hold_target(aim: &Aim, radius: f32, tuning: &HoldConfig) -> Vec3 {
+    aim.eye + aim.forward() * (tuning.distance + radius)
+}
+
+/// The velocity that steers a held prop's centre of mass towards a hold point
+/// `error` away. Set each tick, it closes the gap over about `follow_time`.
+#[must_use]
+pub fn hold_velocity(error: Vec3, tuning: &HoldConfig) -> Vec3 {
+    (error / tuning.follow_time).clamp_length_max(tuning.max_speed)
+}
+
+/// The orientation a held prop is turned to with the view at `yaw` degrees, given
+/// its orientation `relative` to the view's yaw when grabbed.
+#[must_use]
+pub fn hold_rotation(yaw: f32, relative: Quat) -> Quat {
+    Quat::from_rotation_z(yaw.to_radians()) * relative
 }
 
 /// The prop the tool would take looking along `aim`, within `range` of the eyes,

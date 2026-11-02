@@ -285,7 +285,8 @@ impacts.
 Movement is deterministic and allocation-free, so clients predict it.
 Physics runs only on the server, so it is repeatable on one build but not
 guaranteed to be bit-identical across machines. Clients draw props
-interpolated from snapshots ([netcode.md](netcode.md)).
+interpolated from snapshots, but for the one the local player holds, which they
+steer ahead of the server with the same formula ([netcode.md](netcode.md)).
 
 ## In the client
 
@@ -293,8 +294,9 @@ interpolated from snapshots ([netcode.md](netcode.md)).
   from the model's header and `.phy`) and numbered by placement, so the
   server and every client agree on it.
 - Props that can move follow their body as the server's snapshots place
-  it, interpolated a little in the past. The prop the player holds is drawn
-  relative to their current view instead, so carrying feels immediate.
+  it, interpolated a little in the past. The prop the player holds is run ahead
+  of the server with them instead, so carrying feels immediate, and eases back
+  on being let go of ([netcode.md](netcode.md)).
 - A moving prop lit by the engine's model lighting (ambient cube plus world
   lights) is relit once it has moved 16 units or turned about 15°, at most
   five times a second.

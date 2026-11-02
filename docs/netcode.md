@@ -181,10 +181,21 @@ the difference, so arrival jitter does not shake it, and jumps of more than
 a quarter second are taken at once. The render tick is that estimate less
 the delay, and it never runs backwards.
 
-The prop the local player holds is the exception. It is drawn where the
-newest snapshot has it relative to the player's eyes and view, carried to
-the predicted eyes and current view, so carrying feels immediate rather
-than trailing a round trip behind.
+The prop the local player holds is the exception, or it would trail them by
+the delay and half a round trip. The client steers it as the server does
+(`rl_net::carry`, with the Manipulator's own `hold_target` and `hold_velocity`):
+from where the newest snapshot has it, with the commands the server has not
+run yet and then each command as it is issued, and draws it between the last
+two ticks. A snapshot that disagrees leaves an error that fades as the view's
+does. The server's prop stops at walls and other props: the prediction sweeps a
+box a little smaller than the prop's bounds against them and slides along them,
+so it does not go through. Another player's held prop is interpolated like
+anything else.
+
+Letting go puts the prop back in the interpolated past, 32 units behind a player
+on the run just for the delay. So a prop dropped (or whose grip broke) carries on
+as it was going while easing there over 0.2 s. A prop thrown does not ease: it is
+really far ahead of the prediction, and goes straight to where it is drawn.
 
 ## Lag compensation
 

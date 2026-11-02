@@ -20,7 +20,7 @@ use rl_server::{MapLoader, Server, ServerOptions};
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::{Buttons, UserCmd};
-use rl_sim::physics::{Motion, PropDesc};
+use rl_sim::physics::{BodyId, BodyPose, Motion, PropDesc};
 use rl_sim::simulation::{PlayerId, Spawn, TickEvents};
 use source_formats::props::{PropKind, PropPlacement};
 
@@ -38,6 +38,24 @@ fn data() -> GameData {
 /// a crate between them, off to the side.
 fn level(data: &GameData) -> Level {
     named_level(data, "test_arena", 0x1234_5678)
+}
+
+/// [`level`] with a wall across the way at x = 150, up to well over the crate.
+fn walled_level(data: &GameData) -> Level {
+    let mut level = level(data);
+    level.world = Arc::new(
+        WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-4096.0, -4096.0, -64.0),
+                Vec3::new(4096.0, 4096.0, 0.0),
+            )
+            .solid_box(
+                Vec3::new(150.0, -4096.0, 0.0),
+                Vec3::new(214.0, 4096.0, 512.0),
+            )
+            .build(),
+    );
+    level
 }
 
 /// [`level`] under another name and checksum.
@@ -116,6 +134,16 @@ impl Game {
     /// A game whose players vote between `maps` when a match ends.
     fn with_maps(data: GameData, maps: Vec<String>, loader: Option<MapLoader>) -> Self {
         let level = level(&data);
+        Self::on_level(data, level, maps, loader)
+    }
+
+    /// A game on `level`, whose players vote between `maps` when a match ends.
+    fn on_level(
+        data: GameData,
+        level: Level,
+        maps: Vec<String>,
+        loader: Option<MapLoader>,
+    ) -> Self {
         let server = Server::new(
             &level,
             ServerOptions {
@@ -516,6 +544,308 @@ fn without_lag_compensation_the_same_shots_miss() {
     let mut data = data();
     data.net.max_rewind = 0.0;
     assert_eq!(shots_at_a_runner(data), 0);
+}
+
+/// A player with the crate in the Manipulator's grip.
+struct Carrier {
+    game: Game,
+    client: usize,
+    body: BodyId,
+}
+
+impl Carrier {
+    /// A game on the level `level_of` makes, where the client on `conditions`
+    /// has looked at the crate, grabbed it, and is settled with it in hand.
+    fn new(conditions: &str, level_of: impl Fn(&GameData) -> Level) -> Self {
+        let data = data();
+        let mut game = Game::on_level(data.clone(), level_of(&data), Vec::new(), None);
+        let client = game.join("Carrier", conditions, local_hash(&data));
+        let id = game.player(client).expect("carrier");
+        let manipulator = game
+            .server
+            .sim()
+            .arsenal()
+            .find_weapon("manipulator")
+            .expect("manipulator");
+        game.server
+            .sim_mut()
+            .teleport_player(id, Vec3::new(0.0, 0.0, 1.0));
+        let select = UserCmd {
+            select: Some(manipulator),
+            ..UserCmd::default()
+        };
+        game.step_with(|_, _| Some(select));
+        game.run(120, UserCmd::default());
+        let look_down = UserCmd {
+            pitch: 45.0,
+            buttons: Buttons::ATTACK2,
+            ..UserCmd::default()
+        };
+        game.run(1, look_down);
+        game.run(60, still());
+        let session = game.clients[client].session().expect("session");
+        let body = session
+            .sim()
+            .player(id)
+            .expect("player")
+            .manipulator
+            .held()
+            .expect("the crate is in hand");
+        Self { game, client, body }
+    }
+
+    /// Where the client draws the crate after `alpha` of a tick.
+    fn drawn(&self, alpha: f32) -> BodyPose {
+        let session = self.game.clients[self.client].session().expect("session");
+        let world = session.interpolated().expect("interpolated");
+        session
+            .held_pose(self.body, &world, alpha)
+            .or_else(|| world.props.get(&self.body).copied())
+            .expect("the crate is somewhere")
+    }
+
+    /// Runs one tick of `cmd`; returns how far the drawn crate moved.
+    fn step(&mut self, cmd: UserCmd) -> f32 {
+        let before = self.drawn(0.5).position;
+        self.game.run(1, cmd);
+        before.distance(self.drawn(0.5).position)
+    }
+
+    /// Where the server has the crate.
+    fn server_pose(&self) -> BodyPose {
+        self.game
+            .server
+            .sim()
+            .physics()
+            .pose(self.body)
+            .expect("the server's crate")
+    }
+}
+
+/// Sprinting along +X with `buttons` held too, looking a little down.
+fn running(buttons: Buttons) -> UserCmd {
+    UserCmd {
+        pitch: 20.0,
+        forward: 1.0,
+        buttons: buttons.with(Buttons::SPRINT, true),
+        ..UserCmd::default()
+    }
+}
+
+/// Keeping still with the crate in hand, looking a little down.
+fn still() -> UserCmd {
+    UserCmd {
+        pitch: 20.0,
+        ..UserCmd::default()
+    }
+}
+
+/// Most a drawn prop may move in a tick and not look like a jump: a sprint is
+/// about 5 units a tick, and easing back or being run into adds a few more.
+const JUMP: f32 = 15.0;
+
+#[test]
+fn a_prop_let_go_of_on_the_run_does_not_snap_back() {
+    for conditions in ["0ms", "40ms", "80ms,10ms,2%"] {
+        let mut carrier = Carrier::new(conditions, level);
+        let run = running(Buttons::NONE);
+        for tick in 0..120 {
+            let moved = carrier.step(run);
+            assert!(
+                tick < 30 || moved < JUMP,
+                "{conditions}: carried {moved} at {tick}"
+            );
+        }
+        // How far ahead of the past the prediction has it.
+        let session = carrier.game.clients[carrier.client]
+            .session()
+            .expect("session");
+        let world = session.interpolated().expect("interpolated");
+        let ahead = world.props[&carrier.body]
+            .position
+            .distance(carrier.drawn(0.5).position);
+        assert!(
+            ahead > 25.0,
+            "{conditions}: the snap to hide is only {ahead}"
+        );
+        // Let go, and run on.
+        let mut moves = vec![carrier.step(running(Buttons::ATTACK2))];
+        for _ in 0..90 {
+            moves.push(carrier.step(run));
+        }
+        let most = moves.iter().copied().fold(0.0, f32::max);
+        assert!(most < JUMP, "{conditions}: a jump of {most}: {moves:?}");
+        let player = carrier.game.player(carrier.client).expect("player");
+        assert_eq!(
+            carrier
+                .game
+                .server
+                .sim()
+                .player(player)
+                .expect("player")
+                .manipulator
+                .held(),
+            None,
+            "{conditions}: let go"
+        );
+        // And in the end it is where everything else is drawn.
+        let session = carrier.game.clients[carrier.client]
+            .session()
+            .expect("session");
+        let world = session.interpolated().expect("interpolated");
+        assert_eq!(
+            session.held_pose(carrier.body, &world, 0.5),
+            None,
+            "{conditions}"
+        );
+    }
+}
+
+#[test]
+fn a_carried_prop_is_where_the_server_will_have_it() {
+    let mut carrier = Carrier::new("40ms", level);
+    for _ in 0..120 {
+        carrier.step(running(Buttons::NONE));
+    }
+    // Stop looking around and moving: both settle on the same point.
+    for _ in 0..90 {
+        carrier.step(still());
+    }
+    let drawn = carrier.drawn(1.0).position;
+    let server = carrier.server_pose().position;
+    assert!(drawn.distance(server) < 1.0, "{drawn} and {server}");
+}
+
+#[test]
+fn a_held_prop_is_ahead_of_the_servers_with_a_lagging_player_on_the_run() {
+    let mut carrier = Carrier::new("80ms", level);
+    let mut errors = Vec::new();
+    for tick in 0..240 {
+        let moved = carrier.step(running(Buttons::NONE));
+        // Nothing to compare with until it has settled. Then the server's crate
+        // runs the same path late, and each snapshot agrees with the prediction.
+        if tick > 120 {
+            errors.push(carrier.drawn(1.0).position.x - carrier.server_pose().position.x);
+            assert!((moved - 4.85).abs() < 0.25, "a sprint's tick was {moved}");
+        }
+    }
+    let least = errors.iter().copied().fold(f32::MAX, f32::min);
+    assert!(least > 5.0, "not ahead of the server: {least}");
+}
+
+#[test]
+fn a_held_prop_pressed_on_a_wall_stays_out_of_it() {
+    // The wall's near face is at x = 150, across the way the player runs.
+    const WALL: f32 = 150.0;
+    let mut carrier = Carrier::new("80ms,10ms,2%", walled_level);
+    let half = 12.0;
+    let mut deepest = f32::MIN;
+    for _ in 0..240 {
+        let moved = carrier.step(running(Buttons::NONE));
+        assert!(moved < 40.0, "a jump of {moved}");
+        let centre = carrier.drawn(0.5).position.x;
+        deepest = deepest.max(centre + half);
+    }
+    assert!(deepest < WALL + 2.0, "the crate's face reached {deepest}");
+    let server = carrier.server_pose().position.x + half;
+    assert!(
+        deepest > WALL - 8.0,
+        "held off the wall at {deepest}; the server's at {server}"
+    );
+}
+
+#[test]
+fn only_the_holder_runs_a_held_prop_ahead() {
+    let data = data();
+    let mut game = Game::new(data.clone());
+    let holder = game.join("Holder", "40ms", local_hash(&data));
+    let watcher = game.join("Watcher", "40ms", local_hash(&data));
+    let holder_id = game.player(holder).expect("holder");
+    let manipulator = game
+        .server
+        .sim()
+        .arsenal()
+        .find_weapon("manipulator")
+        .expect("manipulator");
+    game.server
+        .sim_mut()
+        .teleport_player(holder_id, Vec3::new(0.0, 0.0, 1.0));
+    let select = UserCmd {
+        select: Some(manipulator),
+        ..UserCmd::default()
+    };
+    game.step_with(|index, _| (index == holder).then_some(select));
+    game.run(120, UserCmd::default());
+    let look = |buttons| UserCmd {
+        pitch: 45.0,
+        buttons,
+        ..UserCmd::default()
+    };
+    game.step_with(|index, _| (index == holder).then_some(look(Buttons::ATTACK2)));
+    let mut in_hand = None;
+    for _ in 0..60 {
+        game.step_with(|index, _| {
+            Some(if index == holder {
+                look(Buttons::NONE)
+            } else {
+                UserCmd::default()
+            })
+        });
+        let session = game.clients[holder].session().expect("session");
+        in_hand = session
+            .sim()
+            .player(holder_id)
+            .expect("player")
+            .manipulator
+            .held();
+    }
+    let body = in_hand.expect("the crate is in hand");
+    let held_pose = |client: usize| {
+        let session = game.clients[client].session().expect("session");
+        let world = session.interpolated().expect("interpolated");
+        session.held_pose(body, &world, 0.5)
+    };
+    assert!(held_pose(holder).is_some());
+    assert_eq!(
+        held_pose(watcher),
+        None,
+        "the watcher draws it interpolated"
+    );
+}
+
+#[test]
+fn a_thrown_prop_is_drawn_where_it_really_is_at_once() {
+    let mut carrier = Carrier::new("40ms", level);
+    for _ in 0..60 {
+        carrier.step(running(Buttons::NONE));
+    }
+    let threw = UserCmd {
+        pitch: 20.0,
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    };
+    carrier.game.run(1, threw);
+    let mut eased = false;
+    for _ in 0..60 {
+        carrier.game.run(1, still());
+        let session = carrier.game.clients[carrier.client]
+            .session()
+            .expect("session");
+        let world = session.interpolated().expect("interpolated");
+        let held = session
+            .sim()
+            .player(session.player().expect("player"))
+            .expect("player")
+            .manipulator
+            .held();
+        if held.is_none() && session.held_pose(carrier.body, &world, 0.5).is_some() {
+            eased = true;
+        }
+    }
+    assert!(
+        !eased,
+        "a thrown prop must go straight to where it is drawn"
+    );
 }
 
 #[test]

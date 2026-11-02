@@ -73,6 +73,26 @@ fn position(physics: &PhysicsWorld, body: BodyId) -> Vec3 {
 }
 
 #[test]
+fn a_props_bounds_are_where_it_stands() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let origin = Vec3::new(10.0, 20.0, 100.0);
+    let body = physics.add_prop(&crate_at(origin, 8.0, 10.0, Motion::Fixed));
+    let (mins, maxs) = physics.bounds(body).expect("bounds");
+    let centre = (mins + maxs) / 2.0;
+    assert!(
+        centre.distance(origin + Vec3::Z * 8.0) < 1.0,
+        "{mins} {maxs}"
+    );
+    // Shapes have a skin, a little under a unit thick.
+    assert!(
+        ((maxs - mins) - Vec3::splat(16.0)).max_element().abs() < 2.0,
+        "{mins} {maxs}"
+    );
+    assert_eq!(physics.bounds(BodyId::from_index(99)), None);
+}
+
+#[test]
 fn a_dropped_crate_settles_on_the_floor() {
     let world = floor().build();
     let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);

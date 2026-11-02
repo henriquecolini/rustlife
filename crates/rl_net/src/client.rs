@@ -15,7 +15,8 @@
 //!   (prediction), and sent with the few before it.
 //!
 //! Everything but the local player is drawn from
-//! [`Session::interpolated`], a little in the past.
+//! [`Session::interpolated`], a little in the past; except the prop that
+//! player holds or has just let go of ([`Session::held_pose`]).
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -28,6 +29,7 @@ use rl_sim::movement::UserCmd;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::simulation::{Kill, PlayerId, Prediction, Simulation, TickEvents};
 
+use crate::carry::{Carry, HeldProp};
 use crate::clock::ServerClock;
 use crate::conditioner::NetConditions;
 use crate::events;
@@ -108,6 +110,8 @@ pub struct Session {
     queued: f32,
     /// How far the drawn view is from the predicted one, fading away.
     error: Vec3,
+    /// The prop the local player holds, run ahead with them.
+    carry: Carry,
     /// Snapshots that moved the predicted player.
     corrections: u32,
 }
@@ -125,6 +129,7 @@ impl Session {
             view_tick: None,
             queued: TARGET_QUEUE,
             error: Vec3::ZERO,
+            carry: Carry::default(),
             corrections: 0,
         }
     }
@@ -180,6 +185,17 @@ impl Session {
         self.states.sample(self.view_tick?)
     }
 
+    /// Where to draw the prop `body` if the local player holds it or has just
+    /// let go of it; `None` if it is drawn where `world` has it. The prop held
+    /// is run ahead of the server with the player, as the server would steer
+    /// it; one let go of eases back into `world`, the interpolated past where
+    /// everything else is. `alpha` is how far the frame is into the tick.
+    #[must_use]
+    pub fn held_pose(&self, body: BodyId, world: &Interpolated, alpha: f32) -> Option<BodyPose> {
+        self.carry
+            .pose(body, world.props.get(&body).copied(), alpha)
+    }
+
     /// How much faster (above 1) or slower than the tick rate the client
     /// should tick, to keep a small queue of its commands at the server.
     #[must_use]
@@ -191,7 +207,9 @@ impl Session {
     fn advance(&mut self, elapsed: Duration) {
         self.clock.advance(elapsed);
         self.view_tick = self.clock.render_tick();
-        self.error *= (-elapsed.as_secs_f32() / ERROR_FADE_SECS).exp();
+        let fade = (-elapsed.as_secs_f32() / ERROR_FADE_SECS).exp();
+        self.error *= fade;
+        self.carry.fade_error(fade);
     }
 
     /// Takes a snapshot in: rebuilds its state from the baseline, keeps it,
@@ -216,15 +234,16 @@ impl Session {
         }
         if newest {
             self.queued += (f32::from(snapshot.queued) - self.queued) * 0.1;
-            self.reconcile(&state, snapshot.ack);
+            self.reconcile(&state, snapshot.ack, &snapshot.events);
         }
         Some(snapshot.events.clone())
     }
 
     /// Writes the server's newest state into the replica and replays the
     /// commands it has not run yet on top, keeping the difference to the
-    /// old prediction as an error to fade out.
-    fn reconcile(&mut self, state: &WorldState, ack: u32) {
+    /// old prediction as an error to fade out. `events` is what the snapshot
+    /// says happened.
+    fn reconcile(&mut self, state: &WorldState, ack: u32, events: &[events::Event]) {
         let eye = |sim: &Simulation, player| sim.player(player).map(|player| player.state.origin);
         let before = self.player.and_then(|player| eye(&self.sim, player));
         state.restore(&mut self.sim);
@@ -233,9 +252,19 @@ impl Session {
             return;
         };
         let pending: Vec<UserCmd> = self.predictor.pending().copied().collect();
+        let mut held = HeldProp::of(&self.sim, player);
         for cmd in &pending {
             self.sim.predict(player, cmd);
+            if let Some(held) = &mut held {
+                held.step(&self.sim, player, cmd);
+            }
         }
+        let thrown = |body| events::threw(events, player, body);
+        let seen = |body| {
+            let world = self.states.sample(self.view_tick?)?;
+            world.props.get(&body).copied()
+        };
+        self.carry.settle(held, self.sim.dt(), thrown, seen);
         if let (Some(before), Some(after)) = (before, eye(&self.sim, player)) {
             let correction = before - after;
             if correction.length_squared() > CORRECTION_EPSILON * CORRECTION_EPSILON {
@@ -455,6 +484,7 @@ impl NetClient {
             ..cmd
         });
         let prediction = session.sim.predict(player, &cmd);
+        session.carry.step(&session.sim, player, &cmd);
         let redundancy =
             (session.data.net.command_redundancy as usize).min(MAX_COMMANDS_PER_PACKET);
         let packet = CommandPacket {

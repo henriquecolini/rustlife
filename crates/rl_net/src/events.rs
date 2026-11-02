@@ -99,6 +99,20 @@ pub enum Event {
     PropScrape(PropScrapeEvent),
 }
 
+/// Whether `events` say `player` threw or punted the prop `body`.
+#[must_use]
+pub fn threw(events: &[Event], player: PlayerId, body: rl_sim::physics::BodyId) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            *event,
+            Event::Tool {
+                player: who,
+                event: ToolEvent::Launched(thrown) | ToolEvent::Punted(thrown),
+            } if who == player && thrown == body
+        )
+    })
+}
+
 /// The trigger pulls, noises, reloads and deployments of everyone but
 /// `viewer`, who predicted their own.
 fn weapon_events(events: &TickEvents, viewer: Option<PlayerId>, out: &mut Vec<Event>) {
