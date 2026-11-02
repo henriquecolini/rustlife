@@ -5,9 +5,12 @@
 //! (`C_WeaponPhysCannon::DoEffectLaunch`). The effect, from `client.so`:
 //!
 //! - for the player who fired, a beam from the view model's muzzle to the
-//!   prop: `sprites/orangelight1`, a tenth of a second, 12 units wide at the
-//!   muzzle and 4 at the prop, straight (no noise), sixteen segments, at full
-//!   brightness until it goes (`BeamInfo_t` of the callback);
+//!   prop: `sprites/orangelight1`, 12 units wide at the muzzle and 4 at the prop,
+//!   straight (no noise), sixteen segments, at full brightness until it goes
+//!   (`BeamInfo_t` of the callback). Unlike the game's, which is gone in a tenth
+//!   of a second, it lasts [`BEAM_LIFE`], thinning away over the last third, and
+//!   stays on both of them all the while: on the muzzle as it moves with the
+//!   view, on the prop's centre as the prop is drawn in flight;
 //! - sparks (`FX_GaussExplosion`, see [`crate::trail_sparks`]): at the prop,
 //!   thrown back along the beam towards the shooter; for everyone else's
 //!   gun, at its muzzle, thrown forward;
@@ -22,6 +25,7 @@ use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
+use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::simulation::PlayerId;
 use rl_sim::tools::manipulator::ToolEvent;
 
@@ -30,14 +34,18 @@ use crate::camera::FlyCam;
 use crate::effect_material::{EffectMaterial, effect_material};
 use crate::effects::Scene;
 use crate::lightning::{self, BeamShape};
-use crate::net::Game;
+use crate::net::{Drawn, Game};
 use crate::player::{LocalPlayer, Ticked};
 use crate::screen_fade::ScreenFade;
 use crate::trail_sparks::{Burst, Sparks};
 use crate::world::MapScoped;
 
-/// How long the beam lasts, seconds (`m_flLife`).
-const BEAM_LIFE: f32 = 0.1;
+/// How long the beam lasts, seconds. The game's `m_flLife` is 0.1, too short to
+/// see where it went.
+const BEAM_LIFE: f32 = 0.3;
+
+/// How much of its life, seconds, the beam takes to thin away at the end.
+const BEAM_FADE_SECS: f32 = BEAM_LIFE / 3.0;
 
 /// The beam's look: 12 units across at the muzzle, 4 at the prop, straight
 /// (an amplitude of zero), sixteen points, its texture standing still.
@@ -57,13 +65,42 @@ const FLASH: ScreenFade = ScreenFade {
     seconds: 0.1,
 };
 
-/// A prop was thrown: where it was (Bevy space, metres), who threw it and
-/// whether that is the player this client plays.
+/// A prop was thrown: where it was (Bevy space, metres), who threw it, whether
+/// that is the player this client plays, which prop it was and where its centre
+/// is in its own space (Source units).
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PhyscannonImpact {
     pub player: PlayerId,
     pub at: Vec3,
     pub local: bool,
+    pub body: BodyId,
+    pub body_centre: Vec3,
+}
+
+/// Where the centre of a prop that has its origin at `pose` is, given as `centre`
+/// in the same (Source) space, in the prop's own space.
+fn centre_in_body(pose: BodyPose, centre: Vec3) -> Vec3 {
+    pose.rotation.inverse() * (centre - pose.position)
+}
+
+/// Where a prop's centre, `body_centre` in its own space, is with the prop at
+/// `pose`, Source space.
+fn centre_at(pose: BodyPose, body_centre: Vec3) -> Vec3 {
+    pose.position + pose.rotation * body_centre
+}
+
+/// How wide the beam is, of its full width, with `left` seconds to go.
+fn beam_width(left: f32) -> f32 {
+    (left / BEAM_FADE_SECS).clamp(0.0, 1.0)
+}
+
+/// The beam's look with `left` seconds to go.
+fn beam_shape(left: f32) -> BeamShape {
+    let width = beam_width(left);
+    BeamShape {
+        widths: (BEAM.widths.0 * width, BEAM.widths.1 * width),
+        ..BEAM
+    }
 }
 
 /// Which way the sparks fly, a Source-space unit vector: the shooter's own
@@ -131,17 +168,17 @@ fn detect_launches(
                 continue;
             };
             let physics = sim.physics();
-            let Some(centre) = physics
-                .center_of_mass(body)
-                .or_else(|| physics.pose(body).map(|pose| pose.position))
-            else {
+            let Some(pose) = physics.pose(body) else {
                 continue;
             };
+            let centre = physics.center_of_mass(body).unwrap_or(pose.position);
             debug!(?player, ?centre, "gravity gun launch");
             impacts.write(PhyscannonImpact {
                 player,
                 at: coords::position(centre.to_array()),
                 local: Some(player) == local,
+                body,
+                body_centre: centre_in_body(pose, centre),
             });
         }
     }
@@ -151,7 +188,10 @@ fn detect_launches(
 #[derive(Component)]
 struct Beam {
     player: PlayerId,
-    /// Where it ends, Bevy space.
+    /// The prop it ends on, and where on it, in the prop's own space.
+    body: BodyId,
+    body_centre: Vec3,
+    /// Where it ended last, Bevy space: where it stays if the prop breaks.
     to: Vec3,
     /// When it goes, seconds of app time.
     until: f32,
@@ -222,6 +262,8 @@ fn start_effects(
         commands.spawn((
             Beam {
                 player: impact.player,
+                body: impact.body,
+                body_centre: impact.body_centre,
                 to: impact.at,
                 until: time.elapsed_secs() + BEAM_LIFE,
                 mesh: mesh.clone(),
@@ -235,16 +277,19 @@ fn start_effects(
     }
 }
 
-/// Redraws each beam from the muzzle (which moves with the view) to where
-/// the prop was, and removes the spent.
+/// Redraws each beam from the muzzle (which moves with the view) to the
+/// prop's centre, and removes the spent. The centre goes by the pose the prop is
+/// drawn at: the replica's own has it a tenth of a second further on, which at
+/// the speed of a punt is hundreds of units past the prop on the screen.
 fn draw_beams(
     mut commands: Commands,
     time: Res<Time>,
     game: Game,
+    drawn: Res<Drawn>,
     local: Option<Res<LocalPlayer>>,
     scene: Scene,
     camera: Query<&GlobalTransform, With<FlyCam>>,
-    beams: Query<(Entity, &Beam)>,
+    mut beams: Query<(Entity, &mut Beam)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let (Some(sim), Ok(camera)) = (game.sim(), camera.single()) else {
@@ -254,7 +299,7 @@ fn draw_beams(
     let now = time.elapsed_secs();
     let eye = camera.translation();
     let unit = coords::METERS_PER_UNIT;
-    for (entity, beam) in &beams {
+    for (entity, mut beam) in &mut beams {
         if now >= beam.until {
             commands.entity(entity).try_despawn();
             meshes.remove(&beam.mesh);
@@ -263,6 +308,12 @@ fn draw_beams(
         let Some(mut mesh) = meshes.get_mut(&beam.mesh) else {
             continue;
         };
+        let pose = (!sim.physics().is_broken(beam.body))
+            .then(|| drawn.0.as_ref()?.props.get(&beam.body).copied())
+            .flatten();
+        if let Some(pose) = pose {
+            beam.to = coords::position(centre_at(pose, beam.body_centre).to_array());
+        }
         let start = scene.muzzle_position(sim, beam.player, local) / unit;
         let end = beam.to / unit;
         let toward_camera = |at: Vec3| (eye - at * unit).normalize_or_zero();
@@ -270,7 +321,7 @@ fn draw_beams(
             start,
             end,
             toward_camera(start.midpoint(end)),
-            &BEAM,
+            &beam_shape(beam.until - now),
             &[],
             now,
         );
@@ -319,10 +370,47 @@ mod tests {
     }
 
     #[test]
-    fn the_beam_is_the_games_shape() {
+    fn the_beam_is_the_games_shape_for_three_times_as_long() {
         assert_eq!(BEAM.widths, (12.0, 4.0));
         assert_eq!((BEAM.amplitude, BEAM.segments, BEAM.speed), (0.0, 16, 0.0));
-        assert!((BEAM_LIFE - 0.1).abs() < f32::EPSILON);
+        assert!((BEAM_LIFE - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_beam_thins_away_over_the_last_third_of_its_life() {
+        assert_eq!(beam_width(BEAM_LIFE), 1.0);
+        assert_eq!(
+            beam_width(BEAM_LIFE * 2.0 / 3.0),
+            1.0,
+            "full width till then"
+        );
+        assert!((beam_width(BEAM_LIFE / 6.0) - 0.5).abs() < 1e-5);
+        assert_eq!(beam_width(0.0), 0.0);
+        assert_eq!(beam_width(-1.0), 0.0, "and not past nothing");
+        let half = beam_shape(BEAM_LIFE / 6.0);
+        assert!((half.widths.0 - 6.0).abs() < 1e-4 && (half.widths.1 - 2.0).abs() < 1e-4);
+        assert_eq!(beam_shape(BEAM_LIFE).widths, BEAM.widths);
+    }
+
+    #[test]
+    fn the_beam_ends_on_the_prop_however_it_tumbles() {
+        let launch = BodyPose {
+            position: Vec3::new(100.0, 0.0, 0.0),
+            rotation: Quat::from_rotation_z(0.7),
+        };
+        // A prop with its origin off its centre, as a model's often is.
+        let centre = Vec3::new(100.0, 10.0, 20.0);
+        let body_centre = centre_in_body(launch, centre);
+        assert!(centre_at(launch, body_centre).distance(centre) < 1e-4);
+
+        // Half a turn about Z later and 500 units on: the part of the offset in
+        // the plane of the turn points the other way.
+        let later = BodyPose {
+            position: launch.position + Vec3::new(500.0, 0.0, 0.0),
+            rotation: Quat::from_rotation_z(std::f32::consts::PI) * launch.rotation,
+        };
+        let end = centre_at(later, body_centre);
+        assert!(end.distance(Vec3::new(600.0, -10.0, 20.0)) < 1e-4, "{end}");
     }
 
     #[test]

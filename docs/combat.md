@@ -118,7 +118,8 @@ The inventory never fires it: once it is deployed, the simulation runs the
 tool every tick with the buttons ([physics.md](physics.md)), and the fire
 modes' intervals are its rest after acting. Its aim is thick: it takes props
 near the crosshair as well as under it. Pulling in a pickup the player can use
-collects it.
+collects it. Throwing or punting a prop draws a beam from the gun to the prop,
+which stays on both for 0.3 s.
 
 ### The weapons
 
