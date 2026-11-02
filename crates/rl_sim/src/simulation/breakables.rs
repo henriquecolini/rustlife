@@ -24,11 +24,11 @@
 use std::collections::BTreeMap;
 
 use glam::{Quat, Vec3};
-use rl_data::ExplosionConfig;
+use rl_data::{ExplosionConfig, ImpactOther, PropImpact};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
-use crate::physics::{BodyId, Breakable};
+use crate::physics::{BodyId, Breakable, ContactImpact};
 
 /// A prop does not come back while a player is this close to where it
 /// would appear, units.
@@ -222,6 +222,13 @@ impl Breakables {
         }
     }
 
+    /// Notes that `body` appeared at `tick`: it settles, unhurt, from then.
+    pub(super) fn mark_born(&mut self, body: BodyId, tick: u64) {
+        if let Some(state) = self.props.get_mut(&body) {
+            state.born = tick;
+        }
+    }
+
     /// How `body` breaks, broken or not.
     pub(super) fn spec(&self, body: BodyId) -> Option<&Breakable> {
         self.props.get(&body).map(|state| &state.spec)
@@ -249,13 +256,13 @@ impl Simulation {
     }
 
     /// Turns the props' impacts on props and the map into sounds and
-    /// blows: the prop that struck takes the blow of what it struck (the
-    /// map is as heavy as the prop itself), and a prop it struck takes the
-    /// blow of it. Which of two props is reported as the one that struck is an
+    /// blows. Fast ones are heard, and knock what they touch (which sets off
+    /// a launched barrel); new ones also hurt each prop by its own damage
+    /// table. Which of two props is reported as the one that struck is an
     /// accident of their order in the world, so each gets the same treatment,
     /// and whoever threw either lately is credited, its own thrower first.
     pub(super) fn hit_props_by_impacts(&mut self) {
-        let config = self.data.physics.breakables.impact;
+        let report_speed = self.data.physics.breakables.impact.report_speed;
         for impact in self.physics.take_contacts() {
             let Some(mass) = self.physics.mass(impact.body) else {
                 continue;
@@ -267,26 +274,70 @@ impl Simulation {
             {
                 continue;
             }
-            self.prop_impacts_pending.push(PropImpactEvent {
-                body: impact.body,
-                position: impact.position,
-                speed: impact.speed,
-                mass,
-            });
             let thrower = self.thrower_of(impact.body);
             let other_thrower = impact.other.and_then(|other| self.thrower_of(other));
             let attacker = thrower.or(other_thrower);
-            self.hit_prop(impact.body, 1.0, Blow::Slam, attacker);
-            let other_mass = impact.other.and_then(|other| self.physics.mass(other));
-            let own = config.damage(other_mass.unwrap_or(mass), impact.speed);
+            let other_attacker = other_thrower.or(thrower);
+            if impact.speed > report_speed {
+                self.prop_impacts_pending.push(PropImpactEvent {
+                    body: impact.body,
+                    position: impact.position,
+                    speed: impact.speed,
+                    mass,
+                });
+                self.hit_prop(impact.body, 1.0, Blow::Slam, attacker);
+                if let Some(other) = impact.other {
+                    self.hit_prop(other, 1.0, Blow::Slam, other_attacker);
+                }
+            }
+            if !impact.fresh {
+                continue;
+            }
+            let own = self.impact_damage(&impact, false);
             self.hit_prop(impact.body, own, Blow::Impact, attacker);
-            if let (Some(other), Some(_)) = (impact.other, other_mass) {
-                let other_attacker = other_thrower.or(thrower);
-                self.hit_prop(other, 1.0, Blow::Slam, other_attacker);
-                let theirs = config.damage(mass, impact.speed);
+            if let Some(other) = impact.other {
+                let theirs = self.impact_damage(&impact, true);
                 self.hit_prop(other, theirs, Blow::Impact, other_attacker);
             }
         }
+    }
+
+    /// The damage `impact` does to the prop that was reported as struck, or
+    /// with `to_other` to the other.
+    fn impact_damage(&self, impact: &ContactImpact, to_other: bool) -> f32 {
+        let (me, them, their_velocity) = if to_other {
+            let Some(other) = impact.other else {
+                return 0.0;
+            };
+            (other, Some(impact.body), impact.velocity)
+        } else {
+            (impact.body, impact.other, impact.other_velocity)
+        };
+        let Some(spec) = self.breakables.spec(me) else {
+            return 0.0;
+        };
+        let config = &self.data.physics.breakables.impact;
+        let Some(table) = config.table(spec.damage_table.as_deref()) else {
+            return 0.0;
+        };
+        let other = them.and_then(|them| Some((them, self.physics.mass(them)?)));
+        let other = other.map_or(ImpactOther::MAP, |(them, mass)| ImpactOther {
+            mass,
+            fixed: !self.physics.is_dynamic(them),
+            held: self.physics.holder(them).is_some(),
+            speed_sqr: their_velocity.length_squared(),
+            falling: (-their_velocity.z / their_velocity.length().max(f32::EPSILON)).max(0.0),
+            // HL2DM only spins with damage what it flags as slicing, which
+            // no prop here is.
+            blade: None,
+        });
+        table.damage(&PropImpact {
+            mass: self.physics.mass(me).unwrap_or(0.0),
+            fixed: !self.physics.is_dynamic(me),
+            held: self.physics.holder(me).is_some(),
+            closing: impact.speed,
+            other,
+        })
     }
 
     /// Turns props running into players into knocks, which set off a barrel
@@ -328,6 +379,11 @@ impl Simulation {
         self.hit_prop(body, amount, Blow::Impact, attacker);
         self.resolve_prop_hits(&mut events);
         events
+    }
+
+    /// Sets a prop moving at `velocity`, waking it: for tools and tests.
+    pub fn set_prop_velocity(&mut self, body: BodyId, velocity: Vec3) {
+        self.physics.set_velocity(body, velocity, Vec3::ZERO);
     }
 
     /// Reports the props that are sliding along something, every few ticks.
@@ -376,6 +432,7 @@ impl Simulation {
             });
             if !blocked && self.physics.restore_prop(body) {
                 self.breakables.mark_whole(body);
+                self.breakables.mark_born(body, self.tick);
             }
         }
     }
@@ -535,7 +592,7 @@ impl Simulation {
             exploded: spec.explosion.is_some(),
         });
         if let Some((damage, radius)) = spec.explosion {
-            let tuning = self.data.physics.breakables;
+            let tuning = &self.data.physics.breakables;
             let explosion = ExplosionConfig {
                 radius,
                 damage,

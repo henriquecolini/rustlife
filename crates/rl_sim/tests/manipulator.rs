@@ -409,6 +409,7 @@ fn breakable(health: f32) -> Breakable {
         pieces: Vec::new(),
         gib_count: 0,
         respawn: None,
+        damage_table: None,
     }
 }
 

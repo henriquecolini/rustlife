@@ -327,7 +327,15 @@ impl PropModel {
             physics,
         )?;
         desc.breakable = self.breakable(placement, propdata).map(|mut breakable| {
-            breakable.health *= physics.breakables.health_scale;
+            // Weapons do less, rather than there being more health: impacts
+            // are made for the health as `prop_data` has it. Explosive props
+            // burn and are shot by their plain health.
+            if breakable.explosion.is_none() {
+                let toughness = physics.breakables.weapon_toughness;
+                breakable.bullets /= toughness;
+                breakable.club /= toughness;
+                breakable.explosive /= toughness;
+            }
             breakable
         });
         Some(desc)
@@ -399,6 +407,7 @@ impl PropModel {
             gibs,
             gib_count: data.breakable_count,
             respawn: (placement.respawn > 0.0).then_some(placement.respawn),
+            damage_table: data.damage_table,
         })
     }
 }

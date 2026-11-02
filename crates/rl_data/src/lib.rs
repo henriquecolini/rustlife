@@ -77,7 +77,10 @@ pub use movement::{
     MovementConfig, SprintConfig, WaterConfig,
 };
 pub use net::NetConfig;
-pub use physics::{ImpactDamageConfig, MaterialConfig, MaterialsConfig, PhysicsConfig, PushConfig};
+pub use physics::{
+    BladeSpin, DamageTable, ImpactDamageConfig, ImpactOther, MaterialConfig, MaterialsConfig,
+    PhysicsConfig, PropImpact, PushConfig,
+};
 pub use player::{ArmorConfig, HealthConfig, PlayerAnimationConfig, PlayerConfig};
 pub use rules::{FallDamageConfig, LoadoutConfig, PointsConfig, RespawnConfig, RulesConfig};
 pub use simulation::SimulationConfig;

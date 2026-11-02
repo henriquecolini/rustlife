@@ -13,6 +13,7 @@
 //! | `dmg.bullets`, `dmg.club`, `dmg.explosive` | Damage multipliers by kind (default 1) |
 //! | `explosive_damage`, `explosive_radius` | The prop explodes when it breaks |
 //! | `breakable_model`, `breakable_count` | The gibs it breaks into (a `BreakableModels` list) |
+//! | `damage_table` | How hard impacts hurt it: a named table; none means the default |
 
 use std::collections::HashMap;
 
@@ -41,6 +42,8 @@ pub struct PropData {
     pub breakable_model: Option<String>,
     /// How many gibs it breaks into.
     pub breakable_count: u32,
+    /// The name of the table of what impacts do to it, if it names one.
+    pub damage_table: Option<String>,
 }
 
 impl Default for PropData {
@@ -54,6 +57,7 @@ impl Default for PropData {
             explosive_radius: 0.0,
             breakable_model: None,
             breakable_count: 0,
+            damage_table: None,
         }
     }
 }
@@ -201,6 +205,7 @@ fn apply_entries(entries: &[(String, String)], data: &mut PropData) {
                 data.explosive_radius = number(value).unwrap_or(data.explosive_radius).max(0.0);
             }
             "breakable_model" => data.breakable_model = Some(value.trim().to_owned()),
+            "damage_table" => data.damage_table = Some(value.trim().to_owned()),
             "breakable_count" => {
                 data.breakable_count = number(value).map_or(data.breakable_count, |n| n as u32);
             }
@@ -239,6 +244,16 @@ mod tests {
         "base" "Wooden.Small"
         "health" "20"
     }
+    "Glass.Small"
+    {
+        "health" "5"
+        "damage_table" "glass"
+    }
+    "Glass.Derived"
+    {
+        "base" "Glass.Small"
+        "health" "9"
+    }
     "Loop.A" { "base" "Loop.B" "health" "1" }
     "Loop.B" { "base" "Loop.A" "dmg.club" "3" }
     "BreakableModels"
@@ -265,6 +280,20 @@ mod tests {
         assert!(medium.breakable() && !medium.explosive());
         assert!(table.class("Nope").is_none());
         assert!(!table.class("Wooden.Base").unwrap().breakable());
+    }
+
+    #[test]
+    fn the_damage_table_is_read_and_inherited() {
+        let table = PropDataTable::parse(TABLE);
+        let glass = table.class("Glass.Small").unwrap();
+        assert_eq!(glass.damage_table.as_deref(), Some("glass"));
+        let derived = table.class("Glass.Derived").unwrap();
+        assert_eq!(derived.damage_table.as_deref(), Some("glass"));
+        assert_eq!(table.class("Wooden.Medium").unwrap().damage_table, None);
+        let bottle = table
+            .for_model("prop_data {\n\"base\" \"Glass.Small\"  }\n")
+            .unwrap();
+        assert_eq!(bottle.damage_table.as_deref(), Some("glass"));
     }
 
     #[test]

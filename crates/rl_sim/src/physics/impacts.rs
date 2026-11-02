@@ -6,6 +6,11 @@
 //! approach speed measured by the solver, without having to reconstruct the
 //! velocities before the step. Contacts with players are not counted here:
 //! [`super::contacts`] handles those.
+//!
+//! `Box3D` goes on reporting a contact for as long as the two press together
+//! fast enough, so each hit also says whether it is [`fresh`](ContactImpact::fresh):
+//! the first between those two surfaces in a while, and the hardest of the two
+//! bodies' hits in that step. Only those can hurt: rubbing and pressing do not.
 
 use box3d_rust as b3;
 use glam::Vec3;
@@ -25,6 +30,13 @@ pub struct ContactImpact {
     pub speed: f32,
     /// Where they met, Source space.
     pub position: Vec3,
+    /// How the prop was moving before the step, units/s.
+    pub velocity: Vec3,
+    /// How the other was moving before the step, units/s.
+    pub other_velocity: Vec3,
+    /// A new hit, as opposed to the two rubbing or pressing together, or a
+    /// second point of the same blow.
+    pub fresh: bool,
 }
 
 /// What a shape belongs to.
@@ -36,6 +48,29 @@ enum Party {
     Prop(BodyId),
     /// A player's kinematic box.
     Player,
+}
+
+/// The two shapes of a contact, by index.
+pub(super) type SurfacePair = (i32, i32);
+
+/// Leaves only the hardest of each pair of bodies' fresh hits fresh.
+fn keep_hardest_fresh(impacts: &mut [ContactImpact]) {
+    for index in 0..impacts.len() {
+        let hit = impacts[index];
+        let beaten = impacts.iter().enumerate().any(|(other, rival)| {
+            other != index
+                && rival.fresh
+                && (rival.body, rival.other) == (hit.body, hit.other)
+                && rival
+                    .speed
+                    .total_cmp(&hit.speed)
+                    .then(index.cmp(&other))
+                    .is_gt()
+        });
+        if beaten {
+            impacts[index].fresh = false;
+        }
+    }
 }
 
 /// A prop sliding along something.
@@ -93,12 +128,13 @@ impl PhysicsWorld {
     }
 
     /// The impacts of props on props and on the map that happened during
-    /// the step just taken. Slower than `floor` units/s are left out.
+    /// the step just taken, with the surfaces that met, all taken as fresh.
+    /// Slower than `floor` units/s are left out.
     pub(super) fn contact_impacts(
         &self,
         before: &[(BodyId, Vec3)],
         floor: f32,
-    ) -> Vec<ContactImpact> {
+    ) -> Vec<(ContactImpact, SurfacePair)> {
         let world = self.b3_world();
         let events = b3::world::world_get_contact_events(&world);
         events
@@ -107,10 +143,10 @@ impl PhysicsWorld {
             .filter_map(|event| {
                 let first = self.contact_party(&world, event.shape_id_a)?;
                 let second = self.contact_party(&world, event.shape_id_b)?;
-                let (body, other) = match (first, second) {
-                    (Party::Prop(body), Party::Prop(other)) => (body, Some(other)),
-                    (Party::Prop(body), Party::Map | Party::Player)
-                    | (Party::Map | Party::Player, Party::Prop(body)) => (body, None),
+                let (body, other, swapped) = match (first, second) {
+                    (Party::Prop(body), Party::Prop(other)) => (body, Some(other), false),
+                    (Party::Prop(body), Party::Map | Party::Player) => (body, None, false),
+                    (Party::Map | Party::Player, Party::Prop(body)) => (body, None, true),
                     _ => return None,
                 };
                 if matches!(first, Party::Player) || matches!(second, Party::Player) {
@@ -133,18 +169,57 @@ impl PhysicsWorld {
                         from_b3(b3::body::body_get_linear_velocity(&world, handle))
                     }
                 };
-                let closing = (velocity(first, event.shape_id_a)
-                    - velocity(second, event.shape_id_b))
-                .dot(from_b3(event.normal));
+                let velocity_a = velocity(first, event.shape_id_a);
+                let velocity_b = velocity(second, event.shape_id_b);
+                let closing = (velocity_a - velocity_b).dot(from_b3(event.normal));
                 let speed = event.approach_speed.min(closing.max(0.0));
-                (speed > floor).then_some(ContactImpact {
-                    body,
-                    other,
-                    speed,
-                    position: from_b3(event.point),
-                })
+                let (own, theirs) = if swapped {
+                    (velocity_b, velocity_a)
+                } else {
+                    (velocity_a, velocity_b)
+                };
+                (speed > floor).then_some((
+                    ContactImpact {
+                        body,
+                        other,
+                        speed,
+                        position: from_b3(event.point),
+                        velocity: own,
+                        other_velocity: theirs,
+                        fresh: true,
+                    },
+                    (event.shape_id_a.index1, event.shape_id_b.index1),
+                ))
             })
             .collect()
+    }
+
+    /// Says which of a step's `hits` are new: those between surfaces that
+    /// have not hit lately, the hardest for each pair of bodies (a crate
+    /// landing across two brushes takes one blow, not two).
+    pub(super) fn freshen_hits(
+        &mut self,
+        hits: Vec<(ContactImpact, SurfacePair)>,
+    ) -> Vec<ContactImpact> {
+        let repeat = self.config.breakables.impact.repeat_seconds;
+        let steps = (repeat / self.dt).ceil() as u32;
+        self.recent_hits.retain_mut(|(_, left)| {
+            *left = left.saturating_sub(1);
+            *left > 0
+        });
+        let mut impacts: Vec<ContactImpact> = Vec::with_capacity(hits.len());
+        for (mut impact, pair) in hits {
+            match self.recent_hits.iter_mut().find(|(seen, _)| *seen == pair) {
+                Some((_, left)) => {
+                    impact.fresh = false;
+                    *left = steps;
+                }
+                None => self.recent_hits.push((pair, steps)),
+            }
+            impacts.push(impact);
+        }
+        keep_hardest_fresh(&mut impacts);
+        impacts
     }
 
     /// What a shape belongs to.

@@ -206,8 +206,12 @@ fn physics_props_break_as_their_model_says_and_the_entity_overrides() {
         .breakable
         .expect("breakable");
     assert_eq!(
-        breakable.health, 60.0,
-        "the model's own value over its class's, scaled for rustlife damage"
+        breakable.health, 20.0,
+        "the model's own value over its class's"
+    );
+    assert_eq!(
+        breakable.bullets, 1.0,
+        "barrels are shot by their plain health"
     );
     assert_eq!(breakable.explosion, Some((120.0, 256.0)));
     assert_eq!(breakable.gibs, ["models/gibs/metal_gib1.mdl"]);
@@ -220,7 +224,7 @@ fn physics_props_break_as_their_model_says_and_the_entity_overrides() {
         .expect("solid")
         .breakable
         .expect("breakable");
-    assert_eq!(breakable.health, 165.0, "the entity's health wins, scaled");
+    assert_eq!(breakable.health, 55.0, "the entity's health wins");
     assert_eq!(breakable.explosion, Some((120.0, 100.0)));
 }
 
@@ -241,14 +245,17 @@ fn props_without_health_or_that_are_not_physics_props_do_not_break() {
     // The entity's health alone is enough.
     let mut with_health = placement.clone();
     with_health.health = 30.0;
-    assert_eq!(
-        plain
-            .desc(&with_health, &data.physics, &table)
-            .expect("solid")
-            .breakable
-            .map(|breakable| breakable.health),
-        Some(90.0)
-    );
+    let breakable = plain
+        .desc(&with_health, &data.physics, &table)
+        .expect("solid")
+        .breakable
+        .expect("breakable");
+    assert_eq!(breakable.health, 30.0);
+    // Weapons do less to it, rather than it having more health for impacts.
+    let toughness = data.physics.breakables.weapon_toughness;
+    assert_eq!(breakable.bullets, 1.0 / toughness);
+    assert_eq!(breakable.club, 1.0 / toughness);
+    assert_eq!(breakable.explosive, 1.0 / toughness);
     // A static prop never breaks, whatever its model says.
     let (barrel, mut fixed, table) = explosive_barrel(&table);
     fixed.kind = PropKind::Static;
@@ -276,6 +283,26 @@ fn props_without_health_or_that_are_not_physics_props_do_not_break() {
             .breakable
             .is_some()
     );
+}
+
+#[test]
+fn a_prop_keeps_the_damage_table_its_class_names() {
+    let data = data();
+    let table = PropDataTable::parse(
+        r#""PropData.txt" { "Glass.Small" { "health" "5" "damage_table" "glass" } }"#,
+    );
+    let bottle = PropModel {
+        key_values: Some("prop_data { \"base\" \"Glass.Small\" }".to_owned()),
+        ..crate_model()
+    };
+    let placement = PropPlacement::new("models/bottle.mdl", [0.0; 3], [0.0; 3], PropKind::Physics);
+    let breakable = bottle
+        .desc(&placement, &data.physics, &table)
+        .expect("solid")
+        .breakable
+        .expect("breakable");
+    assert_eq!(breakable.health, 5.0);
+    assert_eq!(breakable.damage_table.as_deref(), Some("glass"));
 }
 
 #[test]
@@ -379,5 +406,44 @@ fn every_stock_map_loads_as_a_level() {
         if map == "dm_lockdown" {
             assert!(explosive > 0, "dm_lockdown has explosive barrels");
         }
+    }
+}
+
+/// How long a server lets its props settle (`rl_server`'s `SETTLE_SECONDS`).
+const SECONDS_BEFORE_ANYONE_ARRIVES: f32 = 4.0;
+
+/// Runs every stock map for a few seconds with nobody in it: props that start
+/// on the ground, a shelf or each other must not break themselves.
+#[test]
+#[ignore = "requires an HL2DM install; set RUSTLIFE_TEST_GAME_DIR"]
+fn no_stock_map_breaks_its_own_props_settling() {
+    let Ok(dir) = std::env::var("RUSTLIFE_TEST_GAME_DIR") else {
+        return;
+    };
+    let options = source_fs::content::ContentOptions {
+        game_dir: Some(dir.into()),
+        ..Default::default()
+    };
+    let game = source_fs::content::mount_game(&options).expect("mount the game");
+    let data = data();
+    for map in [
+        "dm_lockdown",
+        "dm_overwatch",
+        "dm_powerhouse",
+        "dm_resistance",
+        "dm_runoff",
+        "dm_steamlab",
+        "dm_underpass",
+    ] {
+        let level = rl_level::load(&game.vfs, map, &data).expect("load level");
+        let mut built = level.simulation(&data);
+        built.simulation.settle(SECONDS_BEFORE_ANYONE_ARRIVES);
+        let mut broke = Vec::new();
+        for _ in 0..(66 * 6) {
+            let events = built.simulation.tick(&[]);
+            broke.extend(events.prop_breaks.iter().map(|broke| broke.body));
+        }
+        eprintln!("{map}: {} props broke by themselves", broke.len());
+        assert!(broke.is_empty(), "{map}: {broke:?}");
     }
 }

@@ -180,13 +180,49 @@ A physics prop whose model says it breaks (`prop_data` in the model, or a
 class in `scripts/propdata.txt`; a map entity's own `health` wins) has
 health. Blows (a bullet, a swing, a blast, a hard impact) queue up as the
 tick runs and are applied at its end, each scaled by what the prop is made
-of: a crate takes more from a club than a bullet. Model health is
-multiplied by `breakables.health_scale` — Source's `prop_data` values are
-tuned for a lighter damage model — so bottles, boxes and sinks take a few
-solid hits rather than one. A new prop's first contacts while it settles
-into the map — pushing itself out of a floor or a neighbouring prop — do not
-damage it, so a tightly placed crate does not break at map load. A prop
-whose health runs out *breaks*: it leaves the physics world (its body id
+of: a crate takes more from a club than a bullet. Weapons do
+`breakables.weapon_toughness` times less than the model's `dmg.*` says, as
+Source's `prop_data` values are tuned for a lighter damage model, so bottles,
+boxes and sinks take a few solid hits rather than one. A new prop's first
+contacts while it settles into the map (pushing itself out of a floor or a
+neighbouring prop), and a server's first seconds before anyone arrives, do not
+damage it, so a tightly placed crate does not break at map load.
+
+**Impacts** hurt a prop by its `damage_table` (`prop_data`; only `Glass.Small`,
+`Glass.Window` and `Pottery.Small` name one, `glass`; the rest use `npc`). The
+tables and the rule are HL2DM's `CalculatePhysicsImpactDamage`, in
+`breakables.impact.tables`:
+
+```text
+E = (Δv² · m + Δv_other² · m_other · large_mass) / m · energy_scale
+damage = the last step of `linear` that E reaches (no interpolation)
+```
+
+Source's Δv is each body's speed before minus after. Box3D only gives a
+contact's approach speed, and a body's velocities span a whole step of all its
+contacts, so the two speed changes here are the closing speed shared out by
+mass: all of it for a body meeting something immovable, else in inverse
+proportion to the masses. Bounces take nothing off the blow. Heavy things hit
+harder (`large_mass_min`, `_scale`, `_falling_scale`), a small mass's damage is
+capped, and what a player holds neither hurts anything nor is hurt by the map.
+The tables' angular steps are carried but unused: HL2DM reads them only for
+objects flagged as slicing, and none is.
+
+`energy_scale` is Source's `physdamagescale`, which defaults to 0.1. Glass keeps
+that: a 5 hp bottle or vase breaks at 79 units/s, a drop of about 5 units (8
+units certainly). The other tables have 0.5, our deviation: at 0.1 a 30 hp
+crate needs a fall of over 1000 units. At 0.5 a crate takes 5 from a 40-unit
+drop and nothing from a shove into a wall at running pace (190 units/s), and
+breaks at 495 units/s: a fall of about 204 units, or any throw or punt.
+
+Only a new hit hurts: `Box3D` goes on reporting a contact while the two press
+together, so a hit between surfaces that hit within `repeat_seconds` does no
+harm (rubbing, or a prop held against a wall), and of one step's hits between
+two bodies only the hardest counts (a crate landing across two brushes takes
+one blow). Slower contacts than `report_speed` are not heard, but are still
+judged by their tables, down to the slowest any table notices (8 units/s).
+
+A prop whose health runs out *breaks*: it leaves the physics world (its body id
 stays), everyone is
 told (`PropBreak`, and the replicated `broken` set for those who join
 later), the client scatters its gibs as small Box3D bodies (the chunk's

@@ -99,6 +99,9 @@ pub struct Breakable {
     pub gib_count: u32,
     /// Seconds after breaking that it comes back where it was, if it does.
     pub respawn: Option<f32>,
+    /// The table of what impacts do to it (`physics.ron`), if its `prop_data`
+    /// names one; otherwise the default.
+    pub damage_table: Option<String>,
 }
 
 /// One piece a prop breaks into.

@@ -592,6 +592,7 @@ mod tests {
                 pieces: Vec::new(),
                 gib_count: 0,
                 respawn: None,
+                damage_table: None,
             }),
             surface: String::new(),
         };

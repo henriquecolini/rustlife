@@ -962,6 +962,7 @@ fn breakable_box(
             pieces: Vec::new(),
             gib_count: 4,
             respawn: None,
+            damage_table: None,
         }),
         surface: "metal".to_owned(),
     }
@@ -1441,18 +1442,66 @@ fn a_barrel_that_is_only_put_down_with_the_gravity_gun_stays_whole() {
     assert!(!arena.sim.physics().is_broken(barrel));
 }
 
+/// A prop made as HL2DM's are, asleep `height` above the floor at the far
+/// corner of the arena: `wood_crate001a`'s 30 kg and 30 health by default.
+fn hanging_crate(data: &GameData, height: f32) -> PropDesc {
+    PropDesc {
+        mass: 30.0,
+        start_asleep: true,
+        material: *data.physics.materials.get("wood_crate"),
+        ..breakable_box(
+            data,
+            Vec3::new(-200.0, 400.0, height),
+            (16.0, 32.0),
+            30.0,
+            None,
+        )
+    }
+}
+
+/// `garbage_glassbottle001a`: 1 kg, 5 health, the glass damage table.
+fn hanging_bottle(data: &GameData, height: f32) -> PropDesc {
+    fragile(data, height, 1.0, "glassbottle")
+}
+
+/// `terracotta01`: 2 kg, 5 health, the glass damage table.
+fn hanging_vase(data: &GameData, height: f32) -> PropDesc {
+    fragile(data, height, 2.0, "pottery")
+}
+
+fn fragile(data: &GameData, height: f32, mass: f32, surface: &str) -> PropDesc {
+    let mut desc = PropDesc {
+        mass,
+        start_asleep: true,
+        material: *data.physics.materials.get(surface),
+        ..breakable_box(
+            data,
+            Vec3::new(-200.0, 400.0, height),
+            (4.0, 12.0),
+            5.0,
+            None,
+        )
+    };
+    if let Some(breakable) = &mut desc.breakable {
+        breakable.damage_table = Some("glass".to_owned());
+    }
+    desc
+}
+
+/// Adds `desc` asleep in the air, waits until new props may be hurt, and lets
+/// it go: what came of it.
+fn drop_it(arena: &mut Arena, desc: &PropDesc) -> (BodyId, Vec<TickEvents>) {
+    let body = arena.sim.add_prop(desc);
+    arena.idle(50);
+    arena.sim.set_prop_velocity(body, Vec3::new(0.0, 0.0, -1.0));
+    (body, arena.idle(200))
+}
+
 #[test]
 fn a_hard_fall_breaks_a_crate() {
     let data = data();
     let mut arena = Arena::new(&data, 2000.0);
-    let crate_ = arena.sim.add_prop(&breakable_box(
-        &data,
-        Vec3::new(-200.0, 400.0, 500.0),
-        (8.0, 16.0),
-        20.0,
-        None,
-    ));
-    let events = arena.idle(150);
+    let (crate_, events) = drop_it(&mut arena, &hanging_crate(&data, 500.0));
     let broke = breaks(&events);
     assert_eq!(broke.len(), 1, "{broke:?}");
     assert_eq!(broke[0].body, crate_);
@@ -1466,18 +1515,159 @@ fn a_hard_fall_breaks_a_crate() {
 }
 
 #[test]
+fn a_crate_breaks_falling_about_200_units_and_not_much_less() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let (_, events) = drop_it(&mut arena, &hanging_crate(&data, 180.0));
+    assert!(
+        breaks(&events).is_empty(),
+        "180 units: {:?}",
+        breaks(&events)
+    );
+    let mut arena = Arena::new(&data, 2000.0);
+    let (_, events) = drop_it(&mut arena, &hanging_crate(&data, 230.0));
+    assert_eq!(breaks(&events).len(), 1, "230 units");
+}
+
+#[test]
 fn a_gentle_drop_leaves_a_crate_whole() {
     let data = data();
     let mut arena = Arena::new(&data, 2000.0);
-    let crate_ = arena.sim.add_prop(&breakable_box(
-        &data,
-        Vec3::new(-200.0, 400.0, 6.0),
-        (8.0, 16.0),
-        20.0,
-        None,
-    ));
-    let events = arena.idle(150);
+    let (crate_, events) = drop_it(&mut arena, &hanging_crate(&data, 40.0));
     assert!(breaks(&events).is_empty());
+    assert!(!arena.sim.physics().is_broken(crate_));
+}
+
+/// An arena with a wall across +X, and a crate waiting a little way off it.
+fn crate_by_a_wall(data: &GameData) -> (Arena, BodyId) {
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(-300.0, 300.0, 0.0),
+        Vec3::new(-280.0, 500.0, 300.0),
+    );
+    let mut arena = Arena::with_world(data, 2000.0, wall);
+    let crate_ = arena.sim.add_prop(&hanging_crate(data, 1.0));
+    arena.idle(50);
+    (arena, crate_)
+}
+
+#[test]
+fn a_shove_into_a_wall_leaves_a_crate_whole() {
+    let data = data();
+    let (mut arena, crate_) = crate_by_a_wall(&data);
+    arena
+        .sim
+        .set_prop_velocity(crate_, Vec3::new(-190.0, 0.0, 0.0));
+    let events = arena.idle(60);
+    assert!(breaks(&events).is_empty(), "{:?}", breaks(&events));
+}
+
+#[test]
+fn a_hard_blow_into_a_wall_breaks_a_crate() {
+    let data = data();
+    let (mut arena, crate_) = crate_by_a_wall(&data);
+    let launch = data.manipulator.launch.speed_for(30.0);
+    arena
+        .sim
+        .set_prop_velocity(crate_, Vec3::new(-launch, 0.0, 0.0));
+    let events = arena.idle(30);
+    assert_eq!(breaks(&events).len(), 1, "{:?}", breaks(&events));
+    assert_eq!(breaks(&events)[0].body, crate_);
+}
+
+#[test]
+fn a_crate_rubbing_or_pressed_against_a_wall_is_only_hurt_the_once() {
+    let data = data();
+    let (mut arena, crate_) = crate_by_a_wall(&data);
+    // Each hit at this speed takes a third of its health.
+    let mut events = Vec::new();
+    for _ in 0..200 {
+        arena
+            .sim
+            .set_prop_velocity(crate_, Vec3::new(-400.0, 0.0, 0.0));
+        events.extend(arena.idle(1));
+    }
+    assert!(breaks(&events).is_empty(), "{:?}", breaks(&events));
+    assert!(
+        events
+            .iter()
+            .flat_map(|e| &e.prop_impacts)
+            .filter(|impact| impact.body == crate_)
+            .count()
+            > 100,
+        "it did go on pressing"
+    );
+}
+
+#[test]
+fn repeated_blows_add_up() {
+    let data = data();
+    let (mut arena, crate_) = crate_by_a_wall(&data);
+    let mut events = Vec::new();
+    // Off the wall and back into it, far enough apart to be new hits.
+    for _ in 0..8 {
+        arena
+            .sim
+            .set_prop_velocity(crate_, Vec3::new(300.0, 0.0, 0.0));
+        events.extend(arena.idle(30));
+        arena
+            .sim
+            .set_prop_velocity(crate_, Vec3::new(-400.0, 0.0, 0.0));
+        events.extend(arena.idle(30));
+    }
+    assert_eq!(breaks(&events).len(), 1, "{:?}", breaks(&events));
+}
+
+#[test]
+fn a_bottle_dropped_a_little_way_breaks() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let (bottle, events) = drop_it(&mut arena, &hanging_bottle(&data, 8.0));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, bottle);
+}
+
+#[test]
+fn a_vase_dropped_a_little_way_breaks() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let (vase, events) = drop_it(&mut arena, &hanging_vase(&data, 8.0));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, vase);
+}
+
+#[test]
+fn a_bottle_set_down_all_but_on_the_floor_is_left_whole() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let (bottle, events) = drop_it(&mut arena, &hanging_bottle(&data, 2.0));
+    assert!(breaks(&events).is_empty(), "{:?}", breaks(&events));
+    assert!(!arena.sim.physics().is_broken(bottle));
+}
+
+#[test]
+fn a_bottle_breaks_on_a_landing_too_slow_to_be_heard() {
+    let data = data();
+    let report = data.physics.breakables.impact.report_speed;
+    let fall = (2.0 * data.physics.gravity * 8.0_f32).sqrt();
+    assert!(fall < report, "{fall} is under {report}");
+    let mut arena = Arena::new(&data, 2000.0);
+    let (_, events) = drop_it(&mut arena, &hanging_bottle(&data, 8.0));
+    assert_eq!(breaks(&events).len(), 1);
+    assert_eq!(events.iter().flat_map(|e| &e.prop_impacts).count(), 0);
+}
+
+#[test]
+fn a_bottle_dropped_on_a_crate_breaks_and_the_crate_is_left_whole() {
+    let data = data();
+    let mut arena = Arena::new(&data, 2000.0);
+    let crate_ = arena.sim.add_prop(&hanging_crate(&data, 0.5));
+    arena.idle(50);
+    let (bottle, events) = drop_it(&mut arena, &hanging_bottle(&data, 60.0));
+    let broke = breaks(&events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, bottle);
     assert!(!arena.sim.physics().is_broken(crate_));
 }
 
@@ -1492,9 +1682,14 @@ fn a_crate_spawned_inside_the_floor_does_not_break_while_settling() {
         20.0,
         None,
     ));
-    let events = arena.idle(20);
+    let bottle = arena.sim.add_prop(&PropDesc {
+        start_asleep: false,
+        ..fragile(&data, -4.0, 1.0, "glassbottle")
+    });
+    let events = arena.idle(100);
     assert!(breaks(&events).is_empty(), "{:?}", breaks(&events));
     assert!(!arena.sim.physics().is_broken(crate_));
+    assert!(!arena.sim.physics().is_broken(bottle));
 }
 
 #[test]

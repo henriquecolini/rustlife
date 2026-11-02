@@ -203,6 +203,9 @@ pub struct PhysicsWorld {
     anchor: Option<b3::BodyId>,
     /// Props that struck props or the map during the last step.
     contacts: Vec<ContactImpact>,
+    /// The surfaces that have just hit each other, and for how many more
+    /// steps another hit between them is not a new one.
+    recent_hits: Vec<((i32, i32), u32)>,
     config: PhysicsConfig,
     dt: f32,
 }
@@ -229,7 +232,10 @@ impl PhysicsWorld {
         def.gravity = to_b3(Vec3::new(0.0, 0.0, -config.gravity));
         let mut world = World::new(&def);
         world_set_gravity(&mut world, def.gravity);
-        world_set_hit_event_threshold(&mut world, config.breakables.impact.report_speed.max(0.0));
+        world_set_hit_event_threshold(
+            &mut world,
+            config.breakables.impact.slowest_contact().max(0.0),
+        );
         world_set_maximum_linear_speed(&mut world, config.max_speed.max(0.0));
         world_set_contact_tuning(&mut world, 30.0, 10.0, config.max_corrective_speed.max(0.0));
         let shapes = statics::add_map(&mut world, map);
@@ -250,6 +256,7 @@ impl PhysicsWorld {
             movers,
             anchor: None,
             contacts: Vec::new(),
+            recent_hits: Vec::new(),
             config: config.clone(),
             dt,
         }
@@ -512,7 +519,8 @@ impl PhysicsWorld {
         let sub_steps = i32::try_from(self.config.ccd_substeps.max(1)).unwrap_or(1);
         let dt = self.dt;
         self.b3_world_mut().step(dt, sub_steps);
-        self.contacts = self.contact_impacts(&before, self.config.breakables.impact.report_speed);
+        let hits = self.contact_impacts(&before, self.config.breakables.impact.slowest_contact());
+        self.contacts = self.freshen_hits(hits);
         self.clamp_velocities();
         self.refresh_planes();
         self.forget_separated();
