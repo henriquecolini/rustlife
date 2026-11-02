@@ -117,7 +117,8 @@ The **Gravity Gun** is a weapon whose fire modes are `Shot::Manipulator`.
 The inventory never fires it: once it is deployed, the simulation runs the
 tool every tick with the buttons ([physics.md](physics.md)), and the fire
 modes' intervals are its rest after acting. Its aim is thick: it takes props
-near the crosshair as well as under it.
+near the crosshair as well as under it. Pulling in a pickup the player can use
+collects it.
 
 ### The weapons
 

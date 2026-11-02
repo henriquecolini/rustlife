@@ -224,6 +224,7 @@ after a launch, punt or dry fire, secondary after a grab or drop.
 | Input | Action |
 |-------|--------|
 | Secondary fire, held | Grab a grabbable prop within `grab.range` weighing at most `grab.max_mass`. Pull one within `grab.pull_range` (1000, four times HL2's `physcannon_tracelength`) towards you, picking up speed at `grab.pull_accel` to `grab.pull_speed`, until it is close enough to grab: far props gravitate slowly and arrive fast. |
+| Secondary fire, held, on a pickup the player can use | Pull it all the way in, however close, rather than grabbing it: the player takes it on touching it. One they cannot use (a medkit at full health) is grabbed like any prop, and never taken while held. |
 | Secondary fire, pressed while holding | Let go. Secondary fire must then be released before it reaches for another prop. |
 | Primary fire while holding | Launch the prop along the view at `launch.speed × mass_curve(mass)`. |
 | Primary fire otherwise | Punt the dynamic prop in the aim's way within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. |

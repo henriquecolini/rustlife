@@ -2,8 +2,9 @@
 //!
 //! - **Secondary fire, held**, aims at a prop: within grab range it is
 //!   picked up; farther out, but within pull range, it is drawn towards the
-//!   player until it is close enough to grab. Pressing secondary fire again
-//!   lets go.
+//!   player until it is close enough to grab. A pickup the player can use is
+//!   drawn all the way in, to be collected on touching them; one they cannot use
+//!   is grabbed like any prop. Pressing secondary fire again lets go.
 //! - **Holding.** The held prop's centre of mass is steered to a point in
 //!   front of the eyes ([`HoldConfig`](rl_data::HoldConfig)), and it turns
 //!   with the view's yaw, keeping the orientation it had relative to the
@@ -106,6 +107,16 @@ struct Held {
     blocked_secs: f32,
 }
 
+/// What reaching for a prop depends on besides the aim.
+struct Reach<'a> {
+    /// The reaching player's box.
+    player_body: BodyId,
+    /// Pickups to pull in rather than grab.
+    collectable: &'a [BodyId],
+    /// How long the tool rests after a grab.
+    intervals: Intervals,
+}
+
 /// One player's Manipulator.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Manipulator {
@@ -139,13 +150,16 @@ impl Manipulator {
 
     /// Runs the tool for one tick of `dt` seconds for `player` (whose box
     /// is `player_body`), aiming along `aim` with `buttons` held, resting
-    /// for `intervals` after acting.
+    /// for `intervals` after acting. The props in `collectable` are pickups the
+    /// player can use: they are pulled all the way in rather than grabbed, and
+    /// the player collects them on touching them.
     pub fn tick(
         &mut self,
         player_body: BodyId,
         aim: &Aim,
         buttons: Buttons,
         intervals: Intervals,
+        collectable: &[BodyId],
         dt: f32,
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
@@ -179,7 +193,12 @@ impl Manipulator {
         } else if buttons.contains(Buttons::ATTACK) && self.primary_cooldown == 0.0 {
             Some(self.punt(aim, world, physics, config, intervals))
         } else if secondary_held && !self.secondary_spent && self.secondary_cooldown == 0.0 {
-            self.reach(player_body, aim, dt, world, physics, config, intervals)
+            let reach = Reach {
+                player_body,
+                collectable,
+                intervals,
+            };
+            self.reach(&reach, aim, dt, world, physics, config)
         } else {
             None
         }
@@ -229,21 +248,21 @@ impl Manipulator {
     }
 
     /// Grabs the prop in the aim's way if it is in grab range, or pulls it
-    /// closer if it is in pull range.
+    /// closer if it is in pull range, or if the player collects it on touching
+    /// it.
     fn reach(
         &mut self,
-        player_body: BodyId,
+        reach: &Reach<'_>,
         aim: &Aim,
         dt: f32,
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
-        intervals: Intervals,
     ) -> Option<ToolEvent> {
         let grab = &config.grab;
         let (body, point) = find_target(aim, world, physics, config, grab.reach())?;
-        if point.distance(aim.eye) <= grab.range {
-            physics.set_held(body, Some(player_body));
+        if point.distance(aim.eye) <= grab.range && !reach.collectable.contains(&body) {
+            physics.set_held(body, Some(reach.player_body));
             let rotation = physics
                 .pose(body)
                 .map_or(Quat::IDENTITY, |pose| pose.rotation);
@@ -252,7 +271,7 @@ impl Manipulator {
                 relative_rotation: aim.yaw_rotation().inverse() * rotation,
                 blocked_secs: 0.0,
             });
-            self.secondary_cooldown = intervals.secondary;
+            self.secondary_cooldown = reach.intervals.secondary;
             return Some(ToolEvent::Grabbed(body));
         }
         let center = physics.center_of_mass(body)?;

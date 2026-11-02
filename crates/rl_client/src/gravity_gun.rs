@@ -272,8 +272,9 @@ fn read_gun(
 }
 
 /// What the gun of `player` is doing: holding a prop, pulling one in
-/// (`pulling_wanted`, the alternate button held, on a prop beyond grab range but
-/// within reach), ready to take one close by, or nothing.
+/// (`pulling_wanted`, the alternate button held, on a prop within reach beyond
+/// grab range, or a pickup the player can use, which is pulled all the way in),
+/// ready to take one close by, or nothing.
 fn gun_state(
     sim: &rl_sim::simulation::Simulation,
     player: rl_sim::simulation::PlayerId,
@@ -298,7 +299,9 @@ fn gun_state(
     let grab = &config.grab;
     let target = |range| find_target(&aim, sim.world(), sim.physics(), config, range);
     if pulling_wanted
-        && target(grab.reach()).is_some_and(|(_, point)| point.distance(eye) > grab.range)
+        && target(grab.reach()).is_some_and(|(body, point)| {
+            point.distance(eye) > grab.range || sim.collectable_bodies(player).contains(&body)
+        })
     {
         return Look::Working;
     }

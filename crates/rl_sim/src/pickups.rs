@@ -136,6 +136,43 @@ impl Pickup {
         given
     }
 
+    /// Whether a player could use any of it, as [`take`](Self::take) would have
+    /// it, without giving it to them: what the Manipulator asks of a pickup it
+    /// pulls in.
+    #[must_use]
+    pub fn usable_by(
+        &self,
+        vitals: &Vitals,
+        inventory: &Inventory,
+        arsenal: &Arsenal,
+        player: &PlayerConfig,
+    ) -> bool {
+        if !self.available() || self.station.is_some() {
+            return false;
+        }
+        let room_for = |&(ammo, count): &(AmmoId, u32)| {
+            arsenal.ammo(ammo).is_some_and(|config| {
+                count.min(config.max.saturating_sub(inventory.ammo(ammo))) > 0
+            })
+        };
+        match &self.gives {
+            Gives::Weapon {
+                weapon,
+                ammo,
+                owned_ammo,
+            } => {
+                if inventory.has(*weapon) {
+                    owned_ammo.as_ref().is_some_and(room_for)
+                } else {
+                    arsenal.weapon(*weapon).is_some() || ammo.as_ref().is_some_and(room_for)
+                }
+            }
+            Gives::Health(amount) => *amount > 0.0 && vitals.health < player.health.max,
+            Gives::Armor(amount) => *amount > 0.0 && vitals.armor < player.armor.max,
+            Gives::Ammo(rounds) => rounds.iter().any(room_for),
+        }
+    }
+
     /// Gives it to a player if they can use any of it; then it is away for
     /// its respawn time. Returns whether it was taken.
     pub fn take(
@@ -363,6 +400,73 @@ mod tests {
             !pickups[0].take(&mut vitals, &mut inventory, &arsenal, &data.player),
             "nothing to gain"
         );
+    }
+
+    /// Whether `pickup` is usable agrees with whether it is taken, and asking
+    /// changes nothing.
+    fn usable_as_taken(
+        pickup: &Pickup,
+        mut vitals: Vitals,
+        inventory: &Inventory,
+        arsenal: &Arsenal,
+        player: &PlayerConfig,
+    ) -> bool {
+        let usable = pickup.usable_by(&vitals, inventory, arsenal, player);
+        let (mut pickup, mut inventory) = (pickup.clone(), inventory.clone());
+        assert_eq!(
+            usable,
+            pickup.take(&mut vitals, &mut inventory, arsenal, player),
+            "{} says it is {}usable, but take disagrees",
+            pickup.id,
+            if usable { "" } else { "not " }
+        );
+        usable
+    }
+
+    #[test]
+    fn a_pickup_is_usable_when_it_would_be_taken() {
+        let (data, arsenal, mut pickups) = pickups(&[
+            MapEntity::new("item_healthkit", [0.0; 3]),
+            MapEntity::new("item_battery", [0.0; 3]),
+            MapEntity::new("weapon_shotgun", [0.0; 3]),
+            MapEntity::new("item_box_buckshot", [0.0; 3]),
+            MapEntity::new("item_healthcharger", [0.0; 3]),
+        ]);
+        assert_eq!(pickups.len(), 5, "the items these tests use");
+        let player = &data.player;
+        let mut vitals = Vitals::spawn(player);
+        let mut inventory = Inventory::empty(&arsenal);
+        let usable = |pickup: &Pickup, vitals: &Vitals, inventory: &Inventory| {
+            usable_as_taken(pickup, *vitals, inventory, &arsenal, player)
+        };
+
+        // Health and armor, up to their maxima.
+        vitals.health = player.health.max;
+        assert!(!usable(&pickups[0], &vitals, &inventory));
+        vitals.health -= 1.0;
+        assert!(usable(&pickups[0], &vitals, &inventory));
+        vitals.armor = player.armor.max;
+        assert!(!usable(&pickups[1], &vitals, &inventory));
+        vitals.armor -= 1.0;
+        assert!(usable(&pickups[1], &vitals, &inventory));
+
+        // A new weapon always, one already carried for its ammo.
+        let shells = arsenal.find_ammo("buckshot").expect("ammo");
+        assert!(usable(&pickups[2], &vitals, &inventory));
+        inventory.give_weapon(&arsenal, arsenal.find_weapon("scattergun").expect("weapon"));
+        assert!(usable(&pickups[2], &vitals, &inventory));
+        assert!(usable(&pickups[3], &vitals, &inventory), "a box of it too");
+        inventory.give_ammo(&arsenal, shells, 10_000);
+        assert!(!usable(&pickups[2], &vitals, &inventory), "full up");
+        assert!(!usable(&pickups[3], &vitals, &inventory), "full up");
+
+        // A station is used, not taken.
+        vitals.health = 1.0;
+        assert!(!usable(&pickups[4], &vitals, &inventory));
+
+        // One that is away is not there to use.
+        pickups[0].away = 1.0;
+        assert!(!usable(&pickups[0], &vitals, &inventory));
     }
 
     #[test]

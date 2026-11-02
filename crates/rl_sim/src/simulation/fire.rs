@@ -11,7 +11,7 @@ use super::{BlastSource, ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEv
 use crate::collision::Hull;
 use crate::combat::hitscan::{self, ShotTrace, Struck};
 use crate::combat::{Cause, Damage, Target, blast};
-use crate::movement::{UserCmd, view_direction};
+use crate::movement::{Buttons, UserCmd, view_direction};
 use crate::rng::Rng;
 use crate::scene::Scene;
 use crate::tools::manipulator::{Aim, ToolEvent};
@@ -43,6 +43,12 @@ impl Simulation {
     pub(super) fn run_weapon(&mut self, id: PlayerId, cmd: &UserCmd, events: &mut TickEvents) {
         let arsenal = Arc::clone(&self.arsenal);
         let movement_eye = self.eye_position(id);
+        // What secondary fire pulls in for the player to collect.
+        let collectable = if cmd.buttons.contains(Buttons::ATTACK2) {
+            self.collectable_bodies(id)
+        } else {
+            Vec::new()
+        };
         // A SLAM in hand takes the mode the aim calls for.
         self.aim_slam(id, cmd.pitch, cmd.yaw, true);
         let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
@@ -72,6 +78,7 @@ impl Simulation {
                 &aim,
                 cmd.buttons,
                 intervals,
+                &collectable,
                 self.dt,
                 &self.world,
                 &mut self.physics,

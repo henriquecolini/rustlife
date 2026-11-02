@@ -1,7 +1,7 @@
 //! Physical pickups through the whole simulation: a medkit falls to the
 //! floor and knocks on it, taking it hides its body until it respawns where
-//! it was placed, and the Manipulator can grab and throw it without taking
-//! it.
+//! it was placed, the Manipulator can grab and throw it without taking it, and
+//! pulls in what the player can use for them to collect.
 
 #![allow(
     clippy::expect_used,
@@ -226,4 +226,230 @@ fn a_pickup_can_be_grabbed_without_being_taken() {
         "the Manipulator did not throw the medkit: {events:?}"
     );
     assert_eq!(sim.player(player).expect("player").manipulator.held(), None);
+}
+
+/// A player with the Manipulator in hand and a pickup of class `class` lying
+/// `distance` units ahead, settled.
+struct PullRange {
+    sim: Simulation,
+    player: PlayerId,
+    body: BodyId,
+}
+
+impl PullRange {
+    fn new(data: &GameData, class: &str, distance: f32) -> Self {
+        let mut sim = Simulation::new(Arc::new(floor()), data);
+        let origin = Vec3::new(distance, 0.0, 0.0);
+        sim.add_entities(&[MapEntity::new(class, origin.to_array())]);
+        sim.add_pickup_bodies([Some(pickup_desc(origin))]);
+        let body = sim.pickups()[0].body.expect("the pickup lies about");
+        let player = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
+        sim.tick(&[]);
+        let select = UserCmd {
+            select: sim.arsenal().find_weapon("manipulator"),
+            ..UserCmd::default()
+        };
+        sim.tick(&[(player, select)]);
+        for _ in 0..100 {
+            sim.tick(&[(player, UserCmd::default())]);
+        }
+        Self { sim, player, body }
+    }
+
+    fn center(&self) -> Vec3 {
+        self.sim.physics().center_of_mass(self.body).expect("body")
+    }
+
+    /// Holds secondary fire at the pickup for up to `ticks` ticks, `follow`ing
+    /// it with the view or leaving the view where it starts. Returns whether it
+    /// was taken and whether it was grabbed; stops when either happens.
+    fn pull(&mut self, ticks: usize, follow: bool) -> (bool, bool) {
+        let pitch = aim_pitch(&self.sim, self.player, self.center());
+        for _ in 0..ticks {
+            let cmd = UserCmd {
+                pitch: if follow {
+                    aim_pitch(&self.sim, self.player, self.center())
+                } else {
+                    pitch
+                },
+                buttons: Buttons::ATTACK2,
+                ..UserCmd::default()
+            };
+            let events = self.sim.tick(&[(self.player, cmd)]);
+            let taken = !events.pickups.is_empty();
+            let grabbed = events
+                .tools
+                .iter()
+                .any(|(_, event)| matches!(event, ToolEvent::Grabbed(_)));
+            if taken || grabbed {
+                return (taken, grabbed);
+            }
+        }
+        (false, false)
+    }
+
+    fn hurt(&mut self) {
+        self.sim
+            .player_mut(self.player)
+            .expect("player")
+            .vitals
+            .health = 50.0;
+    }
+
+    fn holds_it(&self) -> bool {
+        self.sim
+            .player(self.player)
+            .expect("player")
+            .manipulator
+            .held()
+            == Some(self.body)
+    }
+}
+
+#[test]
+fn a_hurt_player_pulling_a_medkit_collects_it() {
+    let data = data();
+    // Close by, past grab range, and from afar. Like any pull, one from afar has
+    // to be followed with the view; a short one gets there on its own.
+    for (distance, follow) in [
+        (100.0, false),
+        (100.0, true),
+        (300.0, false),
+        (300.0, true),
+        (700.0, true),
+    ] {
+        let mut range = PullRange::new(&data, "item_healthkit", distance);
+        range.hurt();
+        assert_eq!(
+            range.pull(132 + (distance / 5.0) as usize, follow),
+            (true, false),
+            "from {distance}, following it: {follow}"
+        );
+        let player = range.sim.player(range.player).expect("player");
+        assert_eq!(player.vitals.health, 75.0);
+        assert!(!range.sim.pickups()[0].available());
+        assert!(!range.sim.physics().prop_enabled(range.body));
+        assert_eq!(player.manipulator.held(), None);
+    }
+}
+
+#[test]
+fn a_pull_stops_short_of_nothing_once_the_medkit_is_taken() {
+    let data = data();
+    let mut range = PullRange::new(&data, "item_healthkit", 100.0);
+    range.hurt();
+    assert!(range.pull(200, true).0);
+    // Secondary fire goes on being held, on nothing: nothing happens.
+    let cmd = UserCmd {
+        buttons: Buttons::ATTACK2,
+        ..UserCmd::default()
+    };
+    for _ in 0..30 {
+        let events = range.sim.tick(&[(range.player, cmd)]);
+        assert!(events.tools.is_empty(), "{events:?}");
+        assert!(events.pickups.is_empty(), "{events:?}");
+    }
+}
+
+#[test]
+fn a_pulled_medkit_never_gets_past_the_player() {
+    let data = data();
+    let mut range = PullRange::new(&data, "item_healthkit", 700.0);
+    range.hurt();
+    let mut last = range.center().x;
+    for _ in 0..300 {
+        if range.pull(1, true).0 {
+            return;
+        }
+        let x = range.center().x;
+        assert!(x <= last + 1.0, "it turned back: {last} -> {x}");
+        assert!(x > 0.0, "it passed the player without being taken: {x}");
+        last = x;
+    }
+    panic!("the medkit never arrived, last at {last}");
+}
+
+#[test]
+fn a_player_at_full_health_holds_the_medkit_they_pull_and_does_not_take_it() {
+    let data = data();
+    let mut range = PullRange::new(&data, "item_healthkit", 400.0);
+    assert_eq!(range.pull(400, true), (false, true));
+    assert!(range.holds_it());
+    assert!(range.sim.pickups()[0].available());
+    assert_eq!(
+        range
+            .sim
+            .player(range.player)
+            .expect("player")
+            .vitals
+            .health,
+        100.0
+    );
+}
+
+#[test]
+fn a_player_at_full_armor_holds_the_battery_they_pull() {
+    let data = data();
+    let mut range = PullRange::new(&data, "item_battery", 400.0);
+    range
+        .sim
+        .player_mut(range.player)
+        .expect("player")
+        .vitals
+        .armor = data.player.armor.max;
+    assert_eq!(range.pull(400, true), (false, true));
+    assert!(range.holds_it());
+    assert!(range.sim.pickups()[0].available());
+}
+
+#[test]
+fn a_player_short_of_armor_collects_the_battery_they_pull() {
+    let data = data();
+    let mut range = PullRange::new(&data, "item_battery", 400.0);
+    assert_eq!(range.pull(400, true), (true, false));
+    assert!(range.sim.player(range.player).expect("player").vitals.armor > 0.0);
+}
+
+#[test]
+fn a_player_with_the_weapon_and_full_ammo_holds_the_one_they_pull() {
+    let data = data();
+    let mut range = PullRange::new(&data, "weapon_shotgun", 400.0);
+    let arsenal = range.sim.arsenal().clone();
+    let shotgun = arsenal.find_weapon("scattergun").expect("weapon");
+    let shells = arsenal.find_ammo("buckshot").expect("ammo");
+    let inventory = &mut range
+        .sim
+        .player_mut(range.player)
+        .expect("player")
+        .inventory;
+    inventory.give_weapon(&arsenal, shotgun);
+    inventory.give_ammo(&arsenal, shells, 10_000);
+    assert_eq!(range.pull(400, true), (false, true));
+    assert!(range.holds_it());
+    assert!(range.sim.pickups()[0].available());
+}
+
+#[test]
+fn a_player_without_the_weapon_collects_the_one_they_pull() {
+    let data = data();
+    let mut range = PullRange::new(&data, "weapon_shotgun", 400.0);
+    let shotgun = range
+        .sim
+        .arsenal()
+        .find_weapon("scattergun")
+        .expect("weapon");
+    let carried = |range: &PullRange| {
+        range
+            .sim
+            .player(range.player)
+            .expect("player")
+            .inventory
+            .has(shotgun)
+    };
+    assert!(
+        !carried(&range),
+        "the loadout must not carry it for this test"
+    );
+    assert_eq!(range.pull(400, true), (true, false));
+    assert!(carried(&range));
 }

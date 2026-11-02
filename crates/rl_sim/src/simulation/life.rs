@@ -277,6 +277,28 @@ impl Simulation {
         }
     }
 
+    /// The bodies of the pickups player `id` could use now, which they would
+    /// take on touching them: the Manipulator pulls these all the way in rather
+    /// than grabbing them.
+    #[must_use]
+    pub fn collectable_bodies(&self, id: PlayerId) -> Vec<BodyId> {
+        let Some(player) = self.player(id) else {
+            return Vec::new();
+        };
+        self.pickups
+            .iter()
+            .filter(|pickup| {
+                pickup.usable_by(
+                    &player.vitals,
+                    &player.inventory,
+                    &self.arsenal,
+                    &self.data.player,
+                )
+            })
+            .filter_map(|pickup| pickup.body)
+            .collect()
+    }
+
     /// Lets each player holding use draw from the station they look at.
     fn use_stations(&mut self, events: &mut TickEvents) {
         let holders = std::mem::take(&mut self.holders);
