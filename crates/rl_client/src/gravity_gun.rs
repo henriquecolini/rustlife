@@ -195,6 +195,9 @@ pub(crate) struct GunLook {
     pub(crate) view: Option<Entity>,
     /// What it is doing.
     pub(crate) look: Look,
+    /// Whether it threw or punted something this frame, which shuts the claws
+    /// with a sound where a target going away shuts them quietly.
+    pub(crate) threw: bool,
 }
 
 /// The game's sprites for the effects.
@@ -218,7 +221,7 @@ fn load_sprites(mut sprites: ResMut<GunSprites>, assets: Res<AssetServer>) {
 
 /// Reads what the gun is doing, from the local player's game state and
 /// whether the alternate button is held, and opens or shuts the prongs.
-fn read_gun(
+pub(crate) fn read_gun(
     time: Res<Time>,
     mut launches: MessageReader<PhyscannonImpact>,
     game: Game,
@@ -261,6 +264,7 @@ fn read_gun(
         *look = GunLook {
             view: Some(entity),
             look: state,
+            threw,
         };
         if state == Look::Shut {
             prongs.0.go_to(0.0, CLOSE_SECS, now);

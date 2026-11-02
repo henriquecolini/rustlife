@@ -1,9 +1,10 @@
 //! The Gravity Gun's own sounds, from the client's `C_WeaponPhysCannon`:
 //!
 //! - the claws' sounds, `OpenClaws` when they open on something to take (or
-//!   to hold) and `CloseClaws` when they shut on letting go of something,
-//!   played as the prongs move (`OpenElements`, `CloseElements`). Unlike the
-//!   game's, claws that merely have nothing in range any more shut quietly;
+//!   to hold) and `CloseClaws` when they shut on letting go of something or
+//!   on throwing or punting it, played as the prongs move (`OpenElements`,
+//!   `CloseElements`). Unlike the game's, claws that merely have nothing in
+//!   range any more shut quietly;
 //! - the hold loop, `HoldSound` (`hold_loop.wav`), which hums while it
 //!   holds or pulls a prop. It is a `CSoundPatch` whose volume and pitch the
 //!   game moves in straight lines: it starts silent at half pitch and comes
@@ -24,7 +25,6 @@ use super::{Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
 use crate::AppState;
 use crate::gravity_gun::{GunLook, Look};
 use crate::net::Game;
-use crate::physcannon_impact::PhyscannonImpact;
 use crate::player::LocalPlayer;
 
 /// Where the hold loop starts and ends its pitch, percent.
@@ -69,7 +69,8 @@ impl Phase {
 }
 
 /// What a change of phase sounds like. Claws that shut because nothing is in
-/// range any more make no sound; those that let go of something do.
+/// range any more make no sound; those that let go of something, or threw or
+/// punted it, do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Cue {
     /// The claws open.
@@ -84,13 +85,15 @@ pub(super) enum Cue {
     HoldFades,
 }
 
-/// The cues for going from phase `from` to phase `to`.
-pub(super) fn cues(from: Phase, to: Phase) -> Vec<Cue> {
+/// The cues for going from phase `from` to phase `to`; `threw` says the gun
+/// threw or punted something just now, which is why a `Ready` gun shuts.
+pub(super) fn cues(from: Phase, to: Phase, threw: bool) -> Vec<Cue> {
     use Phase::{Away, Ready, Shut, Working};
     let mut cues = Vec::new();
     match (from, to) {
         (Shut, Ready | Working) => cues.push(Cue::Open),
         (Working, Shut) => cues.push(Cue::Close),
+        (Ready, Shut) if threw => cues.push(Cue::Close),
         _ => {}
     }
     match (from, to) {
@@ -195,7 +198,7 @@ impl Plugin for GravityGunSoundsPlugin {
         app.init_resource::<Sounding>().add_systems(
             Update,
             gun_sounds
-                .after(crate::viewmodel::animate_view_model)
+                .after(crate::gravity_gun::read_gun)
                 .run_if(in_state(AppState::InGame)),
         );
     }
@@ -228,7 +231,6 @@ fn gun_sounds(
     game: Game,
     local: Option<Res<LocalPlayer>>,
     volumes: Volumes,
-    mut launches: MessageReader<PhyscannonImpact>,
     mut sounding: ResMut<Sounding>,
     mut player: SoundPlayer,
     mut commands: Commands,
@@ -241,12 +243,12 @@ fn gun_sounds(
     let now = time.elapsed_secs();
     let phase = Phase::of(&look);
     let local = local.as_deref();
-    if launches.read().any(|launch| launch.local)
+    if look.threw
         && let Some(live) = &mut sounding.hold
     {
         live.hold.run_down(now);
     }
-    for cue in cues(sounding.phase, phase) {
+    for cue in cues(sounding.phase, phase, look.threw) {
         match cue {
             Cue::Open | Cue::Close => {
                 let purpose = if cue == Cue::Open { "open" } else { "close" };
@@ -329,23 +331,50 @@ mod tests {
     #[test]
     fn the_claws_sound_opening_on_something_and_letting_go_but_not_on_nothing() {
         use Phase::{Away, Ready, Shut, Working};
-        assert_eq!(cues(Shut, Ready), [Cue::Open]);
-        assert!(cues(Ready, Shut).is_empty(), "nothing in range any more");
-        assert_eq!(cues(Shut, Working), [Cue::Open, Cue::HoldStarts]);
-        assert_eq!(cues(Working, Shut), [Cue::Close, Cue::HoldFades]);
-        assert!(cues(Ready, Ready).is_empty());
-        assert!(cues(Away, Shut).is_empty(), "taking the gun out is quiet");
-        assert!(cues(Ready, Away).is_empty(), "so is putting it away");
+        assert_eq!(cues(Shut, Ready, false), [Cue::Open]);
+        assert!(
+            cues(Ready, Shut, false).is_empty(),
+            "nothing in range any more"
+        );
+        assert_eq!(cues(Shut, Working, false), [Cue::Open, Cue::HoldStarts]);
+        assert_eq!(cues(Working, Shut, false), [Cue::Close, Cue::HoldFades]);
+        assert!(cues(Ready, Ready, false).is_empty());
+        assert!(
+            cues(Away, Shut, false).is_empty(),
+            "taking the gun out is quiet"
+        );
+        assert!(cues(Ready, Away, false).is_empty(), "so is putting it away");
+    }
+
+    #[test]
+    fn claws_that_shut_because_the_target_went_away_stay_quiet() {
+        assert_eq!(cues(Phase::Ready, Phase::Shut, false), []);
+    }
+
+    #[test]
+    fn claws_that_shut_because_of_a_punt_sound() {
+        assert_eq!(cues(Phase::Ready, Phase::Shut, true), [Cue::Close]);
+    }
+
+    #[test]
+    fn a_throw_sounds_once_and_claws_already_shut_have_nothing_to_close() {
+        use Phase::{Shut, Working};
+        assert_eq!(cues(Working, Shut, true), cues(Working, Shut, false));
+        assert_eq!(cues(Shut, Shut, true), [], "they were shut already");
     }
 
     #[test]
     fn the_loop_starts_when_it_takes_hold_and_runs_down_when_it_lets_go() {
         use Phase::{Away, Ready, Working};
-        assert_eq!(cues(Ready, Working), [Cue::HoldStarts]);
-        assert_eq!(cues(Working, Ready), [Cue::HoldRunsDown]);
-        assert_eq!(cues(Working, Working), []);
-        assert_eq!(cues(Away, Working), [Cue::HoldStarts], "drawn mid-pull");
-        assert_eq!(cues(Working, Away), [Cue::HoldFades]);
+        assert_eq!(cues(Ready, Working, false), [Cue::HoldStarts]);
+        assert_eq!(cues(Working, Ready, false), [Cue::HoldRunsDown]);
+        assert_eq!(cues(Working, Working, false), []);
+        assert_eq!(
+            cues(Away, Working, false),
+            [Cue::HoldStarts],
+            "drawn mid-pull"
+        );
+        assert_eq!(cues(Working, Away, false), [Cue::HoldFades]);
     }
 
     #[test]
