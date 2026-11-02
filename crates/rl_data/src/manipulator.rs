@@ -45,6 +45,10 @@ pub struct GrabConfig {
     /// The claws open, and sound it, on a prop to take within this distance
     /// of the eyes: a little past `range`, and far short of `pull_range`.
     pub open_range: f32,
+    /// Seconds the claws stay open after looking away from what they opened
+    /// on, so that sweeping the view across props does not snap them open and
+    /// shut. Looking back at something starts this over.
+    pub ready_hold_secs: f32,
 }
 
 impl GrabConfig {
@@ -141,6 +145,7 @@ impl ManipulatorConfig {
         check.non_negative("grab.pull_speed", grab.pull_speed);
         check.non_negative("grab.pull_accel", grab.pull_accel);
         check.positive("grab.open_range", grab.open_range);
+        check.non_negative("grab.ready_hold_secs", grab.ready_hold_secs);
 
         let hold = &self.hold;
         check.non_negative("hold.distance", hold.distance);
@@ -209,6 +214,7 @@ mod tests {
             pull_speed: 500.0,
             pull_accel: 800.0,
             open_range: 250.0,
+            ready_hold_secs: 2.5,
         };
         assert_eq!(grab.reach(), 1000.0);
         grab.pull_range = 0.0;

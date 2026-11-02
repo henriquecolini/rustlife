@@ -234,7 +234,10 @@ held flat past the ends. Heavier props leave slower.
 **The claws.** The client opens the gun's claws, with their sound, on a prop it
 could lift within `grab.open_range` (250, how far HL2DM's `CheckForTarget`
 looks): a little past grab range and far short of what secondary fire reaches.
-Past that they stay shut until a pull starts.
+Past that they stay shut until a pull starts. Having opened on a prop they stay
+open for `grab.ready_hold_secs` after the view leaves it, so sweeping across
+props does not snap them open and shut (HL2DM waits half a second); dropping or
+throwing something closes them at once.
 
 **Holding.** While held, a prop ignores gravity and does not collide with its
 holder. Its centre of mass is steered to the hold point, `hold.distance` plus

@@ -5,9 +5,12 @@
 //!
 //! The prongs open when the gun has something to take close by (a prop it
 //! could lift is under the crosshair, within `grab.open_range`), is pulling or
-//! is holding one, and close again otherwise. `active` is an interpolated value
-//! (`m_ElementParameter`) that moves to its target along a spline: to open
-//! takes 0.2 s, to close 0.5 s.
+//! is holding one, and close again otherwise. Having opened on something, they
+//! wait `grab.ready_hold_secs` for another target before they close ([`Latch`],
+//! which HL2DM has as a shorter delay that aiming again cancels); not after
+//! holding or throwing something, which closes them at once. `active` is an
+//! interpolated value (`m_ElementParameter`) that moves to its target along a
+//! spline: to open takes 0.2 s, to close 0.5 s.
 //!
 //! The sprites are the game's `CPhysCannonEffect`s, each with a size (units
 //! across, drawn facing the camera) and a strength that move to their targets
@@ -115,9 +118,10 @@ impl Element {
     }
 }
 
-/// The prongs' value, kept with the Gravity Gun's view model.
+/// The prongs' value and what holds them open, kept with the Gravity Gun's view
+/// model; so a gun that leaves the hand and comes back starts afresh.
 #[derive(Component, Debug, Default)]
-pub(crate) struct Prongs(pub(crate) Element);
+pub(crate) struct Prongs(pub(crate) Element, Latch);
 
 /// What the gun is doing, as far as how it looks goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -130,6 +134,58 @@ pub(crate) enum Look {
     Ready,
     /// Pulling a prop in or holding one: a brighter glow, flares and arcs.
     Working,
+}
+
+/// Seconds after a throw or punt before the gun looks for something to take
+/// again, so that it does not open on the prop flying off under the crosshair
+/// (`m_flCheckSuppressTime`, set by `PuntVPhysics` and the launch).
+const LAUNCH_BLIND_SECS: f32 = 0.25;
+
+/// Keeps [`Look::Ready`] going for a while after its target is gone, so that the
+/// claws (and their sounds, which follow the look) do not chatter as the view
+/// sweeps across props. Having worked closes them at once: only what the gun
+/// opened on and never touched is waited for.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct Latch {
+    /// What it last saw other than nothing.
+    last: Look,
+    /// When `Ready` stops outlasting its target, seconds of app time.
+    ready_until: f32,
+    /// When the gun looks for something to take again.
+    blind_until: f32,
+}
+
+impl Latch {
+    /// What the gun shows at time `now`, given what it `sees`, waiting `hold`
+    /// seconds for a target that went away.
+    fn look(&mut self, sees: Look, now: f32, hold: f32) -> Look {
+        match sees {
+            Look::Working => {
+                self.last = Look::Working;
+                Look::Working
+            }
+            Look::Ready if now < self.blind_until => Look::Shut,
+            Look::Ready => {
+                if self.last != Look::Working {
+                    self.last = Look::Ready;
+                    self.ready_until = now + hold;
+                }
+                Look::Ready
+            }
+            Look::Shut if self.last == Look::Ready && now < self.ready_until => Look::Ready,
+            Look::Shut => {
+                self.last = Look::Shut;
+                Look::Shut
+            }
+        }
+    }
+
+    /// The gun threw or punted something at time `now`: it closes, and is not
+    /// taken in by the prop leaving.
+    fn launched(&mut self, now: f32) {
+        self.last = Look::Working;
+        self.blind_until = now + LAUNCH_BLIND_SECS;
+    }
 }
 
 /// The Gravity Gun in hand this frame, if it is.
@@ -164,6 +220,7 @@ fn load_sprites(mut sprites: ResMut<GunSprites>, assets: Res<AssetServer>) {
 /// whether the alternate button is held, and opens or shuts the prongs.
 fn read_gun(
     time: Res<Time>,
+    mut launches: MessageReader<PhyscannonImpact>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
     angles: Res<ViewAngles>,
@@ -180,6 +237,7 @@ fn read_gun(
     )>,
 ) {
     *look = GunLook::default();
+    let threw = launches.read().any(|launch| launch.local);
     let (Some(sim), Some(local)) = (game.sim(), local) else {
         return;
     };
@@ -194,7 +252,12 @@ fn read_gun(
             continue;
         };
         let pulling_wanted = bindings.pressed("attack2", &keys, mouse.as_deref());
+        if threw {
+            prongs.1.launched(now);
+        }
+        let hold = sim.data().manipulator.grab.ready_hold_secs;
         let state = gun_state(sim, local.id, *angles, pulling_wanted);
+        let state = prongs.1.look(state, now, hold);
         *look = GunLook {
             view: Some(entity),
             look: state,
@@ -674,6 +737,88 @@ impl Plugin for GravityGunPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HOLD: f32 = 2.5;
+
+    #[test]
+    fn the_claws_wait_for_a_while_after_their_target_leaves() {
+        let mut latch = Latch::default();
+        assert_eq!(latch.look(Look::Shut, 0.0, HOLD), Look::Shut);
+        assert_eq!(latch.look(Look::Ready, 1.0, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 1.1, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 3.4, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 3.5, HOLD), Look::Shut, "time is up");
+        assert_eq!(latch.look(Look::Shut, 3.6, HOLD), Look::Shut);
+    }
+
+    #[test]
+    fn looking_at_something_else_starts_the_wait_over() {
+        let mut latch = Latch::default();
+        latch.look(Look::Ready, 0.0, HOLD);
+        assert_eq!(latch.look(Look::Shut, 2.0, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Ready, 2.4, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 4.8, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 4.9, HOLD), Look::Shut);
+    }
+
+    #[test]
+    fn sweeping_across_props_never_shuts_them_in_between() {
+        let mut latch = Latch::default();
+        let looks: Vec<Look> = (0..40)
+            .map(|frame| {
+                let now = frame as f32 * 0.1;
+                let sees = if frame % 8 < 2 {
+                    Look::Ready
+                } else {
+                    Look::Shut
+                };
+                latch.look(sees, now, HOLD)
+            })
+            .collect();
+        assert!(looks.iter().all(|look| *look == Look::Ready), "{looks:?}");
+    }
+
+    #[test]
+    fn dropping_what_it_held_closes_at_once() {
+        let mut latch = Latch::default();
+        latch.look(Look::Ready, 0.0, HOLD);
+        assert_eq!(latch.look(Look::Working, 0.5, HOLD), Look::Working);
+        assert_eq!(latch.look(Look::Shut, 0.6, HOLD), Look::Shut);
+    }
+
+    #[test]
+    fn a_dropped_prop_still_under_the_crosshair_is_not_waited_for() {
+        let mut latch = Latch::default();
+        latch.look(Look::Working, 0.0, HOLD);
+        assert_eq!(latch.look(Look::Ready, 0.1, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 0.3, HOLD), Look::Shut);
+        // Once shut it is back to normal.
+        assert_eq!(latch.look(Look::Ready, 0.5, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 0.6, HOLD), Look::Ready);
+    }
+
+    #[test]
+    fn a_launch_closes_them_and_they_ignore_the_prop_flying_off() {
+        let mut latch = Latch::default();
+        latch.look(Look::Ready, 0.0, HOLD);
+        latch.launched(0.5);
+        assert_eq!(latch.look(Look::Ready, 0.5, HOLD), Look::Shut, "punted");
+        assert_eq!(latch.look(Look::Ready, 0.7, HOLD), Look::Shut, "in flight");
+        assert_eq!(latch.look(Look::Shut, 0.8, HOLD), Look::Shut, "gone");
+        assert_eq!(
+            latch.look(Look::Ready, 0.8, HOLD),
+            Look::Ready,
+            "there is more to take"
+        );
+    }
+
+    #[test]
+    fn a_launched_prop_still_there_after_the_blind_time_is_not_waited_for() {
+        let mut latch = Latch::default();
+        latch.launched(0.0);
+        assert_eq!(latch.look(Look::Ready, 0.3, HOLD), Look::Ready);
+        assert_eq!(latch.look(Look::Shut, 0.4, HOLD), Look::Shut);
+    }
 
     #[test]
     fn it_opens_along_a_spline_in_two_tenths_of_a_second() {

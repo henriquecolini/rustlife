@@ -24,6 +24,9 @@ Manipulator(
         // distance: physcannon_tracelength, as far as HL2DM's CheckForTarget
         // looks, so a little past grab range and far short of pull range.
         open_range: 250.0,
+        // ...and stay open this long after the view leaves it, so that sweeping
+        // across props does not snap them open and shut. HL2DM waits 0.5 s.
+        ready_hold_secs: 2.5,
     ),
     hold: (
         // Gap between the eyes and the near side of the held prop.
