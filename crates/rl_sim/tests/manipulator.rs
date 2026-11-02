@@ -17,7 +17,7 @@ use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, Motion, PropDesc};
 use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
-use rl_sim::tools::manipulator::ToolEvent;
+use rl_sim::tools::manipulator::{Aim, ToolEvent, liftable_target};
 
 #[expect(
     clippy::expect_used,
@@ -134,6 +134,29 @@ impl Room {
         }
     }
 
+    /// Where the player aims with `pitch`, along +X.
+    fn view(&self, pitch: f32) -> Aim {
+        Aim {
+            eye: self.sim.eye_position(self.player).expect("player"),
+            pitch,
+            yaw: 0.0,
+        }
+    }
+
+    /// The prop the tool would take looking at the crate, within `range`.
+    fn target(&self, range: f32) -> Option<BodyId> {
+        let manipulator = &self.sim.data().manipulator;
+        let (physics, world) = (self.sim.physics(), self.sim.world());
+        liftable_target(
+            &self.view(self.aim_pitch()),
+            world,
+            physics,
+            manipulator,
+            range,
+        )
+        .map(|(body, _)| body)
+    }
+
     fn held(&self) -> Option<BodyId> {
         self.sim
             .player(self.player)
@@ -238,6 +261,20 @@ fn far_props_start_to_move_slowly_and_gain_speed() {
     let later = speed(&room);
     assert!(later > early * 2.0, "then faster: {early} -> {later}");
     assert!(later <= grab.pull_speed + 1.0, "never past the top speed");
+}
+
+#[test]
+fn the_claws_look_no_farther_than_the_open_range_but_a_pull_reaches_on() {
+    let data = data();
+    let grab = &data.manipulator.grab;
+    assert!(grab.range < grab.open_range && grab.open_range < grab.pull_range);
+
+    let near = Room::new(&data, grab.open_range - 40.0, 10.0);
+    assert_eq!(near.target(grab.open_range), Some(near.prop));
+
+    let far = Room::new(&data, grab.open_range + 100.0, 10.0);
+    assert_eq!(far.target(grab.open_range), None, "too far to open on");
+    assert_eq!(far.target(grab.reach()), Some(far.prop), "not to pull");
 }
 
 #[test]

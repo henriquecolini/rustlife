@@ -3,9 +3,9 @@
 //! glow on its attachments, and arcs of lightning crackle between the prong
 //! tips and the muzzle while it holds something.
 //!
-//! The prongs open when the gun has something to take (a prop it could pull
-//! or grab is under the crosshair), is pulling or is holding one, and close
-//! again otherwise. `active` is an interpolated value
+//! The prongs open when the gun has something to take close by (a prop it
+//! could lift is under the crosshair, within `grab.open_range`), is pulling or
+//! is holding one, and close again otherwise. `active` is an interpolated value
 //! (`m_ElementParameter`) that moves to its target along a spline: to open
 //! takes 0.2 s, to close 0.5 s.
 //!
@@ -125,7 +125,8 @@ pub(crate) enum Look {
     /// Nothing to take: prongs shut, no glow.
     #[default]
     Shut,
-    /// A prop it could take is under the crosshair: prongs open, a glow.
+    /// A prop it could take is close by, under the crosshair: prongs open, a
+    /// glow.
     Ready,
     /// Pulling a prop in or holding one: a brighter glow, flares and arcs.
     Working,
@@ -208,8 +209,8 @@ fn read_gun(
 }
 
 /// What the gun of `player` is doing: holding a prop, pulling one in
-/// (`pulling_wanted`, the alternate button held, on a prop beyond grab range),
-/// ready to take one, or nothing.
+/// (`pulling_wanted`, the alternate button held, on a prop beyond grab range but
+/// within reach), ready to take one close by, or nothing.
 fn gun_state(
     sim: &rl_sim::simulation::Simulation,
     player: rl_sim::simulation::PlayerId,
@@ -231,13 +232,17 @@ fn gun_state(
         yaw: angles.yaw,
     };
     let config = &sim.data().manipulator;
-    let Some((_, point)) = liftable_target(&aim, sim.world(), sim.physics(), config) else {
-        return Look::Shut;
-    };
-    if pulling_wanted && point.distance(eye) > config.grab.range {
-        Look::Working
-    } else {
+    let grab = &config.grab;
+    let target = |range| liftable_target(&aim, sim.world(), sim.physics(), config, range);
+    if pulling_wanted
+        && target(grab.reach()).is_some_and(|(_, point)| point.distance(eye) > grab.range)
+    {
+        return Look::Working;
+    }
+    if target(grab.open_range).is_some() {
         Look::Ready
+    } else {
+        Look::Shut
     }
 }
 

@@ -20,6 +20,10 @@ Manipulator(
         // units/s.
         pull_accel: 800.0,
         pull_speed: 500.0,
+        // The claws open, with their sound, on a prop to take within this
+        // distance: physcannon_tracelength, as far as HL2DM's CheckForTarget
+        // looks, so a little past grab range and far short of pull range.
+        open_range: 250.0,
     ),
     hold: (
         // Gap between the eyes and the near side of the held prop.

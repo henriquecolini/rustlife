@@ -42,6 +42,18 @@ pub struct GrabConfig {
     pub pull_speed: f32,
     /// ...gaining this much speed a second.
     pub pull_accel: f32,
+    /// The claws open, and sound it, on a prop to take within this distance
+    /// of the eyes: a little past `range`, and far short of `pull_range`.
+    pub open_range: f32,
+}
+
+impl GrabConfig {
+    /// How far the tool reaches for a prop while secondary fire is held,
+    /// units from the eyes: to grab it or to pull it in.
+    #[must_use]
+    pub fn reach(&self) -> f32 {
+        self.range.max(self.pull_range)
+    }
 }
 
 /// Carrying a held prop.
@@ -128,6 +140,7 @@ impl ManipulatorConfig {
         check.non_negative("grab.pull_range", grab.pull_range);
         check.non_negative("grab.pull_speed", grab.pull_speed);
         check.non_negative("grab.pull_accel", grab.pull_accel);
+        check.positive("grab.open_range", grab.open_range);
 
         let hold = &self.hold;
         check.non_negative("hold.distance", hold.distance);
@@ -185,6 +198,21 @@ mod tests {
             mass_curve: vec![(0.0, 1.0), (100.0, 0.5)],
         };
         assert_eq!(launch.speed_for(50.0), 750.0);
+    }
+
+    #[test]
+    fn the_reach_is_the_farther_of_grabbing_and_pulling() {
+        let mut grab = GrabConfig {
+            range: 160.0,
+            max_mass: 250.0,
+            pull_range: 1000.0,
+            pull_speed: 500.0,
+            pull_accel: 800.0,
+            open_range: 250.0,
+        };
+        assert_eq!(grab.reach(), 1000.0);
+        grab.pull_range = 0.0;
+        assert_eq!(grab.reach(), 160.0, "no pull: only as far as a grab");
     }
 
     #[test]

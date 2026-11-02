@@ -228,7 +228,7 @@ impl Manipulator {
         intervals: Intervals,
     ) -> Option<ToolEvent> {
         let grab = &config.grab;
-        let (body, point) = liftable_target(aim, world, physics, config)?;
+        let (body, point) = liftable_target(aim, world, physics, config, grab.reach())?;
         if point.distance(aim.eye) <= grab.range {
             physics.set_held(body, Some(player_body));
             let rotation = physics
@@ -297,18 +297,21 @@ impl Manipulator {
     }
 }
 
-/// The prop under the crosshair the tool could grab or pull, within pull
-/// range, with the point hit: grabbable, light enough and not already held.
-/// With the tool in hand and a prop like this ahead, its prongs open.
+/// The prop under the crosshair the tool could grab or pull, within `range`,
+/// with the point hit: grabbable, light enough and not already held. Secondary
+/// fire reaches [`GrabConfig::reach`](rl_data::GrabConfig::reach) for one; the
+/// prongs open on one within the shorter
+/// [`open_range`](rl_data::GrabConfig::open_range).
 #[must_use]
 pub fn liftable_target(
     aim: &Aim,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
     config: &ManipulatorConfig,
+    range: f32,
 ) -> Option<(BodyId, Vec3)> {
     let grab = &config.grab;
-    let (body, point) = aim_at(aim, grab.range.max(grab.pull_range), world, physics)?;
+    let (body, point) = aim_at(aim, range, world, physics)?;
     let liftable = physics.is_grabbable(body)
         && physics.mass(body).is_some_and(|mass| mass <= grab.max_mass)
         && physics.holder(body).is_none();
