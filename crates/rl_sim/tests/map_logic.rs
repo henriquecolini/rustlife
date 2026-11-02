@@ -324,7 +324,7 @@ fn a_teleport_sends_the_player_to_its_destination() {
         Vec3::new(-1000.0, 500.0, 1.0),
         &[("targetname", "away")],
     );
-    destination.angles = [0.0, 90.0, 0.0];
+    destination.angles = [-20.0, 90.0, 0.0];
     let entities = [
         entity(
             "trigger_teleport",
@@ -339,14 +339,25 @@ fn a_teleport_sends_the_player_to_its_destination() {
         ..UserCmd::default()
     };
     let teleported = (0..120)
-        .flat_map(|_| room.tick(&cmd).map)
-        .find_map(|event| match event {
-            MapEvent::Teleported { player, spawn } => Some((player, spawn)),
-            _ => None,
+        .find_map(|_| {
+            room.tick(&cmd)
+                .map
+                .into_iter()
+                .find_map(|event| match event {
+                    MapEvent::Teleported { player, angles, .. } => Some((player, angles)),
+                    _ => None,
+                })
         })
         .expect("teleported");
     assert_eq!(teleported.0, room.player);
-    assert_eq!(teleported.1.yaw, 90.0);
+    assert_eq!(teleported.1, [-20.0, 90.0, 0.0]);
+    let player = room.sim.player(room.player).expect("player");
+    assert_eq!(
+        player.look,
+        (-20.0, 90.0),
+        "the eyes take its pitch and yaw"
+    );
+    assert_eq!(player.state.velocity, Vec3::ZERO, "and stop");
     assert!(
         room.origin().distance(Vec3::new(-1000.0, 500.0, 1.0)) < 64.0,
         "{}",

@@ -582,10 +582,10 @@ fn teleports_send_players_to_their_destination() {
         ),
         MapEntity::new("info_teleport_destination", [500.0, 0.0, 10.0])
             .with("targetname", "Exit")
-            .with("angles", "0 90 0"),
+            .with("angles", "330 90 5"),
     ];
     let mut entities = entities;
-    entities[1].angles = [0.0, 90.0, 0.0];
+    entities[1].angles = [330.0, 90.0, 5.0];
     let world = world(&[("trigger_teleport", None)]);
     let mut run = Run::new(&entities, &world);
     let player = PlayerId::from_index(1);
@@ -599,7 +599,7 @@ fn teleports_send_players_to_their_destination() {
         [Effect::Teleport {
             player,
             origin: Vec3::new(500.0, 0.0, 10.0),
-            yaw: 90.0
+            angles: [-30.0, 90.0, 5.0],
         }]
     );
 }

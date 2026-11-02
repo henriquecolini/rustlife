@@ -17,7 +17,7 @@ use glam::{Quat, Vec3};
 use rl_data::ExplosionConfig;
 use serde::{Deserialize, Serialize};
 
-use super::{BlastSource, PlayerId, Simulation, Spawn, TickEvents};
+use super::{BlastSource, PlayerId, Simulation, TickEvents};
 use crate::collision::Hull;
 use crate::collision::contents::MASK_PLAYER_SOLID;
 use crate::combat::{Cause, Damage};
@@ -59,8 +59,11 @@ pub enum MapEvent {
     Teleported {
         /// Who.
         player: PlayerId,
-        /// Where to, and the way they now face.
-        spawn: Spawn,
+        /// Where the feet went.
+        origin: Vec3,
+        /// The way they now face, `[pitch, yaw, roll]` in degrees: the
+        /// destination's own angles. Players have no roll to set.
+        angles: [f32; 3],
     },
 }
 
@@ -381,16 +384,17 @@ impl Simulation {
             Effect::Teleport {
                 player,
                 origin,
-                yaw,
+                angles,
             } => {
                 if self.teleport_player(player, origin) {
                     let origin = self.player(player).map_or(origin, |p| p.state.origin);
                     if let Some(moved) = self.player_mut(player) {
-                        moved.look.1 = yaw;
+                        moved.look = (angles[0], angles[1]);
                     }
                     events.map.push(MapEvent::Teleported {
                         player,
-                        spawn: Spawn { origin, yaw },
+                        origin,
+                        angles,
                     });
                 }
             }

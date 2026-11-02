@@ -44,6 +44,8 @@ the rest pose), and a single-bone model's vertices are moved from its
 bone's rest placement to its idle one when it loads; static props
 (`$staticprop`) have no bones applied and stay as stored. A weapon held by
 its hand bone is placed at the inverse of that bone's idle pose.
+`rl_client/tests/entity_angles.rs` tabulates what each class of entity does
+with its angles.
 
 ### Playing it
 
@@ -317,6 +319,7 @@ player's own volumes.
 | `source_formats/src/wav.rs` | 8- and 16-bit PCM, Microsoft ADPCM, loops from cue points, garbage refused |
 | `source_formats/src/soundscript.rs`, `soundscape.rs` | Entries' waves, ranges and levels, manifests, soundscapes started as HL2DM's: drawn volumes, children's masters and positions, unset positions skipped |
 | `rl_client/src/audio/soundscape/tests.rs` | The soundscape in charge (nearest in reach and sight, ties to the current one, `radius -1`, disabled ones, proxies), crossfading and shared loops |
+| `rl_client/tests/entity_angles.rs` | What each class of entity does with its angles: pickups and props from their idle pose, static props and brushes as stored, spawns by yaw alone, teleport ends by pitch and yaw; a model drawn at rest lying a quarter turn off |
 | `rl_client/tests/sounds.rs` | Every sound the data names resolving and decoding (needs an install) |
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
 | `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |

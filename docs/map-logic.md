@@ -98,8 +98,10 @@ trigger only counts the players its filter (`filtername`) passes:
 `filter_activator_name` and `_class` match by name and class, possibly
 negated, and `filter_multi` combines filters with AND or OR.
 
-`trigger_teleport` moves the players inside to its target's origin, facing
-its angles, and stops them. `trigger_push` brings the speed of those inside
+`trigger_teleport` moves the players inside to its target's origin, snaps
+their eyes to its pitch and yaw as `SnapEyeAngles` does (players have no roll),
+and stops them. No shipped map uses a `landmark` or a `movedir` on one.
+`trigger_push` brings the speed of those inside
 up to its own along its push direction, as wind does: someone already
 faster that way keeps their speed. A disabled trigger (`StartDisabled`,
 or after `Disable`) does nothing until enabled, and that is how most traps

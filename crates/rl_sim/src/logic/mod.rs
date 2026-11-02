@@ -96,14 +96,15 @@ pub enum Effect {
         /// Its reach, units.
         radius: f32,
     },
-    /// Move a player to a destination, facing `yaw` (`trigger_teleport`).
+    /// Move a player to a destination, facing as it faces
+    /// (`trigger_teleport`, which ends in `SnapEyeAngles`).
     Teleport {
         /// Who.
         player: PlayerId,
         /// Where the feet go.
         origin: Vec3,
-        /// The way to face, degrees.
-        yaw: f32,
+        /// The way to face, `[pitch, yaw, roll]` in degrees.
+        angles: [f32; 3],
     },
     /// Give a player at least this speed along its direction
     /// (`trigger_push`).
@@ -256,7 +257,7 @@ pub struct MapLogic {
     initial: Parts,
     /// Named point entities, where teleports send players: name, origin,
     /// yaw.
-    destinations: Vec<(String, Vec3, f32)>,
+    destinations: Vec<(String, Vec3, [f32; 3])>,
     queue: Queue,
     config: MapLogicConfig,
     dt: f32,
@@ -296,7 +297,10 @@ impl MapLogic {
                 .filter(|name| !name.is_empty())
                 .map(str::to_ascii_lowercase);
             if let Some(name) = &name {
-                destinations.push((name.clone(), Vec3::from(entity.origin), entity.angles[1]));
+                let mut angles = entity.angles;
+                // Eyes pitch within a half turn: 330 is 30 upwards.
+                angles[0] = (angles[0] + 180.0).rem_euclid(360.0) - 180.0;
+                destinations.push((name.clone(), Vec3::from(entity.origin), angles));
             }
             let hazard = hazards
                 .iter()
@@ -693,7 +697,7 @@ impl MapLogic {
                 self.fire(node, "ontrigger", Some(first), None);
             }
             TriggerKind::Teleport { target } => {
-                let Some(&(_, origin, yaw)) =
+                let Some(&(_, origin, angles)) =
                     self.destinations.iter().find(|(name, _, _)| name == target)
                 else {
                     return;
@@ -702,7 +706,7 @@ impl MapLogic {
                     effects.push(Effect::Teleport {
                         player,
                         origin,
-                        yaw,
+                        angles,
                     });
                 }
             }

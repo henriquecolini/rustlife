@@ -253,11 +253,15 @@ fn face_respawns(
             };
         }
         let teleported = events.map.iter().find_map(|event| match *event {
-            MapEvent::Teleported { player, spawn } if player == local.id => Some(spawn.yaw),
+            MapEvent::Teleported {
+                player,
+                angles: [pitch, yaw, _],
+                ..
+            } if player == local.id => Some(ViewAngles { pitch, yaw }),
             _ => None,
         });
-        if let Some(yaw) = teleported {
-            angles.yaw = yaw;
+        if let Some(teleported) = teleported {
+            *angles = teleported;
         }
     }
 }
