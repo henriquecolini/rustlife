@@ -1,8 +1,9 @@
 //! The Gravity Gun's own sounds, from the client's `C_WeaponPhysCannon`:
 //!
 //! - the claws' sounds, `OpenClaws` when they open on something to take (or
-//!   to hold) and `CloseClaws` when they shut because there is nothing, played
-//!   as the prongs move (`OpenElements`, `CloseElements`);
+//!   to hold) and `CloseClaws` when they shut on letting go of something,
+//!   played as the prongs move (`OpenElements`, `CloseElements`). Unlike the
+//!   game's, claws that merely have nothing in range any more shut quietly;
 //! - the hold loop, `HoldSound` (`hold_loop.wav`), which hums while it
 //!   holds or pulls a prop. It is a `CSoundPatch` whose volume and pitch the
 //!   game moves in straight lines: it starts silent at half pitch and comes
@@ -67,7 +68,8 @@ impl Phase {
     }
 }
 
-/// What a change of phase sounds like.
+/// What a change of phase sounds like. Claws that shut because nothing is in
+/// range any more make no sound; those that let go of something do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Cue {
     /// The claws open.
@@ -88,7 +90,7 @@ pub(super) fn cues(from: Phase, to: Phase) -> Vec<Cue> {
     let mut cues = Vec::new();
     match (from, to) {
         (Shut, Ready | Working) => cues.push(Cue::Open),
-        (Ready | Working, Shut) => cues.push(Cue::Close),
+        (Working, Shut) => cues.push(Cue::Close),
         _ => {}
     }
     match (from, to) {
@@ -325,10 +327,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_claws_open_on_something_to_take_and_shut_when_there_is_nothing() {
+    fn the_claws_sound_opening_on_something_and_letting_go_but_not_on_nothing() {
         use Phase::{Away, Ready, Shut, Working};
         assert_eq!(cues(Shut, Ready), [Cue::Open]);
-        assert_eq!(cues(Ready, Shut), [Cue::Close]);
+        assert!(cues(Ready, Shut).is_empty(), "nothing in range any more");
         assert_eq!(cues(Shut, Working), [Cue::Open, Cue::HoldStarts]);
         assert_eq!(cues(Working, Shut), [Cue::Close, Cue::HoldFades]);
         assert!(cues(Ready, Ready).is_empty());

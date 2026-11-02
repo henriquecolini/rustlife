@@ -237,7 +237,8 @@ looks): a little past grab range and far short of what secondary fire reaches.
 Past that they stay shut until a pull starts. Having opened on a prop they stay
 open for `grab.ready_hold_secs` after the view leaves it, so sweeping across
 props does not snap them open and shut (HL2DM waits half a second); dropping or
-throwing something closes them at once.
+throwing something closes them at once. They sound opening on something and
+letting go of something, but not closing on nothing.
 
 **Holding.** While held, a prop ignores gravity and does not collide with its
 holder. Its centre of mass is steered to the hold point, `hold.distance` plus
