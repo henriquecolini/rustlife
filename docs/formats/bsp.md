@@ -38,22 +38,73 @@ tessellated into a `(2^power + 1)²` grid of displaced vertices. Texture UVs are
 
 Each lit face has `light_offset` (bytes into the lighting lump),
 `light_map_texture_size` (luxels − 1 per axis), `light_map_texture_min`, and
-four light `styles`. Style `255` means no lightmap in that slot; rustlife uses
-style 0 only.
+four light `styles`. Style `255` ends the list.
 
 A luxel is `ColorRGBExp32`: `r, g, b: u8` and a signed exponent `e: i8`,
 giving linear RGB `c × 2^e / 255`, where 1.0 is nominal full brightness.
 Values above 1 are common near lights, hence the half-float atlas.
 
-Bump-mapped faces store four sample sets per style (flat, then three bump
-basis directions); the flat set comes first, at `light_offset`.
+A face holds one set of samples per style, and four sets per style if its
+texinfo has `SURF_BUMPLIGHT` (0x800): flat, then three bump basis directions.
+So style slot `k`'s flat set starts at
+`light_offset + k × (bumped ? 4 : 1) × width × height × 4`. Every face's data
+is preceded by one `ColorRGBExp32` average per style, which is what the
+remaining gaps between faces in the lump are.
 
-The luxel coordinate of a world position is its projection onto the face's
-lightmap axes (`TextureInfo::light_map_scale` for *s*,
+The engine adds a face's slots every frame, each scaled by its style's
+brightness. rustlife bakes the sum once (`LightStyles`), as of the map's start:
+
+| Style | Brightness |
+|-------|------------|
+| 0 | 1 |
+| 1–12 | mean of the stock pattern (`a` = 0, `m` = 1; `CWorld::Precache`) |
+| 32 and up, owned by a `light`, `light_spot`, `light_glspot` or `light_environment` | 0 if spawn flag 1 ("initially dark"), else the mean of its `pattern`, else 1. The last entity to spawn wins |
+| any other | 1 |
+
+`vrad` gives each named, switchable light a style of 32 or more, so its pool
+of light is a slot of its own. dm_steamlab has 898 such faces and dm_runoff
+542. A `logic_auto`'s `OnMapSpawn` → `TurnOn`/`TurnOff` is taken as the initial
+state (dm_runoff's `red_light` has a light without the flag, and relies on
+that output). Later switching, such as `item_suitcharger` turning off
+dm_lockdown's `megacharger_light_`, is not followed.
+
+The luxel coordinate of a world position on a flat face is its projection onto
+the face's lightmap axes (`TextureInfo::light_map_scale` for *s*,
 `light_map_transform` for *t*, each `[x, y, z, offset]`), minus
-`light_map_texture_min`. Sampling at `+0.5` hits luxel centres. Displaced
-vertices are projected the same way; their offsets lie mostly along the face
-normal, which the projection drops.
+`light_map_texture_min`. Sampling at `+0.5` hits luxel centres. The centroid
+of a point light's hot spot on a large floor lands where this says, within
+about 0.3 luxels.
+
+### Displacements' lightmaps are not projected
+
+A displacement's block of luxels is spread evenly over its vertex grid, and
+ignores the lightmap axes, which decide only how many luxels it gets. The
+stored grid is row by row: the row number counts along the base polygon's edge
+from the start corner to the next corner, the column number along its edge from
+the start corner to the previous corner. A vertex at `column / steps`, `row / steps` samples
+
+    s = (column / steps) × width,  t = (row / steps) × height
+
+in texels from the block's outer corner, so luxel (0, 0) is centred half a luxel
+in from the start corner. Projecting instead (even from the undisplaced
+position) lands on a rotated or mirrored copy of the light, by however the
+axes happen to lie.
+
+Two pieces of evidence support this:
+
+- `LUMP_DISP_LIGHTMAP_SAMPLE_POSITIONS` (34), where `vrad` records each luxel's
+  triangle and barycentric weights, starts every displacement at the same
+  triangle for luxel (0, 0), (w−1, 0), (0, h−1) and (w−1, h−1), however its face
+  is turned. A record is the triangle index (a byte; 255 means add the next
+  byte too, and so on), then three weights as bytes.
+- Against a native capture of dm_underpass (`mat_fullbright 2`, `mat_bumpmap
+  0`), the correlation of log brightness on its two largest displacements is
+  0.88 for this mapping, and at most 0.07 and −0.08 for projection. The whole
+  frame's correlation with rustlife's went from 0.51 to 0.89.
+
+A displacement's base *texture* does come from projection, of the undisplaced
+position (displaced position − `vector × distance`), so steep terrain
+stretches its texture.
 
 All faces are packed into one atlas with a shelf packer. Each block gets a
 one-luxel border repeating its edges, so bilinear filtering never mixes

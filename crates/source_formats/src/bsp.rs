@@ -22,7 +22,7 @@ use vbsp::Bsp;
 
 use crate::ambient::{self, AmbientLighting};
 use crate::entities::{self, MapEntity};
-use crate::lightmap::{AtlasBuilder, LightmapAtlas, Luxel, Placement, decode_luxel};
+use crate::lightmap::{AtlasBuilder, LightStyles, LightmapAtlas, Luxel, Placement, decode_luxel};
 use crate::props::{self, PropPlacement};
 use crate::visibility::{FaceRegions, Visibility};
 
@@ -34,6 +34,8 @@ const LUMP_LIGHTING: usize = 8;
 const LUMP_PAKFILE: usize = 40;
 /// Light style value meaning "no lightmap in this slot".
 const NO_LIGHT_STYLE: u8 = 255;
+/// Sample sets per style of a face flagged `SURF_BUMPLIGHT`.
+const BUMP_SAMPLE_SETS: usize = 4;
 /// Largest lightmap block dimension accepted, in luxels. vbsp caps face
 /// lightmaps far below this; anything larger means corrupt data.
 const MAX_LIGHTMAP_SIZE: usize = 1024;
@@ -375,34 +377,51 @@ fn build_surfaces(
             }
         }
 
-        let blend = face.displacement().map(|displacement| {
-            let alphas: Vec<f32> = displacement
+        let displaced = face.displacement().map(|displacement| {
+            let steps = 1usize << displacement.power.clamp(0, 8);
+            let grid: Vec<DisplacedVertex> = displacement
                 .displacement_vertices()
-                .map(|vertex| vertex.alpha / 255.0)
+                .zip(displacement.displaced_vertices())
+                .enumerate()
+                .map(|(grid_index, (vertex, position))| {
+                    let offset = vertex.displacement();
+                    DisplacedVertex::new(
+                        [position.x, position.y, position.z],
+                        [offset.x, offset.y, offset.z],
+                        vertex.alpha,
+                        grid_fraction(grid_index, steps),
+                    )
+                })
                 .collect();
-            triangulated_grid(1usize << displacement.power.clamp(0, 8))
-                .map(|grid_index| alphas.get(grid_index).copied().unwrap_or(0.0))
-                .collect::<Vec<f32>>()
+            triangulated_grid(steps)
+                .map(|grid_index| grid.get(grid_index).copied())
+                .collect::<Vec<Option<DisplacedVertex>>>()
         });
 
         // `vertex_positions` yields an already-triangulated vertex stream
         // (triangle list), tessellating displacement faces along the way; the
-        // blend alphas above follow the same order.
+        // per-vertex data above follows the same order.
         for (vertex, position) in face.vertex_positions().enumerate() {
             let position = [position.x, position.y, position.z];
-            let alpha = blend.as_ref().and_then(|alphas| alphas.get(vertex));
-            surface.blend.push(alpha.copied().unwrap_or(0.0));
+            let extra = displaced
+                .as_ref()
+                .and_then(|grid| grid.get(vertex).copied().flatten());
+            // A displacement stretches its base face's texture over its surface
+            // rather than projecting it onto the displaced shape.
+            let base = extra.map_or(position, |extra| extra.base);
+            surface.blend.push(extra.map_or(0.0, |extra| extra.blend));
             surface.positions.push(position);
             surface.normals.push(normal);
             surface.uvs.push(texture.uv(vbsp::Vector {
-                x: position[0],
-                y: position[1],
-                z: position[2],
+                x: base[0],
+                y: base[1],
+                z: base[2],
             }));
             if let Some(lightmaps) = lightmaps {
-                surface
-                    .lightmap_uvs
-                    .push(lightmaps.uv(index, &face, &texture, position));
+                surface.lightmap_uvs.push(match extra {
+                    Some(extra) => lightmaps.displaced_uv(index, extra.fraction),
+                    None => lightmaps.uv(index, &face, &texture, position),
+                });
             }
         }
     }
@@ -412,6 +431,39 @@ fn build_surfaces(
         }
     }
     surfaces
+}
+
+/// What a vertex of a displacement's grid carries besides its position.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DisplacedVertex {
+    /// Where the vertex is on the flat base face, before its displacement.
+    base: [f32; 3],
+    /// Its blend towards a `WorldVertexTransition`'s second texture, 0 to 1.
+    blend: f32,
+    /// How far along the grid it is, from 0 to 1, as `[column, row]`: which
+    /// places it in the face's block of luxels.
+    fraction: [f32; 2],
+}
+
+impl DisplacedVertex {
+    /// The vertex displaced to `position` by `offset`, painted with `alpha`
+    /// (0 to 255), at `fraction` of its grid.
+    fn new(position: [f32; 3], offset: [f32; 3], alpha: f32, fraction: [f32; 2]) -> Self {
+        Self {
+            base: std::array::from_fn(|axis| position[axis] - offset[axis]),
+            blend: alpha / 255.0,
+            fraction,
+        }
+    }
+}
+
+/// How far along a displacement's grid of `steps + 1` vertices a side vertex
+/// `grid_index` is, from 0 to 1, as `[column, row]`. The file stores the grid
+/// row by row, the rows running from the start corner along the base face's
+/// next edge.
+fn grid_fraction(grid_index: usize, steps: usize) -> [f32; 2] {
+    let row_length = steps + 1;
+    [grid_index % row_length, grid_index / row_length].map(|at| at as f32 / steps as f32)
 }
 
 /// Every drawable brush entity (an entity whose `model` is `*<n>`, n ≥ 1)
@@ -463,12 +515,7 @@ struct PackedLightmaps {
 }
 
 impl PackedLightmaps {
-    /// Atlas UV of a vertex of face `index`: the vertex projected onto the
-    /// face's lightmap axes, relative to the face's luxel origin. Displaced
-    /// vertices project too; their offsets lie mostly along the normal, which
-    /// the projection discards, but can stray slightly past the face's extent,
-    /// so the coordinate is clamped to the block (and its border) to never
-    /// sample a neighbouring face.
+    /// Atlas UV of the point `position` of flat face `index`.
     fn uv(
         &self,
         index: usize,
@@ -479,14 +526,40 @@ impl PackedLightmaps {
         let Some(&(block, size)) = self.face_blocks.get(&index) else {
             return self.placements[self.full_bright].uv(&self.atlas, 0.0, 0.0);
         };
-        let [s, t] = [texture.light_map_scale, texture.light_map_transform].map(|axis| {
-            axis[0] * position[0] + axis[1] * position[1] + axis[2] * position[2] + axis[3]
-        });
-        let mins = face.light_map_texture_min;
-        let [s, t] = [(s, mins[0], size[0]), (t, mins[1], size[1])]
-            .map(|(coord, min, size)| (coord - min as f32).clamp(-0.5, size as f32 - 0.5));
+        let axes = [texture.light_map_scale, texture.light_map_transform];
+        let [s, t] = luxel_coordinates(axes, face.light_map_texture_min, size, position);
         self.placements[block].uv(&self.atlas, s, t)
     }
+
+    /// Atlas UV of the vertex of displacement face `index` at `fraction` of its
+    /// grid. A displacement's block is not a projection of its surface: `vrad`
+    /// spreads the block's luxels evenly over the grid, columns along *s* and
+    /// rows along *t*, whichever way the lightmap axes point. So the grid's
+    /// edges meet the block's outer edges, half a luxel past the outer centres.
+    fn displaced_uv(&self, index: usize, fraction: [f32; 2]) -> [f32; 2] {
+        let Some(&(block, size)) = self.face_blocks.get(&index) else {
+            return self.placements[self.full_bright].uv(&self.atlas, 0.0, 0.0);
+        };
+        let [s, t] = [0, 1].map(|axis| fraction[axis] * size[axis] as f32 - 0.5);
+        self.placements[block].uv(&self.atlas, s, t)
+    }
+}
+
+/// A point's coordinate in its face's block of luxels: its projection onto the
+/// lightmap axes (`[x, y, z, offset]` for *s* and *t*), relative to the face's
+/// first luxel, whose centre is at 0. Clamped to the block and its border, so
+/// that a point just off the face never samples a neighbouring one.
+fn luxel_coordinates(
+    axes: [[f32; 4]; 2],
+    mins: [i32; 2],
+    size: [usize; 2],
+    point: [f32; 3],
+) -> [f32; 2] {
+    std::array::from_fn(|i| {
+        let [x, y, z, offset] = axes[i];
+        let coordinate = x * point[0] + y * point[1] + z * point[2] + offset;
+        (coordinate - mins[i] as f32).clamp(-0.5, size[i] as f32 - 0.5)
+    })
 }
 
 /// Decodes and packs the lightmaps of the `visible` faces, or `None` if the
@@ -495,11 +568,12 @@ fn pack_lightmaps(bsp: &Bsp, bytes: &[u8], visible: &[usize]) -> Option<PackedLi
     let lighting = lump(bytes, LUMP_LIGHTING).filter(|data| !data.is_empty())?;
     let mut builder = AtlasBuilder::new();
     let full_bright = builder.add(1, 1, vec![[1.0; 3]]);
+    let styles = LightStyles::new(&entities::entities(bsp));
     let mut face_blocks = HashMap::new();
     for &index in visible {
         if let Some((width, height, luxels)) = bsp
             .face(index)
-            .and_then(|face| face_luxels(&face, lighting))
+            .and_then(|face| face_luxels(&face, lighting, &styles))
         {
             face_blocks.insert(index, (builder.add(width, height, luxels), [width, height]));
         }
@@ -566,30 +640,73 @@ fn triangulated_grid(steps: usize) -> impl Iterator<Item = usize> {
         })
 }
 
-/// Decodes a face's style-0 lightmap: its `width × height` luxels, or `None`
+/// Decodes a face's lightmaps into one: its `width × height` luxels, or `None`
 /// if the face has no baked light or its data is out of range.
-///
-/// Bump-mapped faces store four sample sets per style (flat plus three bump
-/// basis directions); the flat set comes first, so reading from
-/// `light_offset` yields it in both cases.
-fn face_luxels(face: &vbsp::Face, lighting: &[u8]) -> Option<(usize, usize, Vec<Luxel>)> {
-    if face.styles[0] == NO_LIGHT_STYLE {
-        return None;
-    }
+fn face_luxels(
+    face: &vbsp::Handle<'_, vbsp::Face>,
+    lighting: &[u8],
+    styles: &LightStyles,
+) -> Option<(usize, usize, Vec<Luxel>)> {
     let offset = usize::try_from(face.light_offset).ok()?;
     let width = usize::try_from(face.light_map_texture_size[0]).ok()? + 1;
     let height = usize::try_from(face.light_map_texture_size[1]).ok()? + 1;
     if width > MAX_LIGHTMAP_SIZE || height > MAX_LIGHTMAP_SIZE {
         return None;
     }
-    let data = lighting.get(offset..offset.checked_add(width * height * 4)?)?;
-    let luxels = data
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|&luxel| decode_luxel(luxel))
-        .collect();
+    let bumped = face.texture().flags.contains(vbsp::TextureFlags::BUMPLIGHT);
+    let block = LightBlock {
+        offset,
+        luxels: width * height,
+        bumped,
+    };
+    let luxels = block.bake(lighting, face.styles, styles)?;
     Some((width, height, luxels))
+}
+
+/// Where a face's samples lie in the lighting lump.
+#[derive(Debug, Clone, Copy)]
+struct LightBlock {
+    /// Byte offset of the first sample.
+    offset: usize,
+    /// Luxels in one sample set.
+    luxels: usize,
+    /// Whether each style holds four sample sets (flat, then the three bump
+    /// basis directions) rather than one.
+    bumped: bool,
+}
+
+impl LightBlock {
+    /// The sum of the block's style slots, each scaled by its style's
+    /// brightness: what the engine computes each frame, as of the map's start.
+    ///
+    /// Slots are filled in order until the first [`NO_LIGHT_STYLE`]. Only the
+    /// flat set of a bumped face is read, as rustlife does not bump its
+    /// lightmaps. Returns `None` if the face has no slots or a slot's samples
+    /// lie outside `lighting`.
+    fn bake(self, lighting: &[u8], slots: [u8; 4], styles: &LightStyles) -> Option<Vec<Luxel>> {
+        if slots[0] == NO_LIGHT_STYLE {
+            return None;
+        }
+        let set = self.luxels.checked_mul(4)?;
+        let stride = set.checked_mul(if self.bumped { BUMP_SAMPLE_SETS } else { 1 })?;
+        let mut baked = vec![[0.0; 3]; self.luxels];
+        for (slot, &style) in slots
+            .iter()
+            .take_while(|&&style| style != NO_LIGHT_STYLE)
+            .enumerate()
+        {
+            let start = self.offset.checked_add(slot.checked_mul(stride)?)?;
+            let data = lighting.get(start..start.checked_add(set)?)?;
+            let weight = styles.weight(style);
+            for (total, &bytes) in baked.iter_mut().zip(data.as_chunks::<4>().0) {
+                let luxel = decode_luxel(bytes);
+                for (channel, value) in total.iter_mut().zip(luxel) {
+                    *channel += value * weight;
+                }
+            }
+        }
+        Some(baked)
+    }
 }
 
 /// Returns the bytes of lump `index`, or `None` if the header is invalid or the
@@ -664,6 +781,135 @@ mod tests {
         assert!(indices.iter().all(|&i| i < 9));
         // First cell's two triangles share the cell's diagonal.
         assert_eq!(&indices[..6], &[0, 1, 3, 1, 4, 3]);
+    }
+
+    /// A packed atlas holding one `size` block, for face 7.
+    fn one_face_atlas(size: [usize; 2]) -> PackedLightmaps {
+        let mut builder = AtlasBuilder::new();
+        let full_bright = builder.add(1, 1, vec![[1.0; 3]]);
+        let block = builder.add(size[0], size[1], vec![[0.5; 3]; size[0] * size[1]]);
+        let (atlas, placements) = builder.pack();
+        PackedLightmaps {
+            atlas,
+            placements,
+            face_blocks: HashMap::from([(7, (block, size))]),
+            full_bright,
+        }
+    }
+
+    #[test]
+    fn the_grid_is_stored_row_by_row() {
+        assert_eq!(grid_fraction(0, 4), [0.0, 0.0]);
+        assert_eq!(grid_fraction(4, 4), [1.0, 0.0], "the first row's end");
+        assert_eq!(grid_fraction(5, 4), [0.0, 0.25], "the next row's start");
+        assert_eq!(grid_fraction(24, 4), [1.0, 1.0]);
+    }
+
+    #[test]
+    fn a_displaced_vertex_remembers_its_place_on_the_base_face() {
+        let vertex = DisplacedVertex::new([24.0, 32.0, 48.0], [24.0, 0.0, 48.0], 255.0, [0.5, 1.0]);
+        assert_eq!(vertex.base, [0.0, 32.0, 0.0]);
+        assert_eq!(vertex.blend, 1.0);
+        assert_eq!(vertex.fraction, [0.5, 1.0]);
+    }
+
+    #[test]
+    fn a_displacements_grid_spans_its_whole_block_of_luxels() {
+        let packed = one_face_atlas([36, 10]);
+        let place = packed.placements[packed.face_blocks[&7].0];
+        let (width, height) = (packed.atlas.width as f32, packed.atlas.height as f32);
+        let (left, top) = (place.x as f32, place.y as f32);
+        let expect = |[column, row]: [f32; 2]| [(left + column) / width, (top + row) / height];
+        // Columns run along s and rows along t, to the outer edges of the
+        // block: dm_underpass's lit floors land where the native game has them
+        // only this way, and its faces point their axes all ways.
+        assert_eq!(packed.displaced_uv(7, [0.0, 0.0]), expect([0.0, 0.0]));
+        assert_eq!(packed.displaced_uv(7, [1.0, 0.0]), expect([36.0, 0.0]));
+        assert_eq!(packed.displaced_uv(7, [0.0, 1.0]), expect([0.0, 10.0]));
+        assert_eq!(packed.displaced_uv(7, [0.5, 0.5]), expect([18.0, 5.0]));
+    }
+
+    #[test]
+    fn a_face_without_a_block_is_drawn_full_bright() {
+        let packed = one_face_atlas([2, 2]);
+        let bright = packed.placements[packed.full_bright].uv(&packed.atlas, 0.0, 0.0);
+        assert_eq!(packed.displaced_uv(8, [0.5, 0.5]), bright);
+    }
+
+    #[test]
+    fn a_flat_faces_luxels_are_its_projection_onto_the_lightmap_axes() {
+        let axes = [[1.0 / 16.0, 0.0, 0.0, 2.0], [0.0, 1.0 / 16.0, 0.0, -1.0]];
+        // Luxel (0, 0) is centred where the axes give the face's minimum.
+        assert_eq!(
+            luxel_coordinates(axes, [2, -1], [5, 5], [0.0, 0.0, 9.0]),
+            [0.0, 0.0]
+        );
+        assert_eq!(
+            luxel_coordinates(axes, [2, -1], [5, 5], [32.0, 48.0, 0.0]),
+            [2.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn luxel_coordinates_are_clamped_to_the_block_and_its_border() {
+        let axes = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]];
+        assert_eq!(
+            luxel_coordinates(axes, [0, 0], [4, 2], [-3.0, 9.0, 0.0]),
+            [-0.5, 1.5]
+        );
+    }
+
+    /// Samples of one luxel per style slot: `value` at exponent 0.
+    fn samples(values: &[u8]) -> Vec<u8> {
+        values.iter().flat_map(|&v| [v, v, v, 0]).collect()
+    }
+
+    #[test]
+    fn a_faces_style_slots_add_up_by_brightness() {
+        let lighting = samples(&[9, 51, 102, 204]);
+        let block = LightBlock {
+            offset: 4,
+            luxels: 1,
+            bumped: false,
+        };
+        let styles = LightStyles::new(&[
+            MapEntity::new("light", [0.0; 3]).with("style", "32"),
+            MapEntity::new("light", [0.0; 3])
+                .with("style", "33")
+                .with("spawnflags", "1"),
+        ]);
+        let baked = block
+            .bake(&lighting, [0, 32, 33, 255], &styles)
+            .expect("in range");
+        // 51 and 102 lit, 204 belongs to a dark light; 9 is before the face.
+        assert!((baked[0][1] - 153.0 / 255.0).abs() < 1e-5, "{baked:?}");
+    }
+
+    #[test]
+    fn a_bumped_face_keeps_four_sample_sets_per_style() {
+        let lighting = samples(&[10, 90, 90, 90, 20, 90, 90, 90]);
+        let block = LightBlock {
+            offset: 0,
+            luxels: 1,
+            bumped: true,
+        };
+        let baked = block
+            .bake(&lighting, [0, 32, 255, 255], &LightStyles::default())
+            .expect("in range");
+        assert!((baked[0][0] - 30.0 / 255.0).abs() < 1e-5, "{baked:?}");
+    }
+
+    #[test]
+    fn a_face_without_slots_or_with_slots_out_of_range_has_no_light() {
+        let lighting = samples(&[10]);
+        let block = LightBlock {
+            offset: 0,
+            luxels: 1,
+            bumped: false,
+        };
+        let styles = LightStyles::default();
+        assert_eq!(block.bake(&lighting, [255; 4], &styles), None);
+        assert_eq!(block.bake(&lighting, [0, 32, 255, 255], &styles), None);
     }
 
     #[test]
