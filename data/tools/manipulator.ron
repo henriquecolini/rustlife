@@ -63,6 +63,10 @@ Manipulator(
     punt: (
         range: 256.0,
         speed: 2600.0,
+        // What is fixed to the world and can break (a vent's grate, a window, a
+        // func_breakable) breaks, whatever its health: HL2DM's punt does 1
+        // damage (PuntNonVPhysics), which is mostly nothing to them.
+        brush_damage: 100000.0,
         mass_curve: [(0.0, 1.0), (100.0, 1.0), (150.0, 0.985), (200.0, 0.945), (250.0, 0.885), (600.0, 0.4667)],
     ),
 )

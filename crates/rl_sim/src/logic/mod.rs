@@ -571,6 +571,22 @@ impl MapLogic {
         }
     }
 
+    /// Whether damage does anything to the mover of `model`: it can still
+    /// break, or a blow presses it. A breakable without health or only broken by
+    /// the map's logic does not take damage.
+    #[must_use]
+    pub fn takes_damage(&self, model: usize) -> bool {
+        self.mover_index(model).is_some_and(|index| {
+            let mover = &self.parts.movers[index];
+            !mover.gone()
+                && match mover.class {
+                    mover::MoverClass::Button => mover.pressed_by_damage(),
+                    mover::MoverClass::Breakable => mover.health.is_some(),
+                    _ => false,
+                }
+        })
+    }
+
     /// `amount` damage reaches the mover of `model`.
     fn damage_mover(
         &mut self,

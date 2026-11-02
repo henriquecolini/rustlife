@@ -12,6 +12,7 @@ use glam::Vec3;
 use rl_data::GameData;
 use rl_level::{Level, LevelError, LevelProp, PropModel};
 use rl_sim::collision::WorldBuilder;
+use rl_sim::physics::Motion;
 use rl_sim::simulation::Spawn;
 use source_formats::entities::MapEntity;
 use source_formats::phy;
@@ -258,6 +259,33 @@ fn props_without_health_or_that_are_not_physics_props_do_not_break() {
             .breakable
             .is_none()
     );
+    // A dynamic prop breaks only if its entity says so...
+    fixed.kind = PropKind::Dynamic;
+    assert!(
+        barrel
+            .desc(&fixed, &data.physics, &table)
+            .expect("solid")
+            .breakable
+            .is_none()
+    );
+    fixed.health = 10.0;
+    assert!(
+        barrel
+            .desc(&fixed, &data.physics, &table)
+            .expect("solid")
+            .breakable
+            .is_some()
+    );
+}
+
+#[test]
+fn a_frozen_physics_prop_breaks_as_its_model_says() {
+    let data = data();
+    let (barrel, mut frozen, table) = explosive_barrel(&PropDataTable::default());
+    frozen.spawnflags |= 8;
+    let desc = barrel.desc(&frozen, &data.physics, &table).expect("solid");
+    assert_eq!(desc.motion, Motion::Fixed);
+    assert!(desc.breakable.is_some());
 }
 
 #[test]

@@ -227,10 +227,24 @@ after a launch, punt or dry fire, secondary after a grab or drop.
 | Secondary fire, held, on a pickup the player can use | Pull it all the way in, however close, rather than grabbing it: the player takes it on touching it. One they cannot use (a medkit at full health) is grabbed like any prop, and never taken while held. |
 | Secondary fire, pressed while holding | Let go. Secondary fire must then be released before it reaches for another prop. |
 | Primary fire while holding | Launch the prop along the view at `launch.speed × mass_curve(mass)`. |
-| Primary fire otherwise | Punt the dynamic prop in the aim's way within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. |
+| Primary fire otherwise | Punt the dynamic prop in the aim's way within `punt.range`: an impulse at the point hit, for a speed change of `punt.speed × mass_curve(mass)`; harder than a throw. Or smash what is fixed to the world, below. Nothing to act on is a dry fire. |
 
 The **mass curves** are `(kg, factor)` points, interpolated linearly and
 held flat past the ends. Heavier props leave slower.
+
+**Punting what is fixed to the world.** HL2DM's punt moves a frozen prop only if
+the map lets the physcannon free it, and does 1 damage to a brush
+(`PuntNonVPhysics`), which is mostly nothing. Here it goes further, by design:
+
+| In the aim's way | A punt |
+|---|---|
+| A frozen `prop_physics` that can break (the stock maps' vent grates: `props_junk/vent001.mdl`, spawnflags 8 and 64, `prop_data` health) | Breaks it, whatever its health (`punt.brush_damage`), with the punt's effect and sounds |
+| A frozen `prop_physics` that cannot break, with spawnflag 64 (enable motion on physcannon) | Frees it and knocks it away, as HL2DM |
+| A frozen `prop_physics` that can do neither, a static prop, or a brush that takes no damage | Dry fire |
+| A brush entity that takes damage | Does `punt.brush_damage` to it ([map-logic.md](map-logic.md)) |
+
+A `prop_dynamic` breaks only if its entity gives it health; static props are the
+world's.
 
 **The aim** is thicker than a line, so that small props need not be under the
 very crosshair. Looking for a prop to take (`find_target`, HL2DM's `FindObject`
@@ -313,7 +327,7 @@ the throw. These scripts move the player on the hosted server.
 | `rl_sim/tests/physics.rs` | Props settling, sliding off a ramp, blocking and carrying players, pushing light vs heavy props, a falling prop hurting a player once, held props, release without self-hits, debris, rotated props, freeing on grab, speed caps, a lamp hanging on a ball socket and swinging back when hit, a rope's length, joints to missing bodies refused |
 | `rl_sim/src/physics/joints.rs` | Reading ball sockets (attached to the world either way), hinges, length constraints, and what is left out |
 | `rl_level/tests/level.rs` | A named prop hanging on the map's ball socket through `Level::simulation` |
-| `rl_sim/tests/manipulator.rs` | Grabbing within range and mass, pulling, carrying and turning, launching and punting at the configured speeds, dropping, the grip breaking, a thrown prop hurting another player |
+| `rl_sim/tests/manipulator.rs` | Grabbing within range and mass, pulling, carrying and turning, launching and punting at the configured speeds, punting frozen props (breaking, freeing, a dry fire), dropping, the grip breaking, a thrown prop hurting another player |
 | `rl_sim/tests/simulation.rs` | Spawning clear of props, walking while carrying, repeatable runs |
 | `rl_sim/tests/real_map.rs` | A real map's physics world, with crates dropped at every spawn landing on the floor (`RUSTLIFE_TEST_BSP`) |
 | `rl_client/tests/local_play.rs` | A real map's props becoming bodies in the running client (`RUSTLIFE_TEST_GAME_DIR`) |

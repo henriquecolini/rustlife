@@ -14,7 +14,9 @@
 //!   breaks.
 //! - **Primary fire** throws the held prop along the view, or punts a prop
 //!   in range that is not held; the speed falls off with mass
-//!   ([`LaunchConfig`](rl_data::LaunchConfig)).
+//!   ([`LaunchConfig`](rl_data::LaunchConfig)). A punt also smashes what is
+//!   fixed to the world and can break: a frozen prop, which otherwise comes
+//!   free if the map lets the tool free it, or a brush entity that takes damage.
 //!
 //! Only props the physics world says are grabbable can be held or pulled;
 //! any dynamic prop can be punted. The aim is thicker than a line, so that small
@@ -25,13 +27,14 @@ use glam::{Quat, Vec3};
 use rl_data::{GrabConfig, HoldConfig, ManipulatorConfig};
 use serde::{Deserialize, Serialize};
 
-use crate::collision::contents::{MOVEABLE, SOLID, WINDOW};
-use crate::collision::{CollisionWorld, Hull};
+use crate::collision::contents::{GRATE, MOVEABLE, SOLID, WINDOW};
+use crate::collision::{CollisionWorld, Hull, Trace};
 use crate::movement::{Buttons, view_direction};
 use crate::physics::{BodyId, PhysicsWorld};
 
-/// What the tool's aim stops at.
-const AIM_MASK: u32 = SOLID | WINDOW | MOVEABLE;
+/// What the tool's aim stops at: grates too, unlike bullets (`FindObject`'s and
+/// `PrimaryAttack`'s mask, `MASK_SHOT` and `CONTENTS_GRATE`).
+const AIM_MASK: u32 = SOLID | WINDOW | MOVEABLE | GRATE;
 
 /// The box a look for something to take tries when its ray finds nothing: 4
 /// units to each side (`FindObject`, `CheckForTarget`).
@@ -48,7 +51,7 @@ const PUNT_BOX: Hull = Hull {
 };
 
 /// Something the Manipulator did this tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ToolEvent {
     /// Picked a prop up.
     Grabbed(BodyId),
@@ -60,6 +63,11 @@ pub enum ToolEvent {
     Launched(BodyId),
     /// Knocked away a prop that was not held.
     Punted(BodyId),
+    /// Punted a prop fixed to the world that can break, at this point.
+    SmashedProp(BodyId, Vec3),
+    /// Punted the brush entity of this BSP model, which takes damage, at this
+    /// point.
+    SmashedBrush(u32, Vec3),
     /// Primary fire with nothing to throw or punt.
     DryFire,
 }
@@ -107,6 +115,18 @@ struct Held {
     blocked_secs: f32,
 }
 
+/// What the tool cannot tell by itself about what it finds.
+#[derive(Clone, Copy)]
+pub struct Targets<'a> {
+    /// Pickups the player can use: pulled all the way in rather than grabbed,
+    /// and collected on touching the player.
+    pub collectable: &'a [BodyId],
+    /// Whether a prop can break.
+    pub breakable: &'a dyn Fn(BodyId) -> bool,
+    /// Whether the brush entity of a BSP model takes damage.
+    pub damaged_brush: &'a dyn Fn(usize) -> bool,
+}
+
 /// What reaching for a prop depends on besides the aim.
 struct Reach<'a> {
     /// The reaching player's box.
@@ -115,6 +135,15 @@ struct Reach<'a> {
     collectable: &'a [BodyId],
     /// How long the tool rests after a grab.
     intervals: Intervals,
+}
+
+/// What a punt found to act on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PuntTarget {
+    /// A prop that moves, comes free or breaks, and where.
+    Prop(BodyId, Vec3),
+    /// The BSP model of a brush entity that takes damage, and where.
+    Brush(u32, Vec3),
 }
 
 /// One player's Manipulator.
@@ -157,16 +186,15 @@ impl Manipulator {
 
     /// Runs the tool for one tick of `dt` seconds for `player` (whose box
     /// is `player_body`), aiming along `aim` with `buttons` held, resting
-    /// for `intervals` after acting. The props in `collectable` are pickups the
-    /// player can use: they are pulled all the way in rather than grabbed, and
-    /// the player collects them on touching them.
+    /// for `intervals` after acting. `targets` says what it cannot tell about
+    /// what it finds.
     pub fn tick(
         &mut self,
         player_body: BodyId,
         aim: &Aim,
         buttons: Buttons,
         intervals: Intervals,
-        collectable: &[BodyId],
+        targets: &Targets<'_>,
         dt: f32,
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
@@ -198,11 +226,11 @@ impl Manipulator {
                 self.hold(aim, dt, physics, config, intervals)
             }
         } else if buttons.contains(Buttons::ATTACK) && self.primary_cooldown == 0.0 {
-            Some(self.punt(aim, world, physics, config, intervals))
+            Some(self.punt(aim, targets, world, physics, config, intervals))
         } else if secondary_held && !self.secondary_spent && self.secondary_cooldown == 0.0 {
             let reach = Reach {
                 player_body,
-                collectable,
+                collectable: targets.collectable,
                 intervals,
             };
             self.reach(&reach, aim, dt, world, physics, config)
@@ -235,10 +263,13 @@ impl Manipulator {
         Some(ToolEvent::Launched(body))
     }
 
-    /// Knocks away the dynamic prop in the aim's way within punt range.
+    /// Acts on what a punt finds in the aim's way within range: knocks a prop
+    /// away, freeing a frozen one the map lets it free, unless it is frozen and
+    /// can break, which is left to the simulation to do, as a brush is.
     fn punt(
         &mut self,
         aim: &Aim,
+        targets: &Targets<'_>,
         world: &CollisionWorld,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
@@ -246,9 +277,17 @@ impl Manipulator {
     ) -> ToolEvent {
         self.primary_cooldown = intervals.primary;
         let forward = aim.forward();
-        let Some((body, point)) = punt_target(aim, world, physics, config.punt.range) else {
-            return ToolEvent::DryFire;
+        let (body, point) = match punt_target(aim, targets, world, physics, config.punt.range) {
+            None => return ToolEvent::DryFire,
+            Some(PuntTarget::Brush(model, point)) => return ToolEvent::SmashedBrush(model, point),
+            Some(PuntTarget::Prop(body, point)) => (body, point),
         };
+        if !physics.is_dynamic(body) {
+            if (targets.breakable)(body) {
+                return ToolEvent::SmashedProp(body, point);
+            }
+            physics.free(body);
+        }
         let mass = physics.mass(body).unwrap_or(1.0);
         physics.apply_impulse(body, forward * config.punt.speed_for(mass) * mass, point);
         ToolEvent::Punted(body)
@@ -432,20 +471,31 @@ fn cone_bounds(eye: Vec3, forward: Vec3, reach: f32, cone: f32) -> (Vec3, Vec3) 
     (eye.min(tip) - radius, eye.max(tip) + radius)
 }
 
-/// The dynamic prop primary fire would knock away within `range`, with the point
-/// it was found at: a box first, then a ray, which finds what is too close to
-/// the map for the box to reach (`CWeaponPhysCannon::PrimaryAttack`).
+/// What primary fire would act on within `range`, with the point it was found at:
+/// a box first, then a ray, which finds what is too close to the map for the box
+/// to reach (`CWeaponPhysCannon::PrimaryAttack`).
 fn punt_target(
     aim: &Aim,
+    targets: &Targets<'_>,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
     range: f32,
-) -> Option<(BodyId, Vec3)> {
+) -> Option<PuntTarget> {
     let end = aim.eye + aim.forward() * range;
-    let dynamic = |&(body, _): &(BodyId, Vec3)| physics.is_dynamic(body);
-    first_prop(aim.eye, end, &PUNT_BOX, world, physics)
-        .filter(dynamic)
-        .or_else(|| first_prop(aim.eye, end, &Hull::POINT, world, physics).filter(dynamic))
+    let of = |trace: Trace| match (trace.body, trace.model) {
+        (Some(body), _) => {
+            (physics.is_dynamic(body) || physics.frees_on_grab(body) || (targets.breakable)(body))
+                .then_some(PuntTarget::Prop(body, trace.end))
+        }
+        (None, Some(model)) => (targets.damaged_brush)(model)
+            .then(|| u32::try_from(model).ok())
+            .flatten()
+            .map(|model| PuntTarget::Brush(model, trace.end)),
+        (None, None) => None,
+    };
+    first_hit(aim.eye, end, &PUNT_BOX, world, physics)
+        .and_then(of)
+        .or_else(|| first_hit(aim.eye, end, &Hull::POINT, world, physics).and_then(of))
 }
 
 /// The prop `hull` hits going from `start` to `end`, with where it stopped;
@@ -458,13 +508,26 @@ fn first_prop(
     world: &CollisionWorld,
     physics: &PhysicsWorld,
 ) -> Option<(BodyId, Vec3)> {
+    let trace = first_hit(start, end, hull, world, physics)?;
+    Some((trace.body?, trace.end))
+}
+
+/// What `hull` hits going from `start` to `end`, of the map and the props;
+/// `None` if it starts stuck in the map.
+fn first_hit(
+    start: Vec3,
+    end: Vec3,
+    hull: &Hull,
+    world: &CollisionWorld,
+    physics: &PhysicsWorld,
+) -> Option<Trace> {
     let map = world.trace_hull(start, end, hull, AIM_MASK);
     if map.all_solid {
         return None;
     }
     // Nothing beyond the map's hit matters: trace props only that far.
     let props = physics.trace_hull_including_debris(start, map.end, hull, AIM_MASK, None);
-    let trace = if props.hit() || props.start_solid {
+    Some(if props.hit() || props.start_solid {
         // Rescale the props' fraction of the shortened move to the whole
         // move, as `Scene` does.
         let mut props = props;
@@ -475,8 +538,7 @@ fn first_prop(
         map.nearest(props)
     } else {
         map
-    };
-    Some((trace.body?, trace.end))
+    })
 }
 
 #[cfg(test)]

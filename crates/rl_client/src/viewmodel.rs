@@ -433,9 +433,11 @@ fn tool_activity(event: ToolEvent) -> &'static str {
         ToolEvent::Grabbed(_) | ToolEvent::Dropped(_) | ToolEvent::GripBroke(_) => {
             "ACT_VM_SECONDARYATTACK"
         }
-        ToolEvent::Launched(_) | ToolEvent::Punted(_) | ToolEvent::DryFire => {
-            "ACT_VM_PRIMARYATTACK"
-        }
+        ToolEvent::Launched(_)
+        | ToolEvent::Punted(_)
+        | ToolEvent::SmashedProp(..)
+        | ToolEvent::SmashedBrush(..)
+        | ToolEvent::DryFire => "ACT_VM_PRIMARYATTACK",
     }
 }
 

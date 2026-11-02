@@ -335,9 +335,15 @@ impl PropModel {
 
     /// How a prop of this model placed by `placement` breaks: its `health`
     /// from the entity, else from the model's `prop_data`; no health, no
-    /// breaking. Only physics props break.
+    /// breaking. Physics props break, frozen or not; a dynamic prop only if its
+    /// entity gives it health; a static prop is the world's.
     fn breakable(&self, placement: &PropPlacement, propdata: &PropDataTable) -> Option<Breakable> {
-        if placement.kind != PropKind::Physics {
+        let breaks = match placement.kind {
+            PropKind::Physics => true,
+            PropKind::Dynamic => placement.health > 0.0,
+            PropKind::Static => false,
+        };
+        if !breaks {
             return None;
         }
         let data = self

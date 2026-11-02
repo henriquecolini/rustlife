@@ -232,7 +232,9 @@ fn weapon_sounds(
             ToolEvent::Grabbed(_) => "pickup",
             ToolEvent::Dropped(_) | ToolEvent::GripBroke(_) => "drop",
             ToolEvent::Launched(_) => "launch",
-            ToolEvent::Punted(_) => "punt",
+            ToolEvent::Punted(_) | ToolEvent::SmashedProp(..) | ToolEvent::SmashedBrush(..) => {
+                "punt"
+            }
             ToolEvent::DryFire => "dryfire",
         };
         if let Some(weapon) = sim.player(who).and_then(|p| p.inventory.active()) {

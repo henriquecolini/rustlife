@@ -18,6 +18,7 @@ use rl_sim::combat::Cause;
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::simulation::{Life, MapEvent, PlayerId, Simulation, TickEvents};
+use rl_sim::tools::manipulator::ToolEvent;
 use source_formats::entities::MapEntity;
 
 fn data() -> GameData {
@@ -363,6 +364,108 @@ fn a_teleport_sends_the_player_to_its_destination() {
         "{}",
         room.origin()
     );
+}
+
+/// A room with a brush of `class` across the way, 100 units ahead at eye level,
+/// keyed by `keys`, and the Manipulator in the player's hand.
+fn punt_room(class: &str, keys: &[(&str, &str)]) -> Room {
+    let world = WorldBuilder::new().brush_entity(
+        class,
+        None,
+        Vec3::new(100.0, 0.0, 0.0),
+        Vec3::new(-4.0, -64.0, 0.0),
+        Vec3::new(4.0, 64.0, 128.0),
+    );
+    let mut keys = keys.to_vec();
+    keys.push(("model", "*1"));
+    let mut room = Room::new(world, &[entity(class, Vec3::new(100.0, 0.0, 0.0), &keys)]);
+    let manipulator = room.sim.arsenal().find_weapon("manipulator");
+    assert!(manipulator.is_some(), "the built-in data has it");
+    room.tick(&UserCmd {
+        select: manipulator,
+        ..UserCmd::default()
+    });
+    room.idle(100);
+    room
+}
+
+/// One punt along +X; what the tool did, and whether the brush broke in the ticks
+/// after.
+fn punt_brush(room: &mut Room) -> (Vec<ToolEvent>, bool) {
+    let events = room.tick(&UserCmd {
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    });
+    let tools = events.tools.iter().map(|&(_, event)| event).collect();
+    let broke = |events: &TickEvents| events.map.contains(&MapEvent::Broke { model: 1 });
+    let later = room.idle(3).iter().any(broke);
+    (tools, broke(&events) || later)
+}
+
+#[test]
+fn a_punt_breaks_a_breakable_brush_however_healthy() {
+    let mut room = punt_room("func_breakable", &[("health", "5000"), ("material", "1")]);
+    let (tools, broke) = punt_brush(&mut room);
+    assert!(
+        matches!(tools[..], [ToolEvent::SmashedBrush(1, _)]),
+        "{tools:?}"
+    );
+    assert!(broke, "the brush broke");
+    assert!(!room.sim.logic().movers()[0].solid());
+}
+
+#[test]
+fn a_punt_breaks_a_breakable_window() {
+    let mut room = punt_room("func_breakable_surf", &[("health", "5")]);
+    let (tools, broke) = punt_brush(&mut room);
+    assert!(
+        matches!(tools[..], [ToolEvent::SmashedBrush(1, _)]),
+        "{tools:?}"
+    );
+    assert!(broke);
+}
+
+#[test]
+fn a_punt_is_a_dry_fire_on_a_brush_with_no_health() {
+    let mut room = punt_room("func_breakable", &[("health", "0")]);
+    let (tools, broke) = punt_brush(&mut room);
+    assert_eq!(tools, [ToolEvent::DryFire]);
+    assert!(!broke);
+    assert!(room.sim.logic().movers()[0].solid());
+}
+
+#[test]
+fn a_punt_is_a_dry_fire_on_a_brush_only_the_maps_logic_breaks() {
+    let mut room = punt_room("func_breakable", &[("health", "5"), ("spawnflags", "1")]);
+    let (tools, broke) = punt_brush(&mut room);
+    assert_eq!(tools, [ToolEvent::DryFire]);
+    assert!(!broke);
+}
+
+#[test]
+fn a_punt_is_a_dry_fire_on_a_door() {
+    let mut room = punt_room("func_door", &[]);
+    let (tools, _) = punt_brush(&mut room);
+    assert_eq!(tools, [ToolEvent::DryFire]);
+}
+
+#[test]
+fn a_punt_presses_a_button_a_blow_presses() {
+    let mut room = punt_room("func_button", &[("spawnflags", "513")]);
+    let (tools, _) = punt_brush(&mut room);
+    assert!(
+        matches!(tools[..], [ToolEvent::SmashedBrush(1, _)]),
+        "{tools:?}"
+    );
+}
+
+#[test]
+fn a_broken_brush_is_not_punted_again() {
+    let mut room = punt_room("func_breakable", &[("health", "5")]);
+    punt_brush(&mut room);
+    room.idle(100);
+    let (tools, _) = punt_brush(&mut room);
+    assert_eq!(tools, [ToolEvent::DryFire]);
 }
 
 #[test]

@@ -102,6 +102,10 @@ pub struct LaunchConfig {
     /// Multiplier on [`speed`](Self::speed) by mass: `(kg, factor)` points,
     /// sorted by mass, interpolated linearly and held flat past the ends.
     pub mass_curve: Vec<(f32, f32)>,
+    /// Damage a punt does to what is fixed to the world and can break: brush
+    /// entities and frozen props. Unused for launching the held prop.
+    #[serde(default)]
+    pub brush_damage: f32,
 }
 
 impl LaunchConfig {
@@ -170,6 +174,7 @@ impl ManipulatorConfig {
 
 fn launch(check: &mut Validator, field: &str, launch: &LaunchConfig) {
     check.non_negative(&format!("{field}.speed"), launch.speed);
+    check.non_negative(&format!("{field}.brush_damage"), launch.brush_damage);
     let curve_field = format!("{field}.mass_curve");
     if launch.mass_curve.is_empty() {
         check.fail(&curve_field, "needs at least one point");
@@ -208,6 +213,7 @@ mod tests {
             range: 0.0,
             speed: 1000.0,
             mass_curve: vec![(0.0, 1.0), (100.0, 0.5)],
+            brush_damage: 0.0,
         };
         assert_eq!(launch.speed_for(50.0), 750.0);
     }
@@ -240,6 +246,7 @@ mod tests {
                 range: 0.0,
                 speed: 1.0,
                 mass_curve: vec![(5.0, 1.0), (5.0, 0.5)],
+                brush_damage: 0.0,
             },
         );
         let problems = check.finish();

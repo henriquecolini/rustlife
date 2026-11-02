@@ -15,7 +15,7 @@ use glam::{Quat, Vec3};
 use rl_data::GameData;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
-use rl_sim::physics::{BodyId, Motion, PropDesc};
+use rl_sim::physics::{BodyId, Breakable, Motion, PropDesc};
 use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
 use rl_sim::tools::manipulator::{Aim, ToolEvent, find_target};
 
@@ -395,6 +395,120 @@ fn the_nearest_of_the_crates_in_the_cone_is_taken_and_ties_go_to_the_first() {
         data.manipulator.grab.reach(),
     );
     assert_eq!(found.map(|(body, _)| body), Some(left));
+}
+
+/// How a test's crate breaks.
+fn breakable(health: f32) -> Breakable {
+    Breakable {
+        health,
+        bullets: 1.0,
+        club: 1.0,
+        explosive: 1.0,
+        explosion: None,
+        gibs: Vec::new(),
+        pieces: Vec::new(),
+        gib_count: 0,
+        respawn: None,
+    }
+}
+
+/// A room with a crate `desc` too, at eye level 100 units ahead and 40 to the
+/// side.
+fn room_with(desc: PropDesc) -> (Room, BodyId) {
+    let data = data();
+    let mut room = Room::with_pedestal(&data, 100.0, 10.0, EYE_LEVEL);
+    let body = room.sim.add_prop(&PropDesc {
+        origin: Vec3::new(100.0, 40.0, EYE_LEVEL),
+        ..desc
+    });
+    room.sim.refresh_props();
+    (room, body)
+}
+
+/// A crate fixed to the world.
+fn frozen() -> PropDesc {
+    PropDesc {
+        motion: Motion::Fixed,
+        ..crate_desc(Vec3::ZERO, 10.0)
+    }
+}
+
+/// Primary fire with the view on the crate [`room_with`] added.
+fn punt_at_room_with(room: &mut Room) -> Vec<ToolEvent> {
+    let cmd = UserCmd {
+        yaw: 21.8,
+        pitch: 0.0,
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    };
+    room.run(1, &cmd)
+}
+
+#[test]
+fn a_punt_breaks_a_frozen_prop_however_healthy() {
+    let (mut room, body) = room_with(PropDesc {
+        breakable: Some(breakable(1_000.0)),
+        ..frozen()
+    });
+    let events = punt_at_room_with(&mut room);
+    assert!(
+        matches!(events[..], [ToolEvent::SmashedProp(smashed, _)] if smashed == body),
+        "{events:?}"
+    );
+    assert!(room.sim.physics().is_broken(body));
+}
+
+#[test]
+fn a_punt_frees_a_frozen_prop_the_map_lets_it_free_and_knocks_it_away() {
+    let (mut room, body) = room_with(PropDesc {
+        free_on_grab: true,
+        ..frozen()
+    });
+    let before = room.sim.physics().pose(body).expect("prop").position;
+    let events = punt_at_room_with(&mut room);
+    assert_eq!(events, [ToolEvent::Punted(body)]);
+    assert!(room.sim.physics().is_dynamic(body));
+    room.run(5, &UserCmd::default());
+    let after = room.sim.physics().pose(body).expect("prop").position;
+    assert!(after.distance(before) > 10.0, "{before} to {after}");
+}
+
+#[test]
+fn a_prop_that_can_both_break_and_come_free_breaks() {
+    let (mut room, body) = room_with(PropDesc {
+        free_on_grab: true,
+        breakable: Some(breakable(12.0)),
+        ..frozen()
+    });
+    let events = punt_at_room_with(&mut room);
+    assert!(
+        matches!(events[..], [ToolEvent::SmashedProp(..)]),
+        "{events:?}"
+    );
+    assert!(room.sim.physics().is_broken(body));
+}
+
+#[test]
+fn a_punt_is_a_dry_fire_on_a_frozen_prop_that_cannot_break_or_come_free() {
+    let (mut room, body) = room_with(frozen());
+    let before = room.sim.physics().pose(body).expect("prop").position;
+    assert_eq!(punt_at_room_with(&mut room), [ToolEvent::DryFire]);
+    room.run(5, &UserCmd::default());
+    assert!(!room.sim.physics().is_dynamic(body));
+    assert_eq!(
+        room.sim.physics().pose(body).expect("prop").position,
+        before
+    );
+}
+
+#[test]
+fn a_prop_that_moves_is_knocked_away_not_smashed_even_if_it_can_break() {
+    let (mut room, body) = room_with(PropDesc {
+        motion: Motion::Dynamic,
+        breakable: Some(breakable(12.0)),
+        ..crate_desc(Vec3::ZERO, 10.0)
+    });
+    assert_eq!(punt_at_room_with(&mut room), [ToolEvent::Punted(body)]);
 }
 
 #[test]

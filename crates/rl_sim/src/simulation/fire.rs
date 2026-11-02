@@ -14,7 +14,7 @@ use crate::combat::{Cause, Damage, Target, blast};
 use crate::movement::{Buttons, UserCmd, view_direction};
 use crate::rng::Rng;
 use crate::scene::Scene;
-use crate::tools::manipulator::{Aim, ToolEvent};
+use crate::tools::manipulator::{Aim, Targets, ToolEvent};
 use crate::weapons::projectile::{Flight, Projectile};
 use crate::weapons::{Mode, WeaponId};
 
@@ -78,7 +78,11 @@ impl Simulation {
                 &aim,
                 cmd.buttons,
                 intervals,
-                &collectable,
+                &Targets {
+                    collectable: &collectable,
+                    breakable: &|body| self.breakables.contains(body),
+                    damaged_brush: &|model| self.logic.takes_damage(model),
+                },
                 self.dt,
                 &self.world,
                 &mut self.physics,
@@ -91,24 +95,7 @@ impl Simulation {
                 .map(ToolEvent::Dropped),
         };
         if let Some(event) = tool_event {
-            if let ToolEvent::Launched(body)
-            | ToolEvent::Punted(body)
-            | ToolEvent::Dropped(body)
-            | ToolEvent::GripBroke(body) = event
-            {
-                self.thrown.retain(|&(thrown, ..)| thrown != body);
-                self.thrown.push((body, id, self.tick));
-                let launched = matches!(event, ToolEvent::Launched(_) | ToolEvent::Punted(_));
-                let armed = if launched {
-                    self.data.physics.breakables.barrels.launched_seconds
-                } else {
-                    0.0
-                };
-                self.breakables.arm(body, armed);
-            }
-            if let ToolEvent::Grabbed(body) = event {
-                self.breakables.arm(body, 0.0);
-            }
+            self.tool_acted(id, event);
             events.tools.push((id, event));
         }
 
@@ -305,6 +292,34 @@ impl Simulation {
             }
             Struck::Brush(model) => self.brush_damage.push((Some(id), model as usize, damage)),
             Struck::World | Struck::Nothing => {}
+        }
+    }
+
+    /// What the Manipulator of `id` having done `event` means for the rest of
+    /// the simulation.
+    fn tool_acted(&mut self, id: PlayerId, event: ToolEvent) {
+        let smash = self.data.manipulator.punt.brush_damage;
+        match event {
+            ToolEvent::Launched(body)
+            | ToolEvent::Punted(body)
+            | ToolEvent::Dropped(body)
+            | ToolEvent::GripBroke(body) => {
+                self.thrown.retain(|&(thrown, ..)| thrown != body);
+                self.thrown.push((body, id, self.tick));
+                let launched = matches!(event, ToolEvent::Launched(_) | ToolEvent::Punted(_));
+                let armed = if launched {
+                    self.data.physics.breakables.barrels.launched_seconds
+                } else {
+                    0.0
+                };
+                self.breakables.arm(body, armed);
+            }
+            ToolEvent::Grabbed(body) => self.breakables.arm(body, 0.0),
+            ToolEvent::SmashedProp(body, _) => self.hit_prop(body, smash, Blow::Impact, Some(id)),
+            ToolEvent::SmashedBrush(model, _) => {
+                self.brush_damage.push((Some(id), model as usize, smash));
+            }
+            ToolEvent::DryFire => {}
         }
     }
 

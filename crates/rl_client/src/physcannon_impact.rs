@@ -2,7 +2,9 @@
 //!
 //! The game's client notices a launch (a held prop let fly, or a prop
 //! punted) and dispatches the effect at the prop's centre
-//! (`C_WeaponPhysCannon::DoEffectLaunch`). The effect, from `client.so`:
+//! (`C_WeaponPhysCannon::DoEffectLaunch`). A punt that smashes something fixed
+//! to the world, which the game has not got, looks the same, at the point it
+//! struck. The effect, from `client.so`:
 //!
 //! - for the player who fired, a beam from the view model's muzzle to the
 //!   prop: `sprites/orangelight1`, 12 units wide at the muzzle and 4 at the prop,
@@ -65,16 +67,15 @@ const FLASH: ScreenFade = ScreenFade {
     seconds: 0.1,
 };
 
-/// A prop was thrown: where it was (Bevy space, metres), who threw it, whether
-/// that is the player this client plays, which prop it was and where its centre
-/// is in its own space (Source units).
+/// A prop was thrown, or something fixed to the world was smashed: where it was
+/// (Bevy space, metres), who did it, whether that is the player this client plays,
+/// and the prop thrown with where its centre is in its own space (Source units).
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PhyscannonImpact {
     pub player: PlayerId,
     pub at: Vec3,
     pub local: bool,
-    pub body: BodyId,
-    pub body_centre: Vec3,
+    pub body: Option<(BodyId, Vec3)>,
 }
 
 /// Where the centre of a prop that has its origin at `pose` is, given as `centre`
@@ -150,7 +151,7 @@ fn load_sprite(mut sprite: ResMut<BeamSprite>, assets: Res<AssetServer>) {
 }
 
 /// Turns each launch the tick events report into a [`PhyscannonImpact`] at
-/// the launched prop's centre.
+/// the launched prop's centre, and each smash into one where the punt struck.
 fn detect_launches(
     mut ticks: MessageReader<Ticked>,
     game: Game,
@@ -164,8 +165,18 @@ fn detect_launches(
     let local = local.map(|local| local.id);
     for Ticked(events) in ticks.read() {
         for &(player, event) in &events.tools {
-            let (ToolEvent::Launched(body) | ToolEvent::Punted(body)) = event else {
-                continue;
+            let body = match event {
+                ToolEvent::Launched(body) | ToolEvent::Punted(body) => body,
+                ToolEvent::SmashedProp(_, point) | ToolEvent::SmashedBrush(_, point) => {
+                    impacts.write(PhyscannonImpact {
+                        player,
+                        at: coords::position(point.to_array()),
+                        local: Some(player) == local,
+                        body: None,
+                    });
+                    continue;
+                }
+                _ => continue,
             };
             let physics = sim.physics();
             let Some(pose) = physics.pose(body) else {
@@ -177,8 +188,7 @@ fn detect_launches(
                 player,
                 at: coords::position(centre.to_array()),
                 local: Some(player) == local,
-                body,
-                body_centre: centre_in_body(pose, centre),
+                body: Some((body, centre_in_body(pose, centre))),
             });
         }
     }
@@ -188,9 +198,8 @@ fn detect_launches(
 #[derive(Component)]
 struct Beam {
     player: PlayerId,
-    /// The prop it ends on, and where on it, in the prop's own space.
-    body: BodyId,
-    body_centre: Vec3,
+    /// The prop it ends on, if any, and where on it, in the prop's own space.
+    body: Option<(BodyId, Vec3)>,
     /// Where it ended last, Bevy space: where it stays if the prop breaks.
     to: Vec3,
     /// When it goes, seconds of app time.
@@ -263,7 +272,6 @@ fn start_effects(
             Beam {
                 player: impact.player,
                 body: impact.body,
-                body_centre: impact.body_centre,
                 to: impact.at,
                 until: time.elapsed_secs() + BEAM_LIFE,
                 mesh: mesh.clone(),
@@ -308,11 +316,11 @@ fn draw_beams(
         let Some(mut mesh) = meshes.get_mut(&beam.mesh) else {
             continue;
         };
-        let pose = (!sim.physics().is_broken(beam.body))
-            .then(|| drawn.0.as_ref()?.props.get(&beam.body).copied())
-            .flatten();
-        if let Some(pose) = pose {
-            beam.to = coords::position(centre_at(pose, beam.body_centre).to_array());
+        if let Some((body, centre)) = beam.body
+            && !sim.physics().is_broken(body)
+            && let Some(pose) = drawn.0.as_ref().and_then(|drawn| drawn.props.get(&body))
+        {
+            beam.to = coords::position(centre_at(*pose, centre).to_array());
         }
         let start = scene.muzzle_position(sim, beam.player, local) / unit;
         let end = beam.to / unit;

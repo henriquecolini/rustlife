@@ -602,6 +602,23 @@ impl PhysicsWorld {
             .is_some_and(|prop| prop.grabbable && (prop.free_on_grab || self.is_dynamic(body)))
     }
 
+    /// Whether a prop is fixed in place until the Manipulator frees it.
+    #[must_use]
+    pub fn frees_on_grab(&self, body: BodyId) -> bool {
+        self.prop(body).is_some_and(|prop| prop.free_on_grab) && !self.is_dynamic(body)
+    }
+
+    /// Frees a prop [`frees_on_grab`](Self::frees_on_grab): it is simulated from
+    /// now on.
+    pub fn free(&mut self, body: BodyId) {
+        if !self.frees_on_grab(body) {
+            return;
+        }
+        if let Some(handle) = self.handle(body) {
+            body_set_type(self.b3_world_mut(), handle, BodyType::Dynamic);
+        }
+    }
+
     /// Whether a prop is asleep (at rest and not simulated until touched).
     #[must_use]
     pub fn is_sleeping(&self, body: BodyId) -> bool {

@@ -45,7 +45,7 @@ the chain.
 | `func_door`, `func_door_rotating`, `func_movelinear` | open and close |
 | `func_button` | pressed by use, touch, damage or `Press` |
 | `func_brush`, `func_wall_toggle` | shown and hidden, solid or not |
-| `func_breakable`, `func_breakable_surf` | break when shot enough, or on `Break` |
+| `func_breakable`, `func_breakable_surf` | break when shot enough, on `Break`, or on a Gravity Gun punt (`punt.brush_damage`, whatever their health). Those with no health, or that only the map's logic breaks (spawnflag 1), do not take damage: a punt there is a dry fire |
 | `trigger_multiple`, `trigger_once` | fire `OnTrigger`, `OnStartTouch`, `OnEndTouch` |
 | `trigger_teleport`, `trigger_push` | move the players inside |
 | `trigger_hurt` | the simulation's hazards, switched by `Enable` / `Disable` |
@@ -161,5 +161,5 @@ to watch.
 | Test | Covers |
 |------|--------|
 | `rl_sim/src/logic/tests.rs` | Delayed chains from `logic_auto`, relays, connections' `times`, timers (random ones repeatably), counters, triggers and their touch outputs, filters, buttons opening doors through relays, locking, doors that stay open, damage breaking breakables and pressing buttons, explosions, teleports, sounds, a looping relay spending the tick budget, a new match resetting everything, children riding their parent, replicas taking on the server's state |
-| `rl_sim/tests/map_logic.rs` | In built maps: a button opening the door in the way, a platform carrying the player up, crushing, a blocked door going back, a trap switched on, a teleport, glass stopping bullets until it breaks, a replica colliding with doors where the server has them, drawing a charger |
+| `rl_sim/tests/map_logic.rs` | In built maps: a button opening the door in the way, a platform carrying the player up, crushing, a blocked door going back, a trap switched on, a teleport, glass stopping bullets until it breaks, a Gravity Gun punt on breakables, doors and buttons, a replica colliding with doors where the server has them, drawing a charger |
 | `rl_sim/tests/real_map.rs` | A stock map's logic running for two minutes (needs an install) |
