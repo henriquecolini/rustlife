@@ -251,7 +251,9 @@ impl Simulation {
     /// Turns the props' impacts on props and the map into sounds and
     /// blows: the prop that struck takes the blow of what it struck (the
     /// map is as heavy as the prop itself), and a prop it struck takes the
-    /// blow of it. Whoever threw the striking prop lately is credited.
+    /// blow of it. Which of two props is reported as the one that struck is an
+    /// accident of their order in the world, so each gets the same treatment,
+    /// and whoever threw either lately is credited, its own thrower first.
     pub(super) fn hit_props_by_impacts(&mut self) {
         let config = self.data.physics.breakables.impact;
         for impact in self.physics.take_contacts() {
@@ -271,15 +273,29 @@ impl Simulation {
                 speed: impact.speed,
                 mass,
             });
-            let attacker = self.thrower_of(impact.body);
+            let thrower = self.thrower_of(impact.body);
+            let other_thrower = impact.other.and_then(|other| self.thrower_of(other));
+            let attacker = thrower.or(other_thrower);
             self.hit_prop(impact.body, 1.0, Blow::Slam, attacker);
             let other_mass = impact.other.and_then(|other| self.physics.mass(other));
             let own = config.damage(other_mass.unwrap_or(mass), impact.speed);
             self.hit_prop(impact.body, own, Blow::Impact, attacker);
             if let (Some(other), Some(_)) = (impact.other, other_mass) {
+                let other_attacker = other_thrower.or(thrower);
+                self.hit_prop(other, 1.0, Blow::Slam, other_attacker);
                 let theirs = config.damage(mass, impact.speed);
-                self.hit_prop(other, theirs, Blow::Impact, attacker);
+                self.hit_prop(other, theirs, Blow::Impact, other_attacker);
             }
+        }
+    }
+
+    /// Turns props running into players into knocks, which set off a barrel
+    /// just launched as hitting the map does. The player who threw it is not
+    /// among them: they ignore each other until they have come apart.
+    pub(super) fn hit_props_by_player_touches(&mut self) {
+        for touch in self.physics.take_player_touches() {
+            let attacker = self.thrower_of(touch.prop);
+            self.hit_prop(touch.prop, 1.0, Blow::Slam, attacker);
         }
     }
 

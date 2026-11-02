@@ -14,6 +14,10 @@
 //! towards them is not hurt (a hard landing is fall damage), however heavy
 //! it is. Props held by someone deal none, and a prop never hits the player
 //! who just let go of it.
+//!
+//! Whether or not it hurts them, a prop that starts touching a player faster
+//! than the world reports impacts at is a [`PlayerTouch`], as much a knock as
+//! one on the map or another prop.
 
 use box3d_rust as b3;
 use glam::Vec3;
@@ -33,6 +37,18 @@ pub struct Impact {
     pub damage: f32,
 }
 
+/// A prop that started touching a player this step, fast enough to be heard;
+/// it need not have hurt them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerTouch {
+    /// The prop.
+    pub prop: BodyId,
+    /// The player's body.
+    pub player: BodyId,
+    /// Closing speed along the contact normal, units/s.
+    pub closing: f32,
+}
+
 /// A prop shoving a player.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shove {
@@ -44,11 +60,14 @@ pub struct Shove {
 
 impl PhysicsWorld {
     /// The impacts of props on players that began this step, given each
-    /// awake prop's velocity before it; updates the touching set.
+    /// awake prop's velocity before it; updates the touching set, and notes the
+    /// [`PlayerTouch`]es.
     pub(super) fn detect_impacts(&mut self, before: &[(BodyId, Vec3)]) -> Vec<Impact> {
         let mut touching = Vec::new();
         let mut impacts = Vec::new();
         let mut shoves: Vec<Shove> = Vec::new();
+        let mut touches = Vec::new();
+        let report_speed = self.config.breakables.impact.report_speed;
         for (index, body) in self.bodies.iter().enumerate() {
             let BodyKind::Player { velocity, .. } = body.kind else {
                 continue;
@@ -122,6 +141,13 @@ impl PhysicsWorld {
                     continue;
                 }
                 let speed = prop_velocity.dot(towards_player).min(closing);
+                if speed > report_speed {
+                    touches.push(PlayerTouch {
+                        prop,
+                        player,
+                        closing: speed,
+                    });
+                }
                 let damage = self.config.impact_damage.damage(mass, speed);
                 if damage > 0.0 {
                     impacts.push(Impact {
@@ -135,6 +161,7 @@ impl PhysicsWorld {
         }
         self.touching = touching;
         self.shoves = sum_shoves(shoves);
+        self.player_touches = touches;
         impacts
     }
 }

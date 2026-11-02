@@ -1207,6 +1207,219 @@ fn a_barrel_thrown_with_the_gravity_gun_explodes_on_what_it_touches() {
     );
 }
 
+/// A barrel small enough to fly at eye level over whatever lies on the floor,
+/// in the Gravity Gun's grip in `arena`, weighing `mass`.
+fn barrel_in_hand(arena: &mut Arena, data: &GameData, mass: f32) -> BodyId {
+    let barrel = arena.sim.add_prop(&PropDesc {
+        mass,
+        ..breakable_box(
+            data,
+            Vec3::new(90.0, 0.0, 0.0),
+            (8.0, 16.0),
+            10.0,
+            Some((120.0, 256.0)),
+        )
+    });
+    arena.arm("manipulator");
+    let eye = arena.sim.eye_position(arena.shooter).expect("shooter");
+    let center = arena.sim.physics().center_of_mass(barrel).expect("barrel");
+    let down = (eye.z - center.z).atan2(center.x - eye.x).to_degrees();
+    arena.hold(Buttons::ATTACK2, down, 2);
+    arena.idle(30);
+    assert_eq!(
+        arena
+            .sim
+            .player(arena.shooter)
+            .expect("shooter")
+            .manipulator
+            .held(),
+        Some(barrel)
+    );
+    barrel
+}
+
+/// Throws what the shooter holds and lets it fly: what happened.
+fn throw_it(arena: &mut Arena) -> Vec<TickEvents> {
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(60));
+    events
+}
+
+/// A prop that cannot break hanging at eye level `x` units ahead, asleep until
+/// something hits it.
+fn hanging(data: &GameData, x: f32, mass: f32, debris: bool) -> PropDesc {
+    PropDesc {
+        mass,
+        debris,
+        start_asleep: true,
+        breakable: None,
+        ..breakable_box(data, Vec3::new(x, 0.0, 50.0), (16.0, 32.0), 1000.0, None)
+    }
+}
+
+/// `barrel` alone broke and exploded in `events`, near `x`.
+fn went_off_near(events: &[TickEvents], barrel: BodyId, x: f32) {
+    let broke = breaks(events);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, barrel);
+    assert!(broke[0].exploded);
+    let at = broke[0].position.x;
+    assert!(
+        (x - 60.0..x + 10.0).contains(&at),
+        "went off at {at}, not {x}"
+    );
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_another_prop() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.sim.add_prop(&hanging(&data, 400.0, 30.0, false));
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    went_off_near(&throw_it(&mut arena), barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_a_prop_added_after_it() {
+    // Which of two props the physics reports as the one that struck depends on
+    // the order they were added in; it must not matter.
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    arena.sim.add_prop(&hanging(&data, 400.0, 30.0, false));
+    went_off_near(&throw_it(&mut arena), barrel, 400.0);
+}
+
+#[test]
+fn a_barrel_going_off_on_a_prop_is_credited_to_its_thrower() {
+    let data = data();
+    let mut arena = Arena::new(&data, 500.0);
+    arena.sim.add_prop(&hanging(&data, 400.0, 30.0, false));
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    let events = throw_it(&mut arena);
+    went_off_near(&events, barrel, 400.0);
+    let blast = events.iter().flat_map(|e| &e.damage).find(|damage| {
+        damage.victim == arena.target && damage.damage.attacker == Some(arena.shooter)
+    });
+    assert!(blast.is_some(), "the thrower is credited: {events:?}");
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_a_prop_of_next_to_no_mass() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.sim.add_prop(&hanging(&data, 400.0, 0.05, false));
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    went_off_near(&throw_it(&mut arena), barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_of_next_to_no_mass_explodes_on_a_prop() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    arena.sim.add_prop(&hanging(&data, 400.0, 30.0, false));
+    let barrel = barrel_in_hand(&mut arena, &data, 0.05);
+    went_off_near(&throw_it(&mut arena), barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_a_pickup() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    // Pickups lie as debris: players pass through them, props do not.
+    arena
+        .sim
+        .add_entities(&[MapEntity::new("item_healthkit", [400.0, 0.0, 50.0])]);
+    arena
+        .sim
+        .add_pickup_bodies([Some(hanging(&data, 400.0, 2.0, true))]);
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    went_off_near(&throw_it(&mut arena), barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_another_player_and_its_thrower_gets_the_credit() {
+    let data = data();
+    let mut arena = Arena::new(&data, 400.0);
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    let events = throw_it(&mut arena);
+    went_off_near(&events, barrel, 400.0);
+    let blast = events.iter().flat_map(|e| &e.damage).find(|damage| {
+        damage.victim == arena.target && damage.damage.attacker == Some(arena.shooter)
+    });
+    assert!(blast.is_some(), "the thrower is credited: {events:?}");
+}
+
+#[test]
+fn a_punted_barrel_explodes_on_another_player() {
+    let data = data();
+    let mut arena = Arena::new(&data, 400.0);
+    // Hanging at eye level, to go straight at them.
+    let barrel = arena.sim.add_prop(&PropDesc {
+        start_asleep: true,
+        ..breakable_box(
+            &data,
+            Vec3::new(90.0, 0.0, 57.0),
+            (8.0, 16.0),
+            10.0,
+            Some((120.0, 256.0)),
+        )
+    });
+    arena.arm("manipulator");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(60));
+    went_off_near(&events, barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_explodes_on_a_player_it_is_too_light_to_hurt() {
+    let data = data();
+    let mut arena = Arena::new(&data, 400.0);
+    let barrel = barrel_in_hand(&mut arena, &data, 0.05);
+    let events = throw_it(&mut arena);
+    let impacts: Vec<_> = events.iter().flat_map(|e| &e.impacts).collect();
+    assert!(impacts.is_empty(), "it hurt them: {impacts:?}");
+    went_off_near(&events, barrel, 400.0);
+}
+
+#[test]
+fn a_thrown_barrel_does_not_go_off_on_its_thrower_on_the_way_out() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    let barrel = barrel_in_hand(&mut arena, &data, 20.0);
+    let mut events = arena.hold(Buttons::ATTACK, -80.0, 1);
+    events.extend(arena.idle(10));
+    assert!(breaks(&events).is_empty());
+    assert!(!arena.sim.physics().is_broken(barrel));
+    let height = arena
+        .sim
+        .physics()
+        .center_of_mass(barrel)
+        .expect("barrel")
+        .z;
+    assert!(height > 150.0, "it got away: {height}");
+}
+
+#[test]
+fn a_barrel_walked_into_stays_whole() {
+    let data = data();
+    let mut arena = Arena::new(&data, 3000.0);
+    let barrel = arena.sim.add_prop(&breakable_box(
+        &data,
+        Vec3::new(60.0, 0.0, 0.0),
+        (16.0, 90.0),
+        10.0,
+        Some((120.0, 256.0)),
+    ));
+    let forward = UserCmd {
+        forward: 1.0,
+        ..UserCmd::default()
+    };
+    let events: Vec<_> = (0..60).map(|_| arena.tick(&forward)).collect();
+    assert!(breaks(&events).is_empty());
+    assert!(!arena.sim.physics().is_broken(barrel));
+}
+
 #[test]
 fn a_barrel_that_is_only_put_down_with_the_gravity_gun_stays_whole() {
     let data = data();

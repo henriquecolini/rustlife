@@ -205,7 +205,7 @@ barrel has a fuse (`breakables.barrels` in `physics.ron`):
 | shot while burning, or hit with a crowbar | explodes at once |
 | a blast of `instant_damage` or more at the barrel | explodes at once |
 | a weaker blast | set on fire, with a fuse between `longest_fuse` (barely reached) and `shortest_fuse` (just short of instant); a burning barrel keeps the sooner fuse |
-| thrown or punted with the Manipulator | explodes on the first thing it touches, for `launched_seconds` |
+| thrown or punted with the Manipulator | for `launched_seconds`, explodes on the first thing it touches faster than `breakables.impact.report_speed`: the map, another prop, a pickup or a player (not the one who launched it, which it ignores until they have come apart), hurt or not |
 
 Whoever lit the fuse is credited with the blast and its kills, so
 barrels set off by other barrels chain, each credited to the first

@@ -61,7 +61,7 @@ mod props;
 mod statics;
 mod trace;
 
-pub use contacts::{Impact, Shove};
+pub use contacts::{Impact, PlayerTouch, Shove};
 pub use impacts::{ContactImpact, Scrape};
 pub use joints::{JointDesc, JointKind, MapJoints, map_joints};
 pub use props::{Breakable, GibPiece, Motion, PropDesc, prop_desc};
@@ -195,6 +195,8 @@ pub struct PhysicsWorld {
     touching: Vec<(BodyId, BodyId)>,
     /// How hard props shoved players during the last step.
     shoves: Vec<Shove>,
+    /// Props that started touching players during the last step.
+    player_touches: Vec<PlayerTouch>,
     /// The map's movers' kinematic bodies.
     movers: Vec<statics::MoverBody>,
     /// The fixed body joints hold props to the world by, once one does.
@@ -244,6 +246,7 @@ impl PhysicsWorld {
             released: Vec::new(),
             touching: Vec::new(),
             shoves: Vec::new(),
+            player_touches: Vec::new(),
             movers,
             anchor: None,
             contacts: Vec::new(),
@@ -521,6 +524,12 @@ impl PhysicsWorld {
     /// moving into them.
     pub fn take_shoves(&mut self) -> Vec<Shove> {
         std::mem::take(&mut self.shoves)
+    }
+
+    /// The props that started touching players during the last
+    /// [`step`](PhysicsWorld::step), hurting them or not.
+    pub fn take_player_touches(&mut self) -> Vec<PlayerTouch> {
+        std::mem::take(&mut self.player_touches)
     }
 
     /// The props' impacts on props and the map during the last

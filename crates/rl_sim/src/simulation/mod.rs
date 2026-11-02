@@ -743,6 +743,7 @@ impl Simulation {
         }
         self.sync_pickup_poses();
         self.hit_props_by_impacts();
+        self.hit_props_by_player_touches();
         self.advance_grenades(&mut events);
 
         self.advance_projectiles(&mut events);
