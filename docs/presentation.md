@@ -219,7 +219,8 @@ against the 256 decals shots may leave.
 | Shader | Drawn | Lit |
 |--------|-------|-----|
 | `DecalModulate` (blood, puddles) | multiplied into the surface, baked as bullet marks are | by the surface it darkens |
-| `LightmappedGeneric`, `VertexLitGeneric`, `UnlitGeneric` with `$decal` (most) | blended over the surface by alpha, or cut at `$alphatest` | by the lightmap at the surface under it |
+| `LightmappedGeneric`, `VertexLitGeneric` with `$decal` (most) | blended over the surface by alpha, or cut at `$alphatest` | by the lightmap at the surface under it |
+| `UnlitGeneric` | the same | not at all: fullbright |
 
 So that a mark is as dark as the wall in a dark room, a lit decal samples the
 map's lightmap: projected or clipped triangles keep the lightmap coordinates

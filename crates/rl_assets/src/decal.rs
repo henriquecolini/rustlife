@@ -83,16 +83,16 @@ pub struct DecalAsset {
 }
 
 /// How a decal of this material is drawn, and whether the lightmap lights it.
-/// A multiplying decal takes its light from the surface it darkens. Every
-/// other decal is lit by the lightmap under it, so that none glows in a dark
-/// room, even the few `UnlitGeneric` ones.
+/// A multiplying decal takes its light from the surface it darkens, and an
+/// `UnlitGeneric` one is fullbright, as that shader is on any surface. Every
+/// other decal is lit by the lightmap under it.
 fn drawn_as(desc: &MaterialDesc) -> (DecalBlend, bool) {
     if desc.kind == MaterialKind::DecalModulate {
         return (DecalBlend::Multiply, false);
     }
     (
         desc.alpha_test.map_or(DecalBlend::Blend, DecalBlend::Mask),
-        true,
+        desc.kind != MaterialKind::UnlitGeneric,
     )
 }
 
@@ -194,7 +194,7 @@ mod tests {
         let model = desc(r#""VertexLitGeneric" { "$basetexture" "a" "$translucent" 1 }"#);
         assert_eq!(drawn_as(&model), (DecalBlend::Blend, true));
         let unlit = desc(r#""UnlitGeneric" { "$basetexture" "a" "$translucent" 1 }"#);
-        assert_eq!(drawn_as(&unlit), (DecalBlend::Blend, true));
+        assert_eq!(drawn_as(&unlit), (DecalBlend::Blend, false));
         let cut = desc(r#""LightmappedGeneric" { "$basetexture" "a" "$alphatest" 1 }"#);
         assert!(matches!(drawn_as(&cut), (DecalBlend::Mask(_), true)));
     }
