@@ -23,6 +23,7 @@ use vbsp::Bsp;
 use crate::ambient::{self, AmbientLighting};
 use crate::entities::{self, MapEntity};
 use crate::lightmap::{AtlasBuilder, LightStyles, LightmapAtlas, Luxel, Placement, decode_luxel};
+use crate::overlays::{self, Overlay, OverlayVertex};
 use crate::props::{self, PropPlacement};
 use crate::visibility::{FaceRegions, Visibility};
 
@@ -50,6 +51,9 @@ const LUMP_DIRECTORY_OFFSET: usize = 8;
 const CHUNK_SIZE: f32 = 1024.0;
 /// The 3D skybox's scale when its `sky_camera` gives none.
 const DEFAULT_SKY_SCALE: f32 = 16.0;
+/// How far an overlay is lifted off its face, units, on top of its material's
+/// depth bias.
+const OVERLAY_LIFT: f32 = 0.06;
 
 /// One mesh's worth of triangles: every three consecutive vertices form a
 /// triangle (a triangle list), all sharing one `material` and lying in one
@@ -151,6 +155,11 @@ pub struct MapGeometry {
     pub visibility: Option<Visibility>,
     /// The 3D skybox's camera, if the map has one.
     pub sky_camera: Option<SkyCamera>,
+    /// The map's overlays (`info_overlay`, lump 45), clipped to the faces they
+    /// lie on: one entry per material and cube of the map. `material` names a
+    /// decal's material; `uvs` address its texture and `lightmap_uvs` the
+    /// lightmap under it.
+    pub overlays: Vec<MapSurface>,
 }
 
 /// Entity classnames that mark a place a player can spawn.
@@ -259,6 +268,7 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         sky_area: sky_camera.and_then(|camera| camera.area),
     };
     let surfaces = build_surfaces(&bsp, &model_faces(0), lightmaps.as_ref(), &world);
+    let overlays = build_overlays(&bsp, &overlays::load(bytes), lightmaps.as_ref(), &world);
     let none = Regions {
         faces: &[],
         sky_area: None,
@@ -283,6 +293,7 @@ fn load_geometry_inner(bytes: &[u8]) -> Result<MapGeometry, BspError> {
         entities: entities::entities(&bsp),
         visibility,
         sky_camera,
+        overlays,
     })
 }
 
@@ -327,37 +338,34 @@ impl Regions<'_> {
     }
 }
 
-/// Triangulates `faces` into one [`MapSurface`] per material, with texture
-/// UVs, lightmap UVs (when the map is lit) and displacement blend alphas.
-fn build_surfaces(
-    bsp: &Bsp,
-    faces: &[usize],
-    lightmaps: Option<&PackedLightmaps>,
-    regions: &Regions,
-) -> Vec<MapSurface> {
-    let mut by_key: HashMap<(String, [i32; 3], bool), usize> = HashMap::new();
-    let mut surfaces: Vec<MapSurface> = Vec::new();
-    // Surfaces with a face in no known cluster, which must always be drawn.
-    let mut unplaced: Vec<bool> = Vec::new();
-    for &index in faces {
-        let Some(face) = bsp.face(index) else {
-            continue;
-        };
+/// Surfaces being filled: one per material, cube of the map and skybox flag.
+#[derive(Default)]
+struct SurfaceGroups {
+    by_key: HashMap<(String, [i32; 3], bool), usize>,
+    surfaces: Vec<MapSurface>,
+    /// Surfaces with a face in no known cluster, which must always be drawn.
+    unplaced: Vec<bool>,
+}
 
-        let texture = face.texture();
-        let material = texture.name().to_owned();
-        let normal = face.normal();
-        let normal = [normal.x, normal.y, normal.z];
-
-        let (clusters, skybox) = regions.of(index);
-        let chunk = face.vertex_positions().next().map_or([0; 3], |first| {
-            [first.x, first.y, first.z].map(|coordinate| (coordinate / CHUNK_SIZE).floor() as i32)
+impl SurfaceGroups {
+    /// The surface for a face of `material` whose first vertex is `first`, in
+    /// `clusters`.
+    fn surface(
+        &mut self,
+        material: &str,
+        first: Option<[f32; 3]>,
+        clusters: &[u16],
+        skybox: bool,
+    ) -> &mut MapSurface {
+        let chunk = first.map_or([0; 3], |first| {
+            first.map(|coordinate| (coordinate / CHUNK_SIZE).floor() as i32)
         });
-        let surface_index = *by_key
-            .entry((material.clone(), chunk, skybox))
+        let index = *self
+            .by_key
+            .entry((material.to_owned(), chunk, skybox))
             .or_insert_with(|| {
-                surfaces.push(MapSurface {
-                    material: material.clone(),
+                self.surfaces.push(MapSurface {
+                    material: material.to_owned(),
                     positions: Vec::new(),
                     normals: Vec::new(),
                     uvs: Vec::new(),
@@ -366,42 +374,73 @@ fn build_surfaces(
                     clusters: Vec::new(),
                     skybox,
                 });
-                unplaced.push(false);
-                surfaces.len() - 1
+                self.unplaced.push(false);
+                self.surfaces.len() - 1
             });
-        unplaced[surface_index] |= clusters.is_empty();
-        let surface = &mut surfaces[surface_index];
+        self.unplaced[index] |= clusters.is_empty();
+        let surface = &mut self.surfaces[index];
         for &cluster in clusters {
             if let Err(at) = surface.clusters.binary_search(&cluster) {
                 surface.clusters.insert(at, cluster);
             }
         }
+        surface
+    }
 
-        let displaced = face.displacement().map(|displacement| {
-            let steps = 1usize << displacement.power.clamp(0, 8);
-            let grid: Vec<DisplacedVertex> = displacement
-                .displacement_vertices()
-                .zip(displacement.displaced_vertices())
-                .enumerate()
-                .map(|(grid_index, (vertex, position))| {
-                    let offset = vertex.displacement();
-                    DisplacedVertex::new(
-                        [position.x, position.y, position.z],
-                        [offset.x, offset.y, offset.z],
-                        vertex.alpha,
-                        grid_fraction(grid_index, steps),
-                    )
-                })
-                .collect();
-            triangulated_grid(steps)
-                .map(|grid_index| grid.get(grid_index).copied())
-                .collect::<Vec<Option<DisplacedVertex>>>()
-        });
+    /// The finished surfaces.
+    fn finish(mut self) -> Vec<MapSurface> {
+        for (surface, unplaced) in self.surfaces.iter_mut().zip(self.unplaced) {
+            if unplaced {
+                surface.clusters.clear();
+            }
+        }
+        self.surfaces
+    }
+}
 
-        // `vertex_positions` yields an already-triangulated vertex stream
-        // (triangle list), tessellating displacement faces along the way; the
-        // per-vertex data above follows the same order.
-        for (vertex, position) in face.vertex_positions().enumerate() {
+/// One vertex of a face's triangle list.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FaceVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
+    /// Coordinate into the lightmap atlas, if the map is lit.
+    lightmap_uv: Option<[f32; 2]>,
+    blend: f32,
+}
+
+/// Face `index`'s triangle list, tessellating a displacement, with its UVs.
+fn face_vertices(
+    face: &vbsp::Handle<'_, vbsp::Face>,
+    index: usize,
+    lightmaps: Option<&PackedLightmaps>,
+) -> Vec<FaceVertex> {
+    let texture = face.texture();
+    let displaced = face.displacement().map(|displacement| {
+        let steps = 1usize << displacement.power.clamp(0, 8);
+        let grid: Vec<DisplacedVertex> = displacement
+            .displacement_vertices()
+            .zip(displacement.displaced_vertices())
+            .enumerate()
+            .map(|(grid_index, (vertex, position))| {
+                let offset = vertex.displacement();
+                DisplacedVertex::new(
+                    [position.x, position.y, position.z],
+                    [offset.x, offset.y, offset.z],
+                    vertex.alpha,
+                    grid_fraction(grid_index, steps),
+                )
+            })
+            .collect();
+        triangulated_grid(steps)
+            .map(|grid_index| grid.get(grid_index).copied())
+            .collect::<Vec<Option<DisplacedVertex>>>()
+    });
+    // `vertex_positions` yields an already-triangulated vertex stream
+    // (triangle list), tessellating displacement faces along the way; the
+    // per-vertex data above follows the same order.
+    face.vertex_positions()
+        .enumerate()
+        .map(|(vertex, position)| {
             let position = [position.x, position.y, position.z];
             let extra = displaced
                 .as_ref()
@@ -409,28 +448,104 @@ fn build_surfaces(
             // A displacement stretches its base face's texture over its surface
             // rather than projecting it onto the displaced shape.
             let base = extra.map_or(position, |extra| extra.base);
-            surface.blend.push(extra.map_or(0.0, |extra| extra.blend));
-            surface.positions.push(position);
-            surface.normals.push(normal);
-            surface.uvs.push(texture.uv(vbsp::Vector {
-                x: base[0],
-                y: base[1],
-                z: base[2],
-            }));
-            if let Some(lightmaps) = lightmaps {
-                surface.lightmap_uvs.push(match extra {
+            FaceVertex {
+                position,
+                uv: texture.uv(vbsp::Vector {
+                    x: base[0],
+                    y: base[1],
+                    z: base[2],
+                }),
+                lightmap_uv: lightmaps.map(|lightmaps| match extra {
                     Some(extra) => lightmaps.displaced_uv(index, extra.fraction),
-                    None => lightmaps.uv(index, &face, &texture, position),
-                });
+                    None => lightmaps.uv(index, face, &texture, position),
+                }),
+                blend: extra.map_or(0.0, |extra| extra.blend),
+            }
+        })
+        .collect()
+}
+
+/// Triangulates `faces` into one [`MapSurface`] per material, with texture
+/// UVs, lightmap UVs (when the map is lit) and displacement blend alphas.
+fn build_surfaces(
+    bsp: &Bsp,
+    faces: &[usize],
+    lightmaps: Option<&PackedLightmaps>,
+    regions: &Regions,
+) -> Vec<MapSurface> {
+    let mut groups = SurfaceGroups::default();
+    for &index in faces {
+        let Some(face) = bsp.face(index) else {
+            continue;
+        };
+        let normal = face.normal();
+        let normal = [normal.x, normal.y, normal.z];
+        let (clusters, skybox) = regions.of(index);
+        let vertices = face_vertices(&face, index, lightmaps);
+        let first = vertices.first().map(|vertex| vertex.position);
+        let surface = groups.surface(face.texture().name(), first, clusters, skybox);
+        for vertex in vertices {
+            surface.blend.push(vertex.blend);
+            surface.positions.push(vertex.position);
+            surface.normals.push(normal);
+            surface.uvs.push(vertex.uv);
+            if let Some(lightmap_uv) = vertex.lightmap_uv {
+                surface.lightmap_uvs.push(lightmap_uv);
             }
         }
     }
-    for (surface, unplaced) in surfaces.iter_mut().zip(unplaced) {
-        if unplaced {
-            surface.clusters.clear();
+    groups.finish()
+}
+
+/// Clips each overlay to the faces it lists, into one [`MapSurface`] per
+/// material and cube of the map. Its vertices keep the lightmap coordinates of
+/// the face under them, and sit a little above it.
+fn build_overlays(
+    bsp: &Bsp,
+    overlays: &[Overlay],
+    lightmaps: Option<&PackedLightmaps>,
+    regions: &Regions,
+) -> Vec<MapSurface> {
+    let mut groups = SurfaceGroups::default();
+    for overlay in overlays {
+        let Some(info) = bsp.texture_info(overlay.texinfo) else {
+            continue;
+        };
+        let material = info.name().to_ascii_lowercase();
+        for &index in &overlay.faces {
+            let Some(face) = bsp.face(index) else {
+                continue;
+            };
+            let normal = face.normal();
+            let normal = [normal.x, normal.y, normal.z];
+            let (clusters, skybox) = regions.of(index);
+            let vertices = face_vertices(&face, index, lightmaps);
+            for triangle in vertices.as_chunks::<3>().0 {
+                let corners = triangle.map(|vertex| OverlayVertex {
+                    position: vertex.position,
+                    lightmap_uv: vertex.lightmap_uv.unwrap_or_default(),
+                    uv: [0.0; 2],
+                });
+                let clipped = overlay.clip(corners);
+                let Some(first) = clipped.first() else {
+                    continue;
+                };
+                let surface = groups.surface(&material, Some(first[0].position), clusters, skybox);
+                for vertex in clipped.iter().flatten() {
+                    surface.positions.push(std::array::from_fn(|axis| {
+                        vertex.position[axis] + normal[axis] * OVERLAY_LIFT
+                    }));
+                    surface.normals.push(normal);
+                    surface.uvs.push(vertex.uv);
+                    surface.blend.push(0.0);
+                    if lightmaps.is_some() {
+                        surface.lightmap_uvs.push(vertex.lightmap_uv);
+                    }
+                }
+            }
         }
     }
-    surfaces
+    groups.finish()
 }
 
 /// What a vertex of a displacement's grid carries besides its position.
@@ -994,6 +1109,22 @@ mod tests {
                     .all(|uv| uv.iter().all(|c| (0.0..=1.0).contains(c))),
                 "lightmap UVs stay inside the atlas ({})",
                 surface.material
+            );
+        }
+
+        eprintln!("overlay surfaces: {}", geometry.overlays.len());
+        for overlay in &geometry.overlays {
+            assert_eq!(overlay.uvs.len(), overlay.positions.len());
+            assert_eq!(overlay.lightmap_uvs.len(), overlay.positions.len());
+            assert_eq!(overlay.positions.len() % 3, 0);
+            assert!(
+                overlay
+                    .uvs
+                    .iter()
+                    .flatten()
+                    .all(|&c| (-1e-3..=1.0 + 1e-3).contains(&c)),
+                "overlay coordinates stay on its texture ({})",
+                overlay.material
             );
         }
 

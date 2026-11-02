@@ -23,6 +23,7 @@ expose them:
 |------|-------|----------|
 | `LIGHTING` | 8 | Low-dynamic-range lightmaps |
 | `PAKFILE` | 40 | Embedded zip of map-specific content |
+| `OVERLAYS` | 45 | `info_overlay` decals |
 
 A compressed lump starts with `"LZMA"`; HL2DM does not compress the lumps
 rustlife reads, so such lumps are treated as absent.
@@ -110,6 +111,46 @@ All faces are packed into one atlas with a shelf packer. Each block gets a
 one-luxel border repeating its edges, so bilinear filtering never mixes
 neighbouring faces' light. Faces without a lightmap (unlit materials) point at a
 reserved full-bright luxel.
+
+## Map decals
+
+A map's graffiti, stains and posters come in two kinds. `presentation.md` says
+how they are drawn.
+
+**`infodecal`** entities stay in the entity lump: `origin` and `texture` (a
+material path). One with a `targetname` waits to be triggered, and one with
+spawn flag 2048 is barred from deathmatch; no shipped map has either. It goes
+on the closest surface: the engine traces ±5 units along all axes
+(`CDecal::StaticDecal`), and rustlife takes the closest point within 8 units.
+Its size is the texture's in texels times the material's `$decalscale`. Its
+axes come from the surface's normal alone (`R_DecalComputeBasis`): on a floor or
+ceiling (|normal.z| > sin 45°) *s* keeps to +X with *t* = *s* × normal; on a wall
+*t* is −Z, so that it stands upright, with *s* = normal × *t*.
+
+**Overlays** are compiled out of the entity lump into lump 45 as 352-byte
+`doverlay_t` records. Lump 50 holds water overlays in the same form; no shipped
+map has any.
+
+| Offset | Field | Notes |
+|--------|-------|-------|
+| 0 | `id` | `i32` |
+| 4 | `texinfo` | `i16`, naming the material through its texture data |
+| 6 | face count, render order | `u16`: low 14 bits, high 2 bits (every shipped overlay uses order 0) |
+| 8 | `faces` | 64 `i32`, face indices |
+| 264 | `u` | `f32` × 2 |
+| 272 | `v` | `f32` × 2 |
+| 280 | `points` | 4 vectors |
+| 328 | `origin` | vector |
+| 340 | `normal` | vector, the basis normal |
+
+Each point's `x` and `y` place a corner in the plane through `origin`, along
+the basis tangent and bitangent. The tangent is packed in the points' `z`:
+points 0 to 2 hold its components, and point 3 holds 1 if the bitangent, normal
+× tangent, is flipped. The corners take texture coordinates `(u0, v0)`,
+`(u0, v1)`, `(u1, v1)` and `(u1, v0)`, in that order. rustlife clips the listed
+faces' triangles to the quad, seen along the normal, and reads each new vertex's
+texture coordinate off the quad by inverse bilinear interpolation. Each keeps
+its lightmap coordinate, so the overlay can be lit like the face under it.
 
 ## Displacement blending
 

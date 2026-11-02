@@ -48,6 +48,8 @@ pub enum MaterialKind {
     Water,
     /// `Sky`: a 2D skybox face.
     Sky,
+    /// `DecalModulate`: a decal that multiplies what is under it.
+    DecalModulate,
     /// `Refract`: a refracting surface (glass, heat haze).
     Refract,
     /// A recognised shader rustlife has no special handling for yet.
@@ -89,6 +91,8 @@ pub struct MaterialDesc {
     /// `$selfillum`: the base texture's colour glows where its alpha channel
     /// is set, whatever the light.
     pub self_illum: bool,
+    /// `$decalscale`: world units per texel of a decal, 1 if not set.
+    pub decal_scale: f32,
 }
 
 /// A water surface's fog: the colour water fades to with depth, and the
@@ -139,6 +143,7 @@ pub fn parse(text: &str) -> Result<MaterialDesc, VmtError> {
         desc.water_fog = Some(water_fog(&[text]));
     }
     desc.self_illum = flag_on(&[text], "$selfillum");
+    desc.decal_scale = decal_scale(&[text]);
     Ok(desc)
 }
 
@@ -289,6 +294,7 @@ where
         desc.water_fog = Some(water_fog(&[text, &base_text]));
     }
     desc.self_illum = flag_on(&[text, &base_text], "$selfillum");
+    desc.decal_scale = decal_scale(&[text, &base_text]);
     Ok(desc)
 }
 
@@ -308,7 +314,26 @@ fn describe(material: &Material) -> MaterialDesc {
         no_cull: material.no_cull(),
         water_fog: None,
         self_illum: false,
+        decal_scale: 1.0,
     }
+}
+
+/// The `$decalscale` in the text of a VMT (or the one it patches): the first
+/// positive number found, or 1.
+fn decal_scale(texts: &[&str]) -> f32 {
+    texts
+        .iter()
+        .flat_map(|text| text.lines())
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            let key = words.next()?.trim_matches('"');
+            if !key.eq_ignore_ascii_case("$decalscale") {
+                return None;
+            }
+            let value = words.next()?.trim_matches('"').parse::<f32>().ok()?;
+            (value > 0.0).then_some(value)
+        })
+        .unwrap_or(1.0)
 }
 
 /// Whether the text of a VMT (or of the one it patches) switches `flag`
@@ -353,6 +378,7 @@ fn kind_of(material: &Material) -> MaterialKind {
         Material::UnlitGeneric(_) | Material::UnlitTwoTexture(_) => MaterialKind::UnlitGeneric,
         Material::Water(_) => MaterialKind::Water,
         Material::Sky(_) => MaterialKind::Sky,
+        Material::DecalModulate(_) => MaterialKind::DecalModulate,
         Material::Refract(_) => MaterialKind::Refract,
         Material::Patch(_) => MaterialKind::Patch,
         _ => MaterialKind::Other,
@@ -503,6 +529,19 @@ mod tests {
                 parse(&format!(r#""{shader}" {{ "$basetexture" "decals/x" }}"#)).expect("parse");
             assert_eq!(desc.base_texture.as_deref(), Some("decals/x"), "{shader}");
         }
+    }
+
+    #[test]
+    fn decal_shaders_and_scales_are_read() {
+        let modulate = parse(r#""DecalModulate" { "$basetexture" "decals/x" "$decalscale" 0.25 }"#)
+            .expect("parse");
+        assert_eq!(modulate.kind, MaterialKind::DecalModulate);
+        assert_eq!(modulate.decal_scale, 1.0, "not on a line of its own");
+        let spaced = parse("\"LightmappedGeneric\"\n{\n\"$basetexture\" \"a\"\n\"$decal\" 1\n\"$DecalScale\" \".5\"\n}")
+            .expect("parse");
+        assert_eq!(spaced.decal_scale, 0.5);
+        assert_eq!(decal_scale(&["\"$decalscale\" \"nonsense\""]), 1.0);
+        assert_eq!(decal_scale(&["$decalscale 0"]), 1.0);
     }
 
     #[test]

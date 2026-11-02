@@ -207,6 +207,26 @@ whose fragment shader fogs additive passes towards black (they fade out)
 and multiplying ones towards white (they leave the wall alone), with
 Bevy's own falloff. Blended ones fog as before.
 
+### Map decals
+
+Graffiti, stains, posters and grime are placed by the map itself: `infodecal`
+entities and overlays (`docs/formats/bsp.md`). `rl_client/src/map_decals.rs`
+places them as the map loads. They last as long as the map, and do not count
+against the 256 decals shots may leave.
+
+| Shader | Drawn | Lit |
+|--------|-------|-----|
+| `DecalModulate` (blood, puddles) | multiplied into the surface, baked as bullet marks are | by the surface it darkens |
+| `LightmappedGeneric`, `VertexLitGeneric`, `UnlitGeneric` with `$decal` (most) | blended over the surface by alpha, or cut at `$alphatest` | by the lightmap at the surface under it |
+
+So that a mark is as dark as the wall in a dark room, a lit decal samples the
+map's lightmap: projected or clipped triangles keep the lightmap coordinates
+of the face they were cut from. `DecalAsset` and `decal_material` are the way
+to any decal material, and bullet marks use them too. Static decals are merged
+by material and 1024-unit cube of the map, to keep their draw calls to a few
+dozen a map. They are lifted by 0.06 unit and biased in depth to clear the
+surface.
+
 ### Textures
 
 DXT-compressed textures stay block-compressed on the GPU (BC1–3) where it
@@ -225,7 +245,7 @@ Combat effects draw the game's own sprite materials, named in
 | Muzzle flash | a gun fires | one of `muzzle_flash.sprites` at random, briefly, rolled at random, at the gun's `muzzle` attachment: the view model's for the local player (on the view model's layer), the held world model's for others |
 | Tracer | a bullet flies | a streak of `tracer.length` flying at `tracer.speed` from the muzzle to where the bullet stopped, turned about its line to face the camera |
 | Impact spray | a bullet or swing strikes the map or a prop | the surface class's sprites (concrete flecks, metal sparks, wood chips, glass shards, water splash) thrown off the surface |
-| Bullet decal | a bullet strikes a surface | one of the surface class's decal materials, projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them |
+| Bullet decal | a bullet strikes a surface | one of the surface class's decal materials, projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them, or for a material that is not `DecalModulate` (wood) blended over them |
 | Blood | a bullet strikes a player | lit blood sprites thrown out of the wound, and a large blood decal on the floor or wall behind the player |
 | Explosion | something blows up | particles the game makes itself (below) |
 | Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |

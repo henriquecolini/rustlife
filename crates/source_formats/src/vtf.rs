@@ -241,6 +241,21 @@ pub fn decode(bytes: &[u8]) -> Result<DecodedTexture, VtfError> {
     )
 }
 
+/// The size of a VTF's largest mip, from its header alone, without decoding
+/// it; `None` if the bytes are not a VTF.
+#[must_use]
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(..4)? != b"VTF\0" {
+        return None;
+    }
+    let size = |at: usize| {
+        Some(u32::from(u16::from_le_bytes(
+            bytes.get(at..at + 2)?.try_into().ok()?,
+        )))
+    };
+    Some((size(16)?, size(18)?))
+}
+
 /// Decodes every frame of an animated texture (a sprite's), each as
 /// [`decode`] decodes frame 0, at most `max_frames` of them.
 ///

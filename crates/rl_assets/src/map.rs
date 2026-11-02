@@ -164,6 +164,10 @@ pub struct MapAsset {
     /// Every entity of the map, Source space, for the simulation to
     /// interpret (pickups, hazards).
     pub entities: Arc<[MapEntity]>,
+    /// The map's overlays, clipped to the faces they lie on: one mesh per
+    /// decal material and part of the map, with `UV_1` addressing the
+    /// lightmap.
+    pub overlays: Vec<MapMesh>,
     /// Centre of the geometry's axis-aligned bounding box, in Bevy space.
     pub center: Vec3,
     /// Half the bounding box's diagonal length, a rough "radius" for framing.
@@ -185,6 +189,7 @@ impl Default for MapAsset {
             visibility: None,
             sky_camera: None,
             entities: Arc::new([]),
+            overlays: Vec::new(),
             center: Vec3::ZERO,
             radius: 1.0,
         }
@@ -317,6 +322,7 @@ fn build_map(geometry: &MapGeometry, load_context: &mut LoadContext) -> MapAsset
             scale: camera.scale,
         }),
         entities: geometry.entities.clone().into(),
+        overlays: add_meshes(load_context, "overlay", &geometry.overlays),
         center,
         radius: radius.max(1.0),
     }

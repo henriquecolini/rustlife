@@ -37,7 +37,7 @@ pub(crate) const SKY_LAYER: usize = 2;
 
 /// The visibility clusters a world surface lies in.
 #[derive(Component, Debug, Clone)]
-pub(crate) struct Clusters(Vec<u16>);
+pub(crate) struct Clusters(pub(crate) Vec<u16>);
 
 /// Handle to the map currently being loaded.
 #[derive(Resource)]

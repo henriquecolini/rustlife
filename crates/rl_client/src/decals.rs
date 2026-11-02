@@ -13,26 +13,36 @@
 //! each decal texture is pre-multiplied against white in its authored space
 //! (`1 - a * (1 - rgb)`) and sampled as unorm, leaving a plain multiply with
 //! no second alpha factor. Transparent texels are white and change nothing.
+//!
+//! Translucent decal materials ([`DecalBlend::Blend`]) are blended over the
+//! surface instead, lit by its lightmap wherever it has one: the projected
+//! triangles carry the lightmap coordinates of what they were cut from.
+//! `decal_material` builds either.
+//!
+//! The decals a map places itself live in `map_decals`.
 
 use std::collections::{HashMap, HashSet};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
-use rl_assets::{DecalAsset, MapAsset, ModelAsset, SOURCE, coords};
+use rl_assets::{DecalAsset, DecalBlend, MapAsset, ModelAsset, SOURCE, coords};
 use rl_sim::collision::Trace;
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::effect_material::{EffectMaterial, effect_material};
+use crate::map_decals::{MapDecals, place_map_decals};
 use crate::net::{Game, LevelBodies};
 use crate::props::{PhysicsBody, Prop};
 use crate::surfaces::SurfaceClass;
-use crate::world::{BrushEntity, MapHandle, MapScoped};
+use crate::world::{BrushEntity, MapHandle, MapScoped, baked_light_scale};
 
 /// Most decals alive at once; the oldest is removed to make room.
 const MAX_DECALS: usize = 256;
+/// How far a decal's depth test leans towards the camera, on top of its lift.
+const DECAL_DEPTH_BIAS: f32 = 4.0;
 /// Side of the cells world triangles are bucketed into, metres.
 const CELL_SIZE: f32 = 2.0;
 
@@ -43,11 +53,18 @@ impl Plugin for DecalsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DecalAssets>()
             .init_resource::<WorldDecals>()
+            .init_resource::<MapDecals>()
             .add_message::<DecalRequest>()
             .add_systems(OnExit(AppState::InGame), reset)
             .add_systems(
                 Update,
-                (load_assets, build_world_index, expire_decals, spawn_decals)
+                (
+                    load_assets,
+                    build_world_index,
+                    place_map_decals,
+                    expire_decals,
+                    spawn_decals,
+                )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -88,9 +105,9 @@ struct Decal {
 
 /// The loaded decal textures and materials, and the decals alive.
 #[derive(Resource)]
-struct DecalAssets {
+pub(crate) struct DecalAssets {
     handles: HashMap<String, Handle<DecalAsset>>,
-    materials: HashMap<String, Handle<EffectMaterial>>,
+    materials: HashMap<(String, bool), Handle<EffectMaterial>>,
     live: Vec<Entity>,
     loaded: bool,
     rng: Rng,
@@ -109,50 +126,82 @@ impl Default for DecalAssets {
 }
 
 impl DecalAssets {
-    /// The material for decal `name`, once its corrected texture has loaded.
-    fn material(
+    /// Starts loading decal material `name`, unless it already is, and returns
+    /// its handle.
+    pub(crate) fn request(&mut self, name: &str, server: &AssetServer) -> Handle<DecalAsset> {
+        self.handles
+            .entry(name.to_owned())
+            .or_insert_with(|| server.load(format!("{SOURCE}://materials/{name}.vmt")))
+            .clone()
+    }
+
+    /// The material for decal `name`, once its corrected texture has loaded,
+    /// drawn on a surface that has a lightmap (`lightmapped`) or does not, and
+    /// whether the decal should then be given that lightmap.
+    pub(crate) fn material(
         &mut self,
         name: &str,
+        lightmapped: bool,
         decals: &Assets<DecalAsset>,
         materials: &mut Assets<EffectMaterial>,
-    ) -> Option<Handle<EffectMaterial>> {
-        if let Some(material) = self.materials.get(name) {
-            return Some(material.clone());
-        }
+    ) -> Option<(Handle<EffectMaterial>, bool)> {
         let decal = decals.get(self.handles.get(name)?)?;
-        let material = materials.add(effect_material(StandardMaterial {
-            base_color_texture: Some(decal.image.clone()),
-            unlit: true,
-            cull_mode: None,
-            double_sided: true,
-            alpha_mode: AlphaMode::Multiply,
-            depth_bias: 4.0,
-            ..default()
-        }));
-        self.materials.insert(name.to_owned(), material.clone());
-        Some(material)
+        let lit = lightmapped && decal.lit;
+        let key = (name.to_owned(), lit);
+        if let Some(material) = self.materials.get(&key) {
+            return Some((material.clone(), lit));
+        }
+        let material = materials.add(effect_material(decal_material(decal, lit)));
+        self.materials.insert(key, material.clone());
+        Some((material, lit))
+    }
+}
+
+/// The material a decal is drawn with: multiplied into the surface, or blended
+/// over it and, if `lit`, lit by the lightmap in its mesh's `UV_1` exactly as
+/// the world is.
+#[must_use]
+pub(crate) fn decal_material(decal: &DecalAsset, lit: bool) -> StandardMaterial {
+    let alpha_mode = match decal.blend {
+        DecalBlend::Multiply => AlphaMode::Multiply,
+        DecalBlend::Blend => AlphaMode::Blend,
+        DecalBlend::Mask(cutoff) => AlphaMode::Mask(cutoff),
+    };
+    StandardMaterial {
+        base_color_texture: Some(decal.image.clone()),
+        unlit: !lit,
+        perceptual_roughness: 0.9,
+        reflectance: 0.0,
+        lightmap_exposure: baked_light_scale(),
+        cull_mode: None,
+        double_sided: true,
+        alpha_mode,
+        depth_bias: DECAL_DEPTH_BIAS,
+        ..default()
     }
 }
 
 /// One triangle of the map's visible world, in Bevy space.
 #[derive(Debug, Clone, Copy)]
-struct WorldTriangle {
-    points: [Vec3; 3],
-    normal: Vec3,
+pub(crate) struct WorldTriangle {
+    pub(crate) points: [Vec3; 3],
+    pub(crate) normal: Vec3,
+    /// Its corners' coordinates in the map's lightmap, if it is lightmapped.
+    pub(crate) lightmap: Option<[Vec2; 3]>,
 }
 
 /// The world's triangles, bucketed by position, for finding what a decal
 /// touches.
 #[derive(Resource, Default)]
-struct WorldDecals {
-    loaded: Option<AssetId<MapAsset>>,
+pub(crate) struct WorldDecals {
+    pub(crate) loaded: Option<AssetId<MapAsset>>,
     triangles: Vec<WorldTriangle>,
     cells: HashMap<(i32, i32, i32), Vec<usize>>,
 }
 
 impl WorldDecals {
     /// Every triangle in the cells around `point`.
-    fn near(&self, point: Vec3, radius: f32) -> Vec<&WorldTriangle> {
+    pub(crate) fn near(&self, point: Vec3, radius: f32) -> Vec<&WorldTriangle> {
         let low = cell(point - Vec3::splat(radius));
         let high = cell(point + Vec3::splat(radius));
         let mut seen = HashSet::new();
@@ -185,9 +234,14 @@ fn cell(point: Vec3) -> (i32, i32, i32) {
     )
 }
 
-fn reset(mut assets: ResMut<DecalAssets>, mut world: ResMut<WorldDecals>) {
+fn reset(
+    mut assets: ResMut<DecalAssets>,
+    mut world: ResMut<WorldDecals>,
+    mut map_decals: ResMut<MapDecals>,
+) {
     *assets = DecalAssets::default();
     *world = WorldDecals::default();
+    *map_decals = MapDecals::default();
 }
 
 /// Starts loading every decal `effects.ron` names.
@@ -206,8 +260,7 @@ fn load_assets(game: Game, mut decals: ResMut<DecalAssets>, asset_server: Res<As
         .chain([&effects.blood])
         .flat_map(|impact| &impact.decals)
     {
-        let handle = asset_server.load(format!("{SOURCE}://materials/{name}.vmt"));
-        decals.handles.entry(name.clone()).or_insert(handle);
+        decals.request(name, &asset_server);
     }
 }
 
@@ -282,6 +335,12 @@ fn mesh_triangles(mesh: &Mesh, out: &mut Vec<WorldTriangle>) {
         return;
     };
     let positions: Vec<Vec3> = positions.iter().map(|p| Vec3::from_array(*p)).collect();
+    let lightmap: Option<Vec<Vec2>> = match mesh.attribute(Mesh::ATTRIBUTE_UV_1) {
+        Some(VertexAttributeValues::Float32x2(uvs)) => {
+            Some(uvs.iter().map(|uv| Vec2::from_array(*uv)).collect())
+        }
+        _ => None,
+    };
     let indices: Vec<usize> = match mesh.indices() {
         Some(Indices::U16(indices)) => indices.iter().map(|&i| usize::from(i)).collect(),
         Some(Indices::U32(indices)) => indices.iter().map(|&i| i as usize).collect(),
@@ -299,9 +358,17 @@ fn mesh_triangles(mesh: &Mesh, out: &mut Vec<WorldTriangle>) {
         };
         let normal = (b - a).cross(c - a).normalize_or_zero();
         if normal != Vec3::ZERO {
+            let lightmap = lightmap.as_ref().and_then(|uvs| {
+                Some([
+                    *uvs.get(triangle[0])?,
+                    *uvs.get(triangle[1])?,
+                    *uvs.get(triangle[2])?,
+                ])
+            });
             out.push(WorldTriangle {
                 points: [a, b, c],
                 normal,
+                lightmap,
             });
         }
     }
@@ -384,9 +451,6 @@ fn spawn_decals(
             continue;
         }
         let name = &config.decals[assets.rng.below(config.decals.len())];
-        let Some(material) = assets.material(name, &decal_assets, &mut materials) else {
-            continue;
-        };
         let point = coords::position(request.at.to_array());
         let normal = coords::direction(request.normal.to_array()).normalize_or(Vec3::Y);
         let direction = coords::direction(request.direction.to_array());
@@ -394,17 +458,27 @@ fn spawn_decals(
         let (triangles, parent) =
             target_triangles(request, point, size, &world, map, &meshes, &models, &scene);
         let parent_transform = parent.and_then(|parent| scene.globals.get(parent).ok());
-        let Some(mesh) = project(point, normal, direction, size, &triangles, parent_transform)
+        let target = DecalBox::facing(point, normal, direction, size);
+        let Some(geometry) = project(&target, &triangles, parent_transform) else {
+            continue;
+        };
+        let lightmap = map.and_then(|map| map.lightmap.clone());
+        let lightmapped = lightmap.is_some() && geometry.has_lightmap();
+        let Some((material, lit)) =
+            assets.material(name, lightmapped, &decal_assets, &mut materials)
         else {
             continue;
         };
         let until = time.elapsed_secs() + config.decal_life;
         let mut entity = commands.spawn((
-            Mesh3d(meshes.add(mesh)),
+            Mesh3d(meshes.add(geometry.into_mesh(lit))),
             MeshMaterial3d(material),
             Transform::IDENTITY,
             Decal { until },
         ));
+        if let (true, Some(image)) = (lit, lightmap) {
+            entity.insert(map_lightmap(image));
+        }
         if let Some(parent) = parent {
             entity.insert(ChildOf(parent));
         } else {
@@ -516,39 +590,132 @@ fn target_triangles(
     }
 }
 
-/// Clips the nearby triangles to the decal's box and turns them into a mesh.
-#[allow(clippy::too_many_arguments)]
-fn project(
-    point: Vec3,
-    normal: Vec3,
-    direction: Vec3,
-    size: f32,
+/// The lightmap every world surface shares (see `spawn_surface`).
+pub(crate) fn map_lightmap(image: Handle<Image>) -> bevy::pbr::Lightmap {
+    bevy::pbr::Lightmap {
+        image,
+        uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
+        bicubic_sampling: false,
+    }
+}
+
+/// The box a decal's texture is projected through, Bevy space.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DecalBox {
+    /// The centre of the texture.
+    pub(crate) point: Vec3,
+    /// The direction the surface faces, along which the box is `2 * depth`
+    /// thick.
+    pub(crate) normal: Vec3,
+    /// The direction the texture's *u* grows in, across its width.
+    pub(crate) tangent: Vec3,
+    /// The direction its *v* grows in, across its height.
+    pub(crate) bitangent: Vec3,
+    /// Its `[width, height]`.
+    pub(crate) size: Vec2,
+    /// How far from `point` it reaches along the normal, either way.
+    pub(crate) depth: f32,
+}
+
+impl DecalBox {
+    /// A square decal of side `size`, with its *u* along `direction` as it lies
+    /// in the surface: a bullet mark, turned the way the bullet came.
+    fn facing(point: Vec3, normal: Vec3, direction: Vec3, size: f32) -> Self {
+        let tangent = (direction - normal * direction.dot(normal))
+            .try_normalize()
+            .unwrap_or_else(|| normal.any_orthonormal_vector());
+        Self {
+            point,
+            normal,
+            tangent,
+            bitangent: normal.cross(tangent).normalize_or_zero(),
+            size: Vec2::splat(size),
+            depth: (size * 0.5 * 0.35).max(0.03),
+        }
+    }
+}
+
+/// A decal's triangle list, in the frame of whatever it is parented to.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct DecalGeometry {
+    pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) normals: Vec<[f32; 3]>,
+    pub(crate) uvs: Vec<[f32; 2]>,
+    /// One per position, or empty if any triangle had no lightmap.
+    pub(crate) lightmap_uvs: Vec<[f32; 2]>,
+}
+
+impl DecalGeometry {
+    /// Whether every vertex has a lightmap coordinate.
+    pub(crate) fn has_lightmap(&self) -> bool {
+        !self.positions.is_empty() && self.lightmap_uvs.len() == self.positions.len()
+    }
+
+    /// Appends `other`, dropping the lightmap if the two do not both have one.
+    pub(crate) fn append(&mut self, mut other: Self) {
+        if !(self.positions.is_empty() || self.has_lightmap() && other.has_lightmap()) {
+            self.lightmap_uvs.clear();
+            other.lightmap_uvs.clear();
+        }
+        self.positions.append(&mut other.positions);
+        self.normals.append(&mut other.normals);
+        self.uvs.append(&mut other.uvs);
+        self.lightmap_uvs.append(&mut other.lightmap_uvs);
+    }
+
+    /// The mesh to draw; with the lightmap coordinates only if the decal is
+    /// `lit`, as Bevy then expects a lightmap to go with them.
+    pub(crate) fn into_mesh(self, lit: bool) -> Mesh {
+        let mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs);
+        if lit {
+            mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, self.lightmap_uvs)
+        } else {
+            mesh
+        }
+    }
+}
+
+/// Clips the nearby triangles to the decal's box and turns them into geometry.
+pub(crate) fn project(
+    target: &DecalBox,
     triangles: &[WorldTriangle],
     parent: Option<&GlobalTransform>,
-) -> Option<Mesh> {
-    if triangles.is_empty() || size <= 0.0 {
+) -> Option<DecalGeometry> {
+    let half = target.size * 0.5;
+    if triangles.is_empty() || half.min_element() <= 0.0 {
         return None;
     }
-    let tangent = (direction - normal * direction.dot(normal))
-        .try_normalize()
-        .unwrap_or_else(|| normal.any_orthonormal_vector());
-    let bitangent = normal.cross(tangent).normalize_or_zero();
-    let half = size * 0.5;
-    let depth = (half * 0.35).max(0.03);
+    let DecalBox {
+        point,
+        normal,
+        tangent,
+        bitangent,
+        ..
+    } = *target;
     let planes = [
-        (tangent, half),
-        (-tangent, half),
-        (bitangent, half),
-        (-bitangent, half),
-        (normal, depth),
-        (-normal, depth),
+        (tangent, half.x),
+        (-tangent, half.x),
+        (bitangent, half.y),
+        (-bitangent, half.y),
+        (normal, target.depth),
+        (-normal, target.depth),
     ];
     let to_local = parent.map(|parent| parent.affine().inverse());
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
+    let mut geometry = DecalGeometry::default();
+    let lightmapped = triangles.iter().all(|triangle| triangle.lightmap.is_some());
     for triangle in triangles {
-        let mut polygon = triangle.points.to_vec();
+        let mut polygon: Vec<ClipVertex> = (0..3)
+            .map(|corner| ClipVertex {
+                position: triangle.points[corner],
+                lightmap: triangle.lightmap.map_or(Vec2::ZERO, |uvs| uvs[corner]),
+            })
+            .collect();
         for &(plane_normal, distance) in &planes {
             polygon = clip(polygon, plane_normal, distance, point);
             if polygon.len() < 3 {
@@ -560,66 +727,63 @@ fn project(
         }
         for index in 1..polygon.len() - 1 {
             let lift = triangle.normal * 0.0015;
-            let world = [
-                polygon[0] + lift,
-                polygon[index] + lift,
-                polygon[index + 1] + lift,
-            ];
-            let local = if let Some(to_local) = to_local {
+            let fan = [polygon[0], polygon[index], polygon[index + 1]];
+            let world = fan.map(|vertex| vertex.position + lift);
+            let placed = if let Some(to_local) = to_local {
                 world.map(|vertex| to_local.transform_point3(vertex))
             } else {
                 world
             };
-            let local_normal = (local[1] - local[0])
-                .cross(local[2] - local[0])
+            let placed_normal = (placed[1] - placed[0])
+                .cross(placed[2] - placed[0])
                 .normalize_or_zero();
-            if local_normal == Vec3::ZERO {
+            if placed_normal == Vec3::ZERO {
                 continue;
             }
-            for (vertex, world_vertex) in local.iter().zip(world) {
-                positions.push(vertex.to_array());
-                normals.push(local_normal.to_array());
+            for ((vertex, world_vertex), corner) in placed.iter().zip(world).zip(fan) {
+                geometry.positions.push(vertex.to_array());
+                geometry.normals.push(placed_normal.to_array());
                 let projected = world_vertex - point;
-                uvs.push([
-                    projected.dot(tangent) / size + 0.5,
-                    projected.dot(bitangent) / size + 0.5,
+                geometry.uvs.push([
+                    projected.dot(tangent) / target.size.x + 0.5,
+                    projected.dot(bitangent) / target.size.y + 0.5,
                 ]);
+                if lightmapped {
+                    geometry.lightmap_uvs.push(corner.lightmap.to_array());
+                }
             }
         }
     }
-    if positions.is_empty() {
-        return None;
-    }
-    Some(
-        Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::RENDER_WORLD,
-        )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs),
-    )
+    (!geometry.positions.is_empty()).then_some(geometry)
+}
+
+/// A corner of a triangle being clipped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ClipVertex {
+    position: Vec3,
+    lightmap: Vec2,
 }
 
 /// Keeps the part of `polygon` inside `normal · (p - point) <= distance`.
-fn clip(mut polygon: Vec<Vec3>, normal: Vec3, distance: f32, point: Vec3) -> Vec<Vec3> {
+fn clip(mut polygon: Vec<ClipVertex>, normal: Vec3, distance: f32, point: Vec3) -> Vec<ClipVertex> {
     if polygon.is_empty() {
         return polygon;
     }
     let mut out = Vec::with_capacity(polygon.len() + 1);
-    let required = |p: Vec3| normal.dot(p - point) <= distance;
+    let above = |vertex: ClipVertex| normal.dot(vertex.position - point) - distance;
     for index in 0..polygon.len() {
         let a = polygon[index];
         let b = polygon[(index + 1) % polygon.len()];
-        let (inside_a, inside_b) = (required(a), required(b));
-        if inside_a {
+        let (da, db) = (above(a), above(b));
+        if da <= 0.0 {
             out.push(a);
         }
-        if inside_a != inside_b {
-            let da = normal.dot(a - point) - distance;
-            let db = normal.dot(b - point) - distance;
+        if (da <= 0.0) != (db <= 0.0) {
             let t = da / (da - db);
-            out.push(a + (b - a) * t);
+            out.push(ClipVertex {
+                position: a.position + (b.position - a.position) * t,
+                lightmap: a.lightmap + (b.lightmap - a.lightmap) * t,
+            });
         }
     }
     polygon.clear();
@@ -654,4 +818,156 @@ pub(crate) fn trace_stain(
         (None, None) => Struck::World,
     };
     Some((hit.end, hit.normal, struck))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 4-by-2 metre floor at y = 0, centred on the origin, facing +Y, with a
+    /// lightmap whose coordinates are its x and z.
+    fn floor() -> Vec<WorldTriangle> {
+        let corners = [
+            Vec3::new(-2.0, 0.0, -1.0),
+            Vec3::new(-2.0, 0.0, 1.0),
+            Vec3::new(2.0, 0.0, 1.0),
+            Vec3::new(2.0, 0.0, -1.0),
+        ];
+        let lightmap = |point: Vec3| Vec2::new(point.x, point.z);
+        [[0, 1, 2], [0, 2, 3]]
+            .map(|[a, b, c]| WorldTriangle {
+                points: [corners[a], corners[b], corners[c]],
+                normal: Vec3::Y,
+                lightmap: Some([corners[a], corners[b], corners[c]].map(lightmap)),
+            })
+            .to_vec()
+    }
+
+    fn on_floor(size: Vec2) -> DecalBox {
+        DecalBox {
+            point: Vec3::ZERO,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            bitangent: Vec3::Z,
+            size,
+            depth: 0.1,
+        }
+    }
+
+    #[test]
+    fn a_wide_decal_keeps_its_shape_and_its_texture_spans_it() {
+        let geometry =
+            project(&on_floor(Vec2::new(2.0, 0.5)), &floor(), None).expect("lands on the floor");
+        for (position, uv) in geometry.positions.iter().zip(&geometry.uvs) {
+            assert!(position[0].abs() <= 1.0 + 1e-5, "{position:?}");
+            assert!(position[2].abs() <= 0.25 + 1e-5, "{position:?}");
+            assert!((uv[0] - (position[0] / 2.0 + 0.5)).abs() < 1e-5, "{uv:?}");
+            assert!((uv[1] - (position[2] / 0.5 + 0.5)).abs() < 1e-5, "{uv:?}");
+        }
+        // The texture's corners are all reached.
+        assert!(geometry.uvs.iter().any(|uv| uv[0] < 1e-5 && uv[1] < 1e-5));
+        assert!(
+            geometry
+                .uvs
+                .iter()
+                .any(|uv| uv[0] > 1.0 - 1e-5 && uv[1] > 1.0 - 1e-5)
+        );
+    }
+
+    #[test]
+    fn a_decal_carries_the_lightmap_of_what_it_was_cut_from() {
+        let geometry =
+            project(&on_floor(Vec2::new(1.0, 1.0)), &floor(), None).expect("lands on the floor");
+        assert!(geometry.has_lightmap());
+        for (position, lightmap) in geometry.positions.iter().zip(&geometry.lightmap_uvs) {
+            assert!((lightmap[0] - position[0]).abs() < 1e-5);
+            assert!((lightmap[1] - position[2]).abs() < 1e-5);
+        }
+        assert!(
+            geometry
+                .clone()
+                .into_mesh(true)
+                .attribute(Mesh::ATTRIBUTE_UV_1)
+                .is_some()
+        );
+        assert!(
+            geometry
+                .into_mesh(false)
+                .attribute(Mesh::ATTRIBUTE_UV_1)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_surface_without_a_lightmap_gives_none_to_the_decal() {
+        let unlit: Vec<WorldTriangle> = floor()
+            .into_iter()
+            .map(|triangle| WorldTriangle {
+                lightmap: None,
+                ..triangle
+            })
+            .collect();
+        let geometry = project(&on_floor(Vec2::ONE), &unlit, None).expect("lands");
+        assert!(!geometry.has_lightmap());
+    }
+
+    #[test]
+    fn nothing_is_projected_past_the_boxs_depth_or_with_no_size() {
+        let far = DecalBox {
+            point: Vec3::Y,
+            ..on_floor(Vec2::ONE)
+        };
+        assert!(project(&far, &floor(), None).is_none());
+        assert!(project(&on_floor(Vec2::new(1.0, 0.0)), &floor(), None).is_none());
+        assert!(project(&on_floor(Vec2::ONE), &[], None).is_none());
+    }
+
+    #[test]
+    fn a_bullets_decal_is_square_and_turned_by_the_bullet() {
+        let target = DecalBox::facing(Vec3::ZERO, Vec3::Y, Vec3::new(1.0, -1.0, 0.0), 0.2);
+        assert_eq!(target.size, Vec2::splat(0.2));
+        assert!((target.tangent - Vec3::X).length() < 1e-5);
+        assert!((target.bitangent.dot(target.tangent)).abs() < 1e-5);
+        // Straight into the surface: any direction in it will do.
+        let head_on = DecalBox::facing(Vec3::ZERO, Vec3::Y, Vec3::NEG_Y, 0.2);
+        assert!(head_on.tangent.dot(Vec3::Y).abs() < 1e-5);
+        assert_eq!(head_on.depth, 0.035);
+    }
+
+    #[test]
+    fn merged_geometry_keeps_a_lightmap_only_if_all_of_it_has_one() {
+        let lit = project(&on_floor(Vec2::ONE), &floor(), None).expect("lands");
+        let mut merged = DecalGeometry::default();
+        merged.append(lit.clone());
+        assert!(merged.has_lightmap());
+        merged.append(lit.clone());
+        assert!(merged.has_lightmap());
+        assert_eq!(merged.positions.len(), lit.positions.len() * 2);
+        let unlit = DecalGeometry {
+            lightmap_uvs: Vec::new(),
+            ..lit
+        };
+        merged.append(unlit);
+        assert!(!merged.has_lightmap());
+        assert!(merged.lightmap_uvs.is_empty());
+    }
+
+    #[test]
+    fn a_multiplying_decal_is_unlit_and_a_translucent_one_takes_the_lightmap() {
+        let decal = |blend| DecalAsset {
+            image: Handle::default(),
+            blend,
+            lit: true,
+            size: [1.0, 1.0],
+        };
+        let multiply = decal_material(&decal(DecalBlend::Multiply), false);
+        assert_eq!(multiply.alpha_mode, AlphaMode::Multiply);
+        assert!(multiply.unlit);
+        let blend = decal_material(&decal(DecalBlend::Blend), true);
+        assert_eq!(blend.alpha_mode, AlphaMode::Blend);
+        assert!(!blend.unlit);
+        assert_eq!(blend.lightmap_exposure, baked_light_scale());
+        let mask = decal_material(&decal(DecalBlend::Mask(0.5)), true);
+        assert_eq!(mask.alpha_mode, AlphaMode::Mask(0.5));
+    }
 }

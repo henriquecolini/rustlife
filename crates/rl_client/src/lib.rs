@@ -60,6 +60,7 @@ pub mod hud;
 pub mod input;
 mod laser;
 mod lightning;
+mod map_decals;
 pub mod menu;
 pub mod movers;
 pub mod net;

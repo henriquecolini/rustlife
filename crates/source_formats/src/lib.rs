@@ -35,6 +35,7 @@ mod leaves;
 pub mod lightmap;
 pub mod lights;
 pub mod mdl;
+pub mod overlays;
 pub mod pcf;
 pub mod phy;
 pub mod propdata;

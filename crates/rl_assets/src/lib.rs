@@ -35,7 +35,7 @@ pub mod sprite;
 pub mod texture;
 pub mod vertex_lighting;
 
-pub use decal::{DecalAsset, DecalLoadError, DecalLoader};
+pub use decal::{DecalAsset, DecalBlend, DecalLoadError, DecalLoader};
 pub use map::{
     BspLoader, IrradianceVolumeData, MapAsset, MapBrushEntity, MapLoadError, MapMesh, PlacedProp,
     Spawn,
