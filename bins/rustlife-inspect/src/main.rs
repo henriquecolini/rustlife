@@ -196,18 +196,44 @@ fn run(command: &Command, game: &MountedGame) -> Result<()> {
     Ok(())
 }
 
-/// Prints each sequence of `model` with its length in seconds, and the
-/// pose parameters its blends follow.
+/// Prints each sequence of `model` and of the models it includes (as the
+/// engine merges them), with its length in seconds, and the pose
+/// parameters and attachments of `model` itself.
 fn sequences(game: &MountedGame, model: &str, out: &mut impl Write) -> Result<()> {
-    let mdl = read(game, model)?;
-    let ani = read(game, &model.replace(".mdl", ".ani")).ok();
-    let animation = source_formats::anim::read(&mdl, ani.as_deref())?;
-    for (index, parameter) in animation.pose_parameters.iter().enumerate() {
-        writeln!(out, "pose parameter {index}: {parameter:?}")?;
+    let mut queue = vec![model.to_owned()];
+    let mut seen = Vec::new();
+    while !queue.is_empty() {
+        let path = queue.remove(0);
+        let mdl = read(game, &path)?;
+        let ani = read(game, &path.replace(".mdl", ".ani")).ok();
+        let animation = source_formats::anim::read(&mdl, ani.as_deref())?;
+        if seen.is_empty() {
+            for (index, parameter) in animation.pose_parameters.iter().enumerate() {
+                writeln!(out, "pose parameter {index}: {parameter:?}")?;
+            }
+            for attachment in &animation.attachments {
+                writeln!(out, "attachment {attachment:?}")?;
+            }
+        } else {
+            writeln!(out, "== included {path}")?;
+        }
+        seen.push(path.to_ascii_lowercase());
+        for include in &animation.includes {
+            let include = include.to_ascii_lowercase();
+            if !seen.contains(&include) && !queue.contains(&include) {
+                queue.push(include);
+            }
+        }
+        print_sequences(&animation, out)?;
     }
-    for attachment in &animation.attachments {
-        writeln!(out, "attachment {attachment:?}")?;
-    }
+    Ok(())
+}
+
+/// Prints the sequences of one model.
+fn print_sequences(
+    animation: &source_formats::anim::ModelAnimation,
+    out: &mut impl Write,
+) -> Result<()> {
     for sequence in &animation.sequences {
         let clip = sequence
             .blends

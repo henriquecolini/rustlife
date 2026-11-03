@@ -422,6 +422,7 @@ mod tests {
                 frames: 1,
                 looping: false,
                 delta: false,
+                movement: [0.0; 3],
                 tracks: vec![anim::BoneTrack {
                     bone: 0,
                     positions: vec![idle.0],
@@ -433,6 +434,9 @@ mod tests {
                 activity: String::new(),
                 looping: false,
                 delta: false,
+                post: false,
+                weights: Vec::new(),
+                layers: Vec::new(),
                 blends: vec![0],
                 group: [1, 1],
                 parameters: [None, None],

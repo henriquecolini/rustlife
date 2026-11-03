@@ -57,6 +57,7 @@ fn compiled_model() -> ModelAnimation {
             frames: 1,
             looping: false,
             delta: false,
+            movement: [0.0; 3],
             tracks: vec![anim::BoneTrack {
                 bone: 0,
                 positions: vec![[0.0; 3]],
@@ -68,6 +69,9 @@ fn compiled_model() -> ModelAnimation {
             activity: String::new(),
             looping: false,
             delta: false,
+            post: false,
+            weights: Vec::new(),
+            layers: Vec::new(),
             blends: vec![0],
             group: [1, 1],
             parameters: [None, None],

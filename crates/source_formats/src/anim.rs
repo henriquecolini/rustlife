@@ -62,6 +62,8 @@ mod anim_flags {
 mod flags {
     pub(super) const LOOPING: i32 = 0x0001;
     pub(super) const DELTA: i32 = 0x0004;
+    /// A delta added after the pose it lays over rather than before it.
+    pub(super) const POST: i32 = 0x0010;
 }
 
 /// Most frames an animation may claim: far beyond any real one, and a
@@ -154,6 +156,11 @@ pub struct Animation {
     /// Every bone of the model, animated or at rest (for a delta, the
     /// bones it does not move hold no offset).
     pub tracks: Vec<BoneTrack>,
+    /// How far the animation moves the model from its first frame to its
+    /// last, Source space (the model's own frame: `+X` forward): what a run
+    /// covers, which sets how fast it plays at a given speed. Zero for an
+    /// animation that stays in place.
+    pub movement: [f32; 3],
 }
 
 /// Something a sequence does at a point of its cycle: a sound, a muzzle
@@ -170,6 +177,20 @@ pub struct SequenceEvent {
     pub options: String,
 }
 
+/// A sequence another plays with it, at all times (`$sequence ... addlayer`):
+/// the aim matrix a weapon's idle and run lay over the body.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoLayer {
+    /// The layer's sequence, by index into the sequences of the model file
+    /// the layering sequence is in.
+    pub sequence: usize,
+    /// Bits of `STUDIO_AL_*`: how its weight follows the cycle.
+    pub flags: i32,
+    /// Where the layer fades in, peaks, fades out and ends along the cycle.
+    /// All zero: always at full weight.
+    pub cycle: [f32; 4],
+}
+
 /// One sequence: what the game plays.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sequence {
@@ -181,6 +202,13 @@ pub struct Sequence {
     pub looping: bool,
     /// Whether it is a delta, layered over another sequence.
     pub delta: bool,
+    /// Whether, as a delta, it is applied after the pose rather than before.
+    pub post: bool,
+    /// How strongly it acts on each bone, `0..=1`, by bone index; empty
+    /// when the model gives none (every bone fully).
+    pub weights: Vec<f32>,
+    /// The sequences it plays along with itself.
+    pub layers: Vec<AutoLayer>,
     /// Its animations, by index into [`ModelAnimation::animations`], in a
     /// grid `group[0]` wide and `group[1]` tall.
     pub blends: Vec<usize>,
@@ -297,6 +325,7 @@ pub fn read(mdl: &[u8], ani: Option<&[u8]>) -> Result<ModelAnimation, AnimError>
         &file,
         table(header::SEQUENCES, "sequences")?,
         animations.len(),
+        bones.len(),
     )?;
     let (count, offset) = table(header::INCLUDES, "includes")?;
     let includes = (0..count)
@@ -533,6 +562,7 @@ fn rest_animation(file: &File, at: usize, bones: &[Bone]) -> Animation {
                 rotations: vec![rest.rotation],
             })
             .collect(),
+        movement: [0.0; 3],
     }
 }
 
@@ -651,7 +681,27 @@ fn read_animation(
         looping: animation_flags & flags::LOOPING != 0,
         delta,
         tracks,
+        movement: read_movement(file, at),
     })
+}
+
+/// Size of a `mstudiomovement_t`.
+const MOVEMENT_SIZE: usize = 44;
+
+/// How far the animation described at `at` moves the model: the
+/// displacement its last movement piece accumulates.
+fn read_movement(file: &File, at: usize) -> [f32; 3] {
+    let read = || {
+        let count = file.count(at + 20)?;
+        let pieces = at.checked_add(file.count(at + 24)?)?;
+        let last = pieces.checked_add(count.checked_sub(1)?.checked_mul(MOVEMENT_SIZE)?)?;
+        Some([
+            file.f32(last + 32)?,
+            file.f32(last + 36)?,
+            file.f32(last + 40)?,
+        ])
+    };
+    read().filter(|movement| movement.iter().all(|c| c.is_finite())).unwrap_or([0.0; 3])
 }
 
 /// One bone's position and rotation at `frame` from its record's data at
@@ -784,16 +834,19 @@ fn read_sequences(
     file: &File,
     (count, offset): (usize, usize),
     animations: usize,
+    bones: usize,
 ) -> Result<Vec<Sequence>, AnimError> {
     if !file.in_bounds(offset, count, SEQUENCE_SIZE) {
         return Err(AnimError::OutOfBounds("sequences"));
     }
     Ok((0..count)
-        .filter_map(|index| read_sequence(file, offset + index * SEQUENCE_SIZE, animations))
+        .filter_map(|index| {
+            read_sequence(file, offset + index * SEQUENCE_SIZE, animations, bones)
+        })
         .collect())
 }
 
-fn read_sequence(file: &File, at: usize, animations: usize) -> Option<Sequence> {
+fn read_sequence(file: &File, at: usize, animations: usize, bones: usize) -> Option<Sequence> {
     let sequence_flags = file.i32(at + 12)?;
     let group = [file.count(at + 68)?.max(1), file.count(at + 72)?.max(1)];
     let blend_count = group[0].checked_mul(group[1])?.min(256);
@@ -822,6 +875,9 @@ fn read_sequence(file: &File, at: usize, animations: usize) -> Option<Sequence> 
         activity: file.string_at(at, file.i32(at + 8)?)?,
         looping: sequence_flags & flags::LOOPING != 0,
         delta: sequence_flags & flags::DELTA != 0,
+        post: sequence_flags & flags::POST != 0,
+        weights: read_weights(file, at, bones),
+        layers: read_layers(file, at),
         blends,
         group,
         parameters: [parameter(76), parameter(80)],
@@ -832,6 +888,45 @@ fn read_sequence(file: &File, at: usize, animations: usize) -> Option<Sequence> 
         fade: (file.f32(at + 104)?, file.f32(at + 108)?),
         events,
     })
+}
+
+/// Size of a `mstudioautolayer_t`.
+const AUTO_LAYER_SIZE: usize = 24;
+
+/// The per-bone weights of the sequence at `at`; empty if it has none.
+fn read_weights(file: &File, at: usize, bones: usize) -> Vec<f32> {
+    let read = || {
+        let start = at.checked_add(file.count(at + 156)?)?;
+        file.in_bounds(start, bones, 4).then_some(())?;
+        (0..bones)
+            .map(|bone| file.f32(start + bone * 4))
+            .collect::<Option<Vec<f32>>>()
+    };
+    read().unwrap_or_default()
+}
+
+/// The sequences the sequence at `at` plays with itself.
+fn read_layers(file: &File, at: usize) -> Vec<AutoLayer> {
+    let read = || {
+        let count = file.count(at + 148)?.min(16);
+        let start = at.checked_add(file.count(at + 152)?)?;
+        (0..count)
+            .map(|layer| {
+                let at = start + layer * AUTO_LAYER_SIZE;
+                Some(AutoLayer {
+                    sequence: usize::try_from(file.i16(at)?).ok()?,
+                    flags: file.i32(at + 4)?,
+                    cycle: [
+                        file.f32(at + 8)?,
+                        file.f32(at + 12)?,
+                        file.f32(at + 16)?,
+                        file.f32(at + 20)?,
+                    ],
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+    };
+    read().unwrap_or_default()
 }
 
 #[cfg(test)]

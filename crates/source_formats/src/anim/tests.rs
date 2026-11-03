@@ -118,6 +118,33 @@ impl Builder {
         self
     }
 
+    /// Gives the sequence what a weapon's idle has: bone weights, an
+    /// autolayer, a post-multiplied delta flag, and the animation a
+    /// movement piece of 3 units forward and 4 to the side.
+    fn layered(mut self) -> Self {
+        let at = 2000;
+        self.i32(at + 12, flags::LOOPING | flags::POST | flags::DELTA);
+        // Weights at 2400: the root not at all, the arm half.
+        self.i32(at + 156, 400);
+        self.f32(2400, 0.0);
+        self.f32(2404, 0.5);
+        // One autolayer at 2450: sequence 7, flags 0x10, cycle 0..0.9.
+        self.i32(at + 148, 1);
+        self.i32(at + 152, 450);
+        self.bytes[2450..2452].copy_from_slice(&7i16.to_le_bytes());
+        self.i32(2454, 0x10);
+        self.f32(2458, 0.0);
+        self.f32(2462, 0.25);
+        self.f32(2466, 0.5);
+        self.f32(2470, 0.9);
+        // One movement piece at 2500, its accumulated position at +32.
+        self.i32(1500 + 20, 1);
+        self.i32(1500 + 24, 1000);
+        self.f32(2500 + 32, 3.0);
+        self.f32(2500 + 36, 4.0);
+        self
+    }
+
     fn include(mut self, path: &str) -> Self {
         self.i32(header::INCLUDES, 1);
         self.i32(header::INCLUDES + 4, 2600);
@@ -193,6 +220,38 @@ fn skeletons_animations_and_sequences_are_read() {
     );
     assert_eq!(sequence.parameters, [Some(0), None]);
     assert!(sequence.looping && !sequence.delta);
+}
+
+#[test]
+fn bone_weights_autolayers_and_movement_are_read() {
+    let bytes = Builder::new()
+        .bones()
+        .animation()
+        .sequence()
+        .layered()
+        .build();
+    let model = read(&bytes, None).expect("model");
+    let sequence = &model.sequences[0];
+    assert!(sequence.delta && sequence.post);
+    assert_eq!(sequence.weights, vec![0.0, 0.5]);
+    assert_eq!(
+        sequence.layers,
+        vec![AutoLayer {
+            sequence: 7,
+            flags: 0x10,
+            cycle: [0.0, 0.25, 0.5, 0.9],
+        }]
+    );
+    assert_eq!(model.animations[0].movement, [3.0, 4.0, 0.0]);
+}
+
+#[test]
+fn a_model_without_weights_layers_or_movement_has_none() {
+    let bytes = Builder::new().bones().animation().sequence().build();
+    let model = read(&bytes, None).expect("model");
+    assert!(model.sequences[0].layers.is_empty());
+    assert!(!model.sequences[0].post);
+    assert_eq!(model.animations[0].movement, [0.0; 3]);
 }
 
 #[test]
