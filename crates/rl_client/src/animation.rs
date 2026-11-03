@@ -13,6 +13,9 @@
 //!
 //! Models nothing plays a sequence on (most skeletal props) stay in that
 //! idle pose, as the game draws them.
+//!
+//! A sequence player can also note the events its sequence passes (a reload's
+//! clicks, `AE_CL_PLAYSOUND`) for whoever listens ([`SequencePlayer::listen`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,6 +24,7 @@ use bevy::animation::AnimatedBy;
 use bevy::prelude::*;
 use rl_assets::model::ModelAnimationAsset;
 use rl_assets::{ModelAsset, PoseRig, SequenceClips};
+use source_formats::anim::SequenceEvent;
 
 /// Plays sequences on animated models.
 pub struct ModelAnimationPlugin;
@@ -147,7 +151,15 @@ struct Track {
     rate: f32,
     /// Holds its last frame even if the sequence loops.
     hold: bool,
+    /// The cycle up to which its events have been passed: below zero before
+    /// its first frame, so that events at its very start count too.
+    passed: f32,
 }
+
+/// The cycle a track that has not played yet has passed.
+const NOT_STARTED: f32 = -1.0;
+/// The most events a player keeps for a listener that has not taken them.
+const MAX_HELD_EVENTS: usize = 64;
 
 /// What a model plays: set by the game, carried out every frame.
 #[derive(Component, Debug, Clone, Default)]
@@ -159,6 +171,9 @@ pub struct SequencePlayer {
     layers: Vec<(usize, f32, f32)>,
     /// Seconds a change of sequence fades over.
     pub fade: f32,
+    /// The events passed and not yet taken, as (sequence, index into its
+    /// events), if anyone listens.
+    events: Option<Vec<(usize, usize)>>,
 }
 
 impl SequencePlayer {
@@ -200,6 +215,18 @@ impl SequencePlayer {
         }
     }
 
+    /// Starts noting the events the sequence playing passes (not those
+    /// fading out), for [`take_events`](Self::take_events).
+    pub fn listen(&mut self) {
+        self.events.get_or_insert_with(Vec::new);
+    }
+
+    /// The events passed since they were last taken, in order: (sequence,
+    /// index into its [`events`](SequenceClips::events)).
+    pub fn take_events(&mut self) -> Vec<(usize, usize)> {
+        self.events.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
     /// The sequence playing, and how far into it (seconds).
     #[must_use]
     pub fn current(&self) -> Option<(usize, f32)> {
@@ -222,6 +249,7 @@ impl SequencePlayer {
             blend,
             rate,
             hold: false,
+            passed: NOT_STARTED,
         });
     }
 
@@ -243,8 +271,24 @@ impl SequencePlayer {
             };
         };
         if let Some(track) = &mut self.current {
+            let before = track.time;
             tick(track);
             track.weight = (track.weight + step).min(1.0);
+            if let (Some(events), Some(sequence)) =
+                (&mut self.events, sequences.get(track.sequence))
+            {
+                let duration = sequence.duration.max(f32::EPSILON);
+                let cycle = track.time / duration;
+                // A looping sequence that came round to its start (once,
+                // however many laps a long frame took).
+                let wrapped =
+                    sequence.looping && !track.hold && before + dt * track.rate >= duration;
+                let passed = passed_events(&sequence.events, track.passed, cycle, wrapped);
+                events.extend(passed.map(|event| (track.sequence, event)));
+                let overflow = events.len().saturating_sub(MAX_HELD_EVENTS);
+                events.drain(..overflow);
+                track.passed = cycle;
+            }
         }
         for track in &mut self.fading {
             tick(track);
@@ -373,6 +417,29 @@ fn prepare(
     }
 }
 
+/// The indices of the events a sequence passes going from cycle `from`
+/// (what it had passed already) to cycle `to`: those after `from` up to and
+/// including `to`, or, when it came round to its start in between
+/// (`wrapped`), those after `from` and those up to `to`.
+fn passed_events(
+    events: &[SequenceEvent],
+    from: f32,
+    to: f32,
+    wrapped: bool,
+) -> impl Iterator<Item = usize> + '_ {
+    events
+        .iter()
+        .enumerate()
+        .filter(move |(_, event)| {
+            if wrapped {
+                event.cycle > from || event.cycle <= to
+            } else {
+                event.cycle > from && event.cycle <= to
+            }
+        })
+        .map(|(index, _)| index)
+}
+
 /// How far short of a clip's end the last frame is sampled, seconds.
 const CLIP_END_MARGIN: f32 = 1e-3;
 
@@ -436,6 +503,66 @@ mod tests {
             events: Vec::new(),
         };
         vec![sequence(true, 1), sequence(false, 1)]
+    }
+
+    fn sound_at(cycle: f32) -> SequenceEvent {
+        SequenceEvent {
+            cycle,
+            event: 0,
+            name: "AE_CL_PLAYSOUND".to_owned(),
+            options: "Weapon_AR2.Reload_Rotate".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_listener_hears_each_event_once_as_the_sequence_passes_it() {
+        let mut all = sequences();
+        all[1].events = vec![sound_at(0.0), sound_at(0.4), sound_at(1.0)];
+        let mut player = SequencePlayer::default();
+        player.listen();
+        player.restart(1, 1.0);
+        player.advance(0.1, &all);
+        assert_eq!(player.take_events(), [(1, 0)], "the one at its start");
+        player.advance(0.2, &all);
+        assert!(player.take_events().is_empty());
+        player.advance(0.2, &all);
+        assert_eq!(player.take_events(), [(1, 1)]);
+        player.advance(1.0, &all);
+        assert_eq!(player.take_events(), [(1, 2)], "the one at its end");
+        player.advance(1.0, &all);
+        assert!(player.take_events().is_empty(), "held on its last frame");
+        // Played again, it is heard again.
+        player.restart(1, 1.0);
+        player.advance(0.5, &all);
+        assert_eq!(player.take_events(), [(1, 0), (1, 1)]);
+    }
+
+    #[test]
+    fn a_loop_is_heard_every_time_round() {
+        let mut all = sequences();
+        all[0].events = vec![sound_at(0.5)];
+        let mut player = SequencePlayer::default();
+        player.listen();
+        player.play(0, 0.0, 1.0);
+        player.advance(0.6, &all);
+        assert_eq!(player.take_events(), [(0, 0)]);
+        player.advance(0.6, &all);
+        assert!(player.take_events().is_empty(), "round to 0.2 only");
+        player.advance(0.4, &all);
+        assert_eq!(player.take_events(), [(0, 0)]);
+        // A whole lap in one go still passes it once.
+        player.advance(1.0, &all);
+        assert_eq!(player.take_events(), [(0, 0)]);
+    }
+
+    #[test]
+    fn nothing_is_kept_when_no_one_listens() {
+        let mut all = sequences();
+        all[1].events = vec![sound_at(0.0)];
+        let mut player = SequencePlayer::default();
+        player.restart(1, 1.0);
+        player.advance(0.5, &all);
+        assert!(player.take_events().is_empty());
     }
 
     #[test]

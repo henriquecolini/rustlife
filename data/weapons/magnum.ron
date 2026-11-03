@@ -27,7 +27,9 @@ Weapon(
     secondary: None,
     deploy_time: 1.0,
     pickup: Some((ammo: 0, owned_ammo: 6, respawn: 20.0, radius: 24.0)),
-    sounds: {"fire": "Weapon_357.Single", "reload": "Weapon_357.RemoveLoader"},
+    // The script has no reload sound: the reload sequence's own events play
+    // the loader's clicks and the cylinder's spin.
+    sounds: {"fire": "Weapon_357.Single", "empty": "Weapon_Pistol.Empty"},
     // Players hold it with the pistol sequences of HL2DM's player models (run_pistol, ...).
     hold: Some("pistol"),
 )

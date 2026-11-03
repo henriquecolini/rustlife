@@ -177,6 +177,23 @@ pub struct SequenceEvent {
     pub options: String,
 }
 
+/// The old-style number of the client event that plays a sound
+/// (`CL_EVENT_SOUND`).
+const CL_EVENT_SOUND: i32 = 5004;
+
+impl SequenceEvent {
+    /// The sound this event plays where the model is, if it is one that
+    /// does: `AE_CL_PLAYSOUND` (a view model's reload clicks) or the old
+    /// `CL_EVENT_SOUND`, whose options name the sound.
+    #[must_use]
+    pub fn sound(&self) -> Option<&str> {
+        let plays =
+            self.name.eq_ignore_ascii_case("AE_CL_PLAYSOUND") || self.event == CL_EVENT_SOUND;
+        let sound = self.options.trim();
+        (plays && !sound.is_empty()).then_some(sound)
+    }
+}
+
 /// A sequence another plays with it, at all times (`$sequence ... addlayer`):
 /// the aim matrix a weapon's idle and run lay over the body.
 #[derive(Debug, Clone, Copy, PartialEq)]

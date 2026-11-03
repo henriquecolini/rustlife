@@ -28,7 +28,7 @@ use bevy_animation::prelude::{AnimatableCurve, AnimatableKeyframeCurve, Animatio
 use bevy_asset::Handle;
 use bevy_math::{Mat4, Quat, Vec3};
 use bevy_transform::components::Transform;
-use source_formats::anim::{Animation, ModelAnimation, Sequence};
+use source_formats::anim::{Animation, ModelAnimation, Sequence, SequenceEvent};
 
 use crate::coords;
 
@@ -168,9 +168,8 @@ pub struct SequenceClips {
     pub axes: [Option<(String, f32, f32)>; 2],
     /// Its length in seconds.
     pub duration: f32,
-    /// Its events: cycle and options (sounds, effects), as the model has
-    /// them.
-    pub events: Vec<(f32, i32, String)>,
+    /// Its events (sounds, effects) along its cycle, as the model has them.
+    pub events: Vec<SequenceEvent>,
 }
 
 impl SequenceClips {
@@ -294,11 +293,7 @@ fn sequence_of(
         group: sequence.group,
         axes: [axis(0), axis(1)],
         duration,
-        events: sequence
-            .events
-            .iter()
-            .map(|event| (event.cycle, event.event, event.options.clone()))
-            .collect(),
+        events: sequence.events.clone(),
     }
 }
 

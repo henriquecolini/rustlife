@@ -42,6 +42,7 @@ mod props;
 mod soundscape;
 mod steps;
 mod ui;
+mod view_model;
 mod weapon_select;
 mod world;
 
@@ -83,6 +84,7 @@ impl Plugin for SoundPlugin {
                 world::WorldSoundsPlugin,
                 steps::StepsPlugin,
                 weapon_select::WeaponSelectSoundsPlugin,
+                view_model::ViewModelSoundsPlugin,
                 soundscape::SoundscapePlugin,
                 ui::UiSoundsPlugin,
             ));

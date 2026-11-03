@@ -368,3 +368,24 @@ fn a_real_models_animations_read() {
         }
     }
 }
+
+#[test]
+fn only_sound_events_name_a_sound() {
+    let event = |event: i32, name: &str, options: &str| SequenceEvent {
+        cycle: 0.5,
+        event,
+        name: name.to_owned(),
+        options: options.to_owned(),
+    };
+    let rotate = event(0, "AE_CL_PLAYSOUND", "Weapon_AR2.Reload_Rotate");
+    assert_eq!(rotate.sound(), Some("Weapon_AR2.Reload_Rotate"));
+    let old_style = event(5004, "", " Weapon_357.Spin ");
+    assert_eq!(old_style.sound(), Some("Weapon_357.Spin"));
+    assert_eq!(event(0, "AE_MUZZLEFLASH", "COMBINE MUZZLE").sound(), None);
+    assert_eq!(event(3015, "", "").sound(), None);
+    assert_eq!(
+        event(0, "AE_CL_PLAYSOUND", "").sound(),
+        None,
+        "no sound named"
+    );
+}
