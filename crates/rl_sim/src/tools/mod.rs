@@ -2,4 +2,5 @@
 //! their bare [`hands`].
 
 pub mod hands;
+pub mod hold;
 pub mod manipulator;

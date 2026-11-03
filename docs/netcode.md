@@ -183,8 +183,8 @@ the delay, and it never runs backwards.
 
 The prop the local player holds is the exception, or it would trail them by
 the delay and half a round trip. The client steers it as the server does
-(`rl_net::carry`, with the Manipulator's own `hold_target` and `hold_velocity`,
-or the hands' `carry_target` and `carry_velocity`):
+(`rl_net::carry`, with the shared `hold_target` and the Manipulator's
+`hold_velocity` or the hands' `carry_velocity`):
 from where the newest snapshot has it, with the commands the server has not
 run yet and then each command as it is issued, and draws it between the last
 two ticks. A snapshot that disagrees leaves an error that fades as the view's

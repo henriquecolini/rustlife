@@ -65,6 +65,35 @@ impl GrabConfig {
     }
 }
 
+/// Where a prop is held ahead of the player, by the Manipulator or by the
+/// hands alike: HL2DM's Gravity Gun and its players' hands both place what
+/// they hold with `CGrabController::UpdateObject`.
+///
+/// The middle of the prop's box goes ahead of the eyes along the view, its
+/// pitch clamped to [`max_pitch`](Self::max_pitch). How far ahead depends on
+/// the prop's depth towards the player and the player's width (`radius`
+/// below: half the player box's diagonal plus how far the prop reaches back
+/// from its origin): [`gap`](Self::gap) + `radius`, or half of `radius` when
+/// a wall is within half of `gap` + 2 × `radius`; and never closer than
+/// `radius` to the player's upright axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoldPoint {
+    /// The base of how far ahead the prop is held, units.
+    pub gap: f32,
+    /// The view's pitch is clamped to this, up and down, for placing the prop,
+    /// degrees: looking straight down holds it in front of the feet.
+    pub max_pitch: f32,
+}
+
+impl HoldPoint {
+    /// Checks every value for sense, under the field path `field`.
+    pub(crate) fn validate(&self, check: &mut Validator, field: &str) {
+        check.non_negative(&format!("{field}.gap"), self.gap);
+        check.range(&format!("{field}.max_pitch"), self.max_pitch, 0.0, 90.0);
+    }
+}
+
 /// Carrying a held prop.
 ///
 /// The prop is steered, not teleported: each tick its velocity is set to
@@ -74,9 +103,8 @@ impl GrabConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HoldConfig {
-    /// Gap between the player's eyes and the near side of the held prop,
-    /// units: the prop's centre is held this far plus its own radius ahead.
-    pub distance: f32,
+    /// Where the prop is held.
+    pub point: HoldPoint,
     /// Seconds the prop takes to close (most of) the gap to the hold point.
     pub follow_time: f32,
     /// Fastest the prop is moved, units/s.
@@ -159,7 +187,7 @@ impl ManipulatorConfig {
         check.non_negative("grab.aim_cone_range", grab.aim_cone_range);
 
         let hold = &self.hold;
-        check.non_negative("hold.distance", hold.distance);
+        hold.point.validate(check, "hold.point");
         check.positive("hold.follow_time", hold.follow_time);
         check.positive("hold.max_speed", hold.max_speed);
         check.positive("hold.max_angular_speed", hold.max_angular_speed);

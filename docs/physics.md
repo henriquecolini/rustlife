@@ -322,8 +322,11 @@ throwing something closes them at once. They sound opening on something, and
 letting go of, throwing or punting something, but not closing on nothing.
 
 **Holding.** While held, a prop ignores gravity and does not collide with its
-holder. Its centre of mass is steered to the hold point, `hold.distance` plus
-the prop's radius in front of the eyes. Its orientation follows the view's
+holder. It is steered to the hold point, `hold.point`, the same as the hands'
+(see "Carrying" below): HL2DM's Gravity Gun and hands both place what they hold
+with `CGrabController::UpdateObject` (server.so, called from
+`CWeaponPhysCannon::UpdateObject` and `CPlayerPickupController::Use`). A barrel
+looked at level is held about 60 units out. Its orientation follows the view's
 yaw, keeping the orientation it had relative to the player when grabbed. The
 steering sets the prop's velocity each tick rather than moving it:
 
@@ -364,13 +367,16 @@ prop to carry whose hit point is within `map_logic.use_range` (80) of the eyes,
 heights within a band as tall as the player's box (from its middle up) counting
 as level. A button or door the ray meets within reach is used instead.
 
-**Carrying** steers the prop as the Manipulator does, by velocity, but to where
-`CGrabController::UpdateObject` puts it: along the view with its pitch clamped
-to ±`hold.max_pitch` (75), `hold.gap` (24) plus `radius` ahead of the eyes,
-where `radius` is half the player box's diagonal plus how far the prop reaches
-back from its origin; only half of `radius` ahead when a wall is within half of
-`gap` + 2 × `radius`; and never closer than `radius` to the player's upright
-axis, so that looking down holds it in front of the feet. It arrives in one tick
+**Carrying** steers the prop as the Manipulator does, by velocity, to where
+`CGrabController::UpdateObject` puts it (`rl_sim::tools::hold`, shared with the
+Manipulator): the middle of the prop's box goes along the view with its pitch
+clamped to ±`hold.point.max_pitch` (75), `hold.point.gap` (24) plus `radius`
+ahead of the eyes, where `radius` is half the player box's diagonal plus how far
+the prop reaches back from its origin; only half of `radius` ahead when a wall
+is within half of `gap` + 2 × `radius`; and never closer than `radius` to the
+player's upright axis, so that looking down holds it in front of the feet. The
+tools steer the centre of mass, so it goes where it must be for the box's
+middle to be there. It arrives in one tick
 (`follow_time` 0.015) at no more than 1000 units/s, turning with the view's yaw
 only.
 

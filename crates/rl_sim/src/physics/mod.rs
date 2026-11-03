@@ -158,6 +158,22 @@ struct PropBody {
     home: BodyPose,
 }
 
+impl PropBody {
+    /// The lowest and highest corners of its box in its own frame (Source's
+    /// `OBBMins` and `OBBMaxs`); `None` if it has no shape.
+    fn local_box(&self) -> Option<(Vec3, Vec3)> {
+        let mut corners = self
+            .pieces
+            .iter()
+            .flat_map(|piece| piece.hull.vertices())
+            .copied();
+        let first = corners.next()?;
+        Some(corners.fold((first, first), |(mins, maxs), vertex| {
+            (mins.min(vertex), maxs.max(vertex))
+        }))
+    }
+}
+
 #[derive(Debug, Clone)]
 enum BodyKind {
     Prop(PropBody),
@@ -617,17 +633,18 @@ impl PhysicsWorld {
     /// `OBBSize`).
     #[must_use]
     pub fn size(&self, body: BodyId) -> Option<Vec3> {
-        let prop = self.prop(body)?;
-        let mut corners = prop
-            .pieces
-            .iter()
-            .flat_map(|piece| piece.hull.vertices())
-            .copied();
-        let first = corners.next()?;
-        let (mins, maxs) = corners.fold((first, first), |(mins, maxs), vertex| {
-            (mins.min(vertex), maxs.max(vertex))
-        });
+        let (mins, maxs) = self.prop(body)?.local_box()?;
         Some(maxs - mins)
+    }
+
+    /// The middle of a prop's box in its own frame, where it is now, Source
+    /// space (Source's `WorldSpaceCenter`): not its centre of mass, which
+    /// follows its shape's volume.
+    #[must_use]
+    pub fn box_center(&self, body: BodyId) -> Option<Vec3> {
+        let (mins, maxs) = self.prop(body)?.local_box()?;
+        let pose = self.pose(body)?;
+        Some(pose.position + pose.rotation * mins.midpoint(maxs))
     }
 
     /// Whether a body is touching anything after the last step: the map, a

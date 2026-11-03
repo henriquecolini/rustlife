@@ -14,11 +14,10 @@ Hands(
         max_size: 128.0,
     ),
     hold: (
-        // `UpdateObject`: the prop is held this far plus its own depth plus
-        // half the player's width ahead of the eyes.
-        gap: 24.0,
-        // Placing the prop, the view's pitch is clamped to this, degrees.
-        max_pitch: 75.0,
+        // Where the prop is held: the same as the Manipulator's
+        // (tools/manipulator.ron), as HL2DM's hands and Gravity Gun share
+        // `CGrabController::UpdateObject`.
+        point: (gap: 24.0, max_pitch: 75.0),
         // The grab controller arrives in one frame (`m_timeToArrive` is the
         // frame time) at no more than its `maxSpeed` of 1000, turning as fast.
         follow_time: 0.015,

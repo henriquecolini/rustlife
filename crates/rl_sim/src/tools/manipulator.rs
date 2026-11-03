@@ -5,8 +5,8 @@
 //!   player until it is close enough to grab. A pickup the player can use is
 //!   drawn all the way in, to be collected on touching them; one they cannot use
 //!   is grabbed like any prop. Pressing secondary fire again lets go.
-//! - **Holding.** The held prop's centre of mass is steered to a point in
-//!   front of the eyes ([`HoldConfig`]), and it turns
+//! - **Holding.** The held prop is steered to a point in front of the eyes,
+//!   the same as the hands carry a prop at ([`hold_target`]), and it turns
 //!   with the view's yaw, keeping the orientation it had relative to the
 //!   player when grabbed. It is steered by setting its velocity each tick,
 //!   not by moving it, so it still collides: it shoves other props aside and
@@ -27,6 +27,7 @@ use glam::{Quat, Vec3};
 use rl_data::{GrabConfig, HoldConfig, ManipulatorConfig};
 use serde::{Deserialize, Serialize};
 
+use super::hold::{Carrier, hold_target};
 use crate::collision::contents::{GRATE, MOVEABLE, SOLID, WINDOW};
 use crate::collision::{CollisionWorld, Hull, Trace};
 use crate::movement::{Buttons, view_direction};
@@ -186,14 +187,14 @@ impl Manipulator {
         Some(held.body)
     }
 
-    /// Runs the tool for one tick of `dt` seconds for `player` (whose box
-    /// is `player_body`), aiming along `aim` with `buttons` held, resting
+    /// Runs the tool for one tick of `dt` seconds for `carrier` (whose box
+    /// is `player_body`), aiming along their aim with `buttons` held, resting
     /// for `intervals` after acting. `targets` says what it cannot tell about
     /// what it finds.
     pub fn tick(
         &mut self,
         player_body: BodyId,
-        aim: &Aim,
+        carrier: &Carrier,
         buttons: Buttons,
         intervals: Intervals,
         targets: &Targets<'_>,
@@ -202,6 +203,7 @@ impl Manipulator {
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
     ) -> Option<ToolEvent> {
+        let aim = &carrier.aim;
         self.primary_cooldown = (self.primary_cooldown - dt).max(0.0);
         self.secondary_cooldown = (self.secondary_cooldown - dt).max(0.0);
         let secondary_held = buttons.contains(Buttons::ATTACK2);
@@ -225,7 +227,7 @@ impl Manipulator {
                 self.secondary_spent = true;
                 self.release(physics, intervals).map(ToolEvent::Dropped)
             } else {
-                self.hold(aim, dt, physics, config, intervals)
+                self.hold(carrier, dt, world, physics, config, intervals)
             }
         } else if buttons.contains(Buttons::ATTACK) && self.primary_cooldown == 0.0 {
             Some(self.punt(aim, targets, world, physics, config, intervals))
@@ -335,22 +337,23 @@ impl Manipulator {
     /// the grip if it has been held back too long.
     fn hold(
         &mut self,
-        aim: &Aim,
+        carrier: &Carrier,
         dt: f32,
+        world: &CollisionWorld,
         physics: &mut PhysicsWorld,
         config: &ManipulatorConfig,
         intervals: Intervals,
     ) -> Option<ToolEvent> {
         let tuning = &config.hold;
         let held = self.held.as_mut()?;
-        let (Some(center), Some(radius), Some(pose)) = (
+        let (Some(target), Some(center), Some(pose)) = (
+            hold_target(carrier, held.body, world, physics, &tuning.point),
             physics.center_of_mass(held.body),
-            physics.radius(held.body),
             physics.pose(held.body),
         ) else {
             return None;
         };
-        let error = hold_target(aim, radius, tuning) - center;
+        let error = target - center;
         if error.length() > tuning.break_distance {
             held.blocked_secs += dt;
             if held.blocked_secs > tuning.break_time {
@@ -363,7 +366,7 @@ impl Manipulator {
         }
 
         let linear = hold_velocity(error, tuning);
-        let target_rotation = hold_rotation(aim.yaw, held.relative_rotation);
+        let target_rotation = hold_rotation(carrier.aim.yaw, held.relative_rotation);
         let (axis, mut angle) = (target_rotation * pose.rotation.inverse()).to_axis_angle();
         // The shorter way round.
         if angle > std::f32::consts::PI {
@@ -374,13 +377,6 @@ impl Manipulator {
         physics.set_velocity(held.body, linear, angular);
         None
     }
-}
-
-/// Where a prop of bounding `radius` is held, looking along `aim`: its centre of
-/// mass is steered there.
-#[must_use]
-pub fn hold_target(aim: &Aim, radius: f32, tuning: &HoldConfig) -> Vec3 {
-    aim.eye + aim.forward() * (tuning.distance + radius)
 }
 
 /// The velocity that steers a held prop's centre of mass towards a hold point

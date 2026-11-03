@@ -6,10 +6,10 @@
 //!   ([`PickupLimits`]) and the weapon in hand can be
 //!   put away: the simulation puts it away for as long as the prop is carried.
 //!   [`find_prop`] is what use finds (`CBasePlayer::FindUseEntity`).
-//! - **Carrying.** The prop's centre of mass is steered to a point ahead of the
-//!   eyes ([`carry_target`]), turning with the view's yaw and keeping the
-//!   orientation it had relative to it when picked up, like the Manipulator's,
-//!   but closer, faster and never above the head nor into the player. Held
+//! - **Carrying.** The prop is steered to the point ahead of the eyes where
+//!   the Manipulator would hold it ([`hold_target`]), turning with the view's
+//!   yaw and keeping the orientation it had relative to it when picked up,
+//!   like the Manipulator's, but faster. Held
 //!   back from that point (a smoothed distance, [`CarryHold::drop_error`]),
 //!   it falls from the hands.
 //! - **Primary fire** tosses it along the view: a gentle impulse that grows
@@ -24,12 +24,11 @@ use glam::{Quat, Vec3};
 use rl_data::{CarryHold, HandsConfig, PickupLimits, ReleaseLimits, Toss};
 use serde::{Deserialize, Serialize};
 
-use super::manipulator::{Aim, first_hit, hold_rotation};
-use crate::collision::contents::{
-    GRATE, MASK_PROP_SOLID, MONSTER, MOVEABLE, PLAYER_CLIP, SOLID, WINDOW,
-};
+use super::hold::{Carrier, hold_target};
+use super::manipulator::{first_hit, hold_rotation};
+use crate::collision::contents::{GRATE, MONSTER, MOVEABLE, PLAYER_CLIP, SOLID, WINDOW};
 use crate::collision::{CollisionWorld, Hull};
-use crate::movement::{Buttons, view_direction};
+use crate::movement::Buttons;
 use crate::physics::{BodyId, PhysicsWorld};
 use crate::rng::Rng;
 
@@ -86,24 +85,6 @@ pub enum UseTarget {
     Mover,
     /// Nothing the hands can take.
     Nothing,
-}
-
-/// Where the player who carries is, and looks, this tick.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Carrier {
-    /// Their feet.
-    pub origin: Vec3,
-    /// Their box around [`origin`](Self::origin).
-    pub hull: Hull,
-    /// Where they look from and along.
-    pub aim: Aim,
-}
-
-impl Carrier {
-    /// The middle of their box.
-    fn center(&self) -> Vec3 {
-        self.origin + (self.hull.mins + self.hull.maxs) * 0.5
-    }
 }
 
 /// The prop in the hands.
@@ -210,7 +191,7 @@ impl Hands {
         if buttons.contains(Buttons::ATTACK) {
             return self.toss(carrier, rng, physics, config);
         }
-        if let Some(target) = carry_target(carrier, body, world, physics, &config.hold) {
+        if let Some(target) = hold_target(carrier, body, world, physics, &config.hold.point) {
             held.target = target;
         }
         steer(held, carrier.aim.yaw, physics, &config.hold);
@@ -324,49 +305,6 @@ pub fn carry_velocity(error: Vec3, hold: &CarryHold) -> Vec3 {
     (error / hold.follow_time).clamp_length_max(hold.max_speed)
 }
 
-/// Where `carrier` holds the centre of mass of `body`
-/// (`CGrabController::UpdateObject`): along the view, its pitch clamped to
-/// [`CarryHold::max_pitch`], [`CarryHold::gap`] plus `radius` ahead of the
-/// eyes, where `radius` is half the width of the player's box plus how far
-/// the prop reaches back towards them from its origin; only half of `radius`
-/// ahead when a wall is within half of `gap` + 2 × `radius`; and at least
-/// `radius` from the upright line through the middle of the player's box.
-/// `None` if the prop is gone.
-#[must_use]
-pub fn carry_target(
-    carrier: &Carrier,
-    body: BodyId,
-    world: &CollisionWorld,
-    physics: &PhysicsWorld,
-    hold: &CarryHold,
-) -> Option<Vec3> {
-    let pitch = wrapped_degrees(carrier.aim.pitch).clamp(-hold.max_pitch, hold.max_pitch);
-    let forward = view_direction(pitch, carrier.aim.yaw);
-    let reach_back = physics.extent(body, -forward)?.abs();
-    let player_radius = carrier.hull.maxs.truncate().length();
-    let radius = player_radius + reach_back;
-    let distance = hold.gap + 2.0 * radius;
-    let start = carrier.aim.eye;
-    let wall = world.trace_ray(start, start + forward * distance, MASK_PROP_SOLID);
-    let mut end = if wall.fraction < 0.5 {
-        start + forward * radius * 0.5
-    } else {
-        start + forward * (distance - radius)
-    };
-    let center = carrier.center();
-    let nearest = Vec3::new(center.x, center.y, end.z);
-    let away = end - nearest;
-    if away.length() < radius {
-        end = nearest + away.normalize_or_zero() * radius;
-    }
-    Some(end)
-}
-
-/// `degrees` as an angle in `-180..180`.
-fn wrapped_degrees(degrees: f32) -> f32 {
-    (degrees + 180.0).rem_euclid(360.0) - 180.0
-}
-
 /// Whether the hands could pick `body` up: a prop players may pick up, light
 /// and small enough, and in nobody's hands (`CBasePlayer::CanPickupObject`).
 #[must_use]
@@ -459,6 +397,8 @@ fn view_up(pitch: f32, yaw: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movement::view_direction;
+    use crate::tools::manipulator::Aim;
 
     #[test]
     fn the_view_up_is_square_to_the_view() {
@@ -499,8 +439,10 @@ mod tests {
     #[test]
     fn the_error_is_smoothed_and_waits_out_the_grace() {
         let hold = CarryHold {
-            gap: 24.0,
-            max_pitch: 75.0,
+            point: rl_data::HoldPoint {
+                gap: 24.0,
+                max_pitch: 75.0,
+            },
             follow_time: 0.015,
             max_speed: 1000.0,
             max_angular_speed: 1000.0,

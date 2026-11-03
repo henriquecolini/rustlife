@@ -202,9 +202,11 @@ fn grabs_a_prop_in_range_and_carries_it_in_front() {
         ..UserCmd::default()
     };
     room.run(60, &ahead);
-    let radius = room.sim.physics().radius(room.prop).expect("prop");
+    // Where HL2DM's Gravity Gun holds it, as the hands would: `gap` 24 + the
+    // player's half diagonal (22.6) + the crate's 8 back from its origin,
+    // straight ahead at eye height.
     let eye = Vec3::new(0.0, 0.0, 1.0 + 64.0);
-    let expected = eye + Vec3::X * (data.manipulator.hold.distance + radius);
+    let expected = eye + Vec3::X * (24.0 + 16.0_f32.hypot(16.0) + 8.0);
     let center = room.center();
     assert!(
         center.distance(expected) < 4.0,

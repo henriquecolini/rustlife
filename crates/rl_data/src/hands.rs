@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::manipulator::HoldPoint;
 use crate::validate::Validator;
 
 /// Every number of carrying props in the hands.
@@ -38,21 +39,13 @@ pub struct PickupLimits {
 
 /// Carrying a prop (`CGrabController::UpdateObject`).
 ///
-/// The prop's centre of mass is steered to a point ahead of the eyes along
-/// the view, its pitch clamped to [`max_pitch`](Self::max_pitch). How far
-/// ahead depends on the prop's depth towards the player and the player's
-/// width (`radius` below: half the player box's diagonal plus how far the
-/// prop reaches back from its origin): [`gap`](Self::gap) + `radius`, or half
-/// of `radius` when a wall is within half of `gap` + 2 × `radius`; and never
-/// closer than `radius` to the player's upright axis.
+/// The prop is held where the Manipulator would hold it ([`HoldPoint`]), but
+/// follows faster, and falls from the hands when held back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CarryHold {
-    /// The base of how far ahead the prop is held, units.
-    pub gap: f32,
-    /// The view's pitch is clamped to this, up and down, for placing the prop,
-    /// degrees: looking straight down holds it in front of the feet.
-    pub max_pitch: f32,
+    /// Where the prop is held.
+    pub point: HoldPoint,
     /// Seconds the prop takes to close the gap to where it is held: HL2
     /// steers it there in one tick.
     pub follow_time: f32,
@@ -132,8 +125,7 @@ impl HandsConfig {
         check.positive("pickup.max_size", self.pickup.max_size);
 
         let hold = &self.hold;
-        check.non_negative("hold.gap", hold.gap);
-        check.range("hold.max_pitch", hold.max_pitch, 0.0, 90.0);
+        hold.point.validate(check, "hold.point");
         check.positive("hold.follow_time", hold.follow_time);
         check.positive("hold.max_speed", hold.max_speed);
         check.positive("hold.max_angular_speed", hold.max_angular_speed);

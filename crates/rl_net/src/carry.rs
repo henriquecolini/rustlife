@@ -4,9 +4,9 @@
 //! they carry cannot be: it would trail them by that delay plus half a round
 //! trip. So the client steers it as the server does, from where the newest
 //! snapshot has it, with the commands the server has not run yet, and again with
-//! each command it issues (the formulas are the server's: [`hold_target`] and
-//! [`hold_velocity`] for the Manipulator, [`carry_target`] and
-//! [`carry_velocity`] for the hands). A snapshot that disagrees leaves an
+//! each command it issues (the formulas are the server's: [`hold_target`] for
+//! where it goes, [`hold_velocity`] for the Manipulator's pace and
+//! [`carry_velocity`] for the hands'). A snapshot that disagrees leaves an
 //! error that fades away, like the view's. The server's prop stops at walls: the
 //! prediction sweeps a box against the map and the other props, so it does not
 //! go through what the server's will not. It cannot know a prop will be shoved
@@ -25,8 +25,9 @@ use rl_sim::movement::UserCmd;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::scene::Scene;
 use rl_sim::simulation::{PlayerId, Simulation};
-use rl_sim::tools::hands::{Carrier, carry_target, carry_velocity};
-use rl_sim::tools::manipulator::{Aim, hold_rotation, hold_target, hold_velocity};
+use rl_sim::tools::hands::carry_velocity;
+use rl_sim::tools::hold::{Carrier, hold_target};
+use rl_sim::tools::manipulator::{Aim, hold_rotation, hold_velocity};
 
 /// Seconds a prop let go of takes to ease back into the interpolated past.
 const RELEASE_SECS: f32 = 0.2;
@@ -147,9 +148,8 @@ fn prediction_box((mins, maxs): (Vec3, Vec3), centre: Vec3) -> Hull {
 /// What holds a prop.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Grip {
-    /// The Manipulator, which holds its centre this far beyond the hold
-    /// distance.
-    Manipulator { radius: f32 },
+    /// The Manipulator.
+    Manipulator,
     /// The hands.
     Hands,
 }
@@ -170,9 +170,8 @@ impl HeldProp {
     pub(crate) fn of(sim: &Simulation, player: PlayerId) -> Option<Self> {
         let holder = sim.player(player)?;
         let (body, relative_rotation, grip) = if let Some(body) = holder.manipulator.held() {
-            let radius = sim.physics().radius(body)?;
             let rotation = holder.manipulator.held_rotation()?;
-            (body, rotation, Grip::Manipulator { radius })
+            (body, rotation, Grip::Manipulator)
         } else {
             let body = holder.hands.held()?;
             (body, holder.hands.held_rotation()?, Grip::Hands)
@@ -199,36 +198,28 @@ impl HeldProp {
 
     /// Steers it for `player` having just run `cmd`, as the server will.
     pub(crate) fn step(&mut self, sim: &Simulation, player: PlayerId, cmd: &UserCmd) {
-        let Some(eye) = sim.eye_position(player) else {
+        let (Some(eye), Some(holder)) = (sim.eye_position(player), sim.player(player)) else {
             return;
         };
-        let aim = Aim {
-            eye,
-            pitch: cmd.pitch,
-            yaw: cmd.yaw,
+        let carrier = Carrier {
+            origin: holder.state.origin,
+            hull: holder.state.hull(&sim.data().movement),
+            aim: Aim {
+                eye,
+                pitch: cmd.pitch,
+                yaw: cmd.yaw,
+            },
         };
+        let data = sim.data();
+        let point = match self.grip {
+            Grip::Manipulator => &data.manipulator.hold.point,
+            Grip::Hands => &data.hands.hold.point,
+        };
+        let error = hold_target(&carrier, self.body, sim.world(), sim.physics(), point)
+            .map_or(Vec3::ZERO, |target| target - self.course.current);
         let velocity = match self.grip {
-            Grip::Manipulator { radius } => {
-                let tuning = &sim.data().manipulator.hold;
-                hold_velocity(
-                    hold_target(&aim, radius, tuning) - self.course.current,
-                    tuning,
-                )
-            }
-            Grip::Hands => {
-                let Some(holder) = sim.player(player) else {
-                    return;
-                };
-                let carrier = Carrier {
-                    origin: holder.state.origin,
-                    hull: holder.state.hull(&sim.data().movement),
-                    aim,
-                };
-                let hold = &sim.data().hands.hold;
-                let target = carry_target(&carrier, self.body, sim.world(), sim.physics(), hold)
-                    .unwrap_or(self.course.current);
-                carry_velocity(target - self.course.current, hold)
-            }
+            Grip::Manipulator => hold_velocity(error, &data.manipulator.hold),
+            Grip::Hands => carry_velocity(error, &data.hands.hold),
         };
         let scene = Scene {
             world: sim.world(),
@@ -377,7 +368,7 @@ mod tests {
         HeldProp {
             body: BodyId::from_index(body),
             course: course(),
-            grip: Grip::Manipulator { radius: 12.0 },
+            grip: Grip::Manipulator,
             hull: Hull::POINT,
         }
     }

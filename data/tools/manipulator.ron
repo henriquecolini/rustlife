@@ -36,8 +36,16 @@ Manipulator(
         aim_cone_range: 251.0,
     ),
     hold: (
-        // Gap between the eyes and the near side of the held prop.
-        distance: 20.0,
+        // Where the prop is held, as HL2DM's `CGrabController::UpdateObject`
+        // (server.so) places it for the Gravity Gun and the hands alike: the
+        // middle of its box goes 24 units plus `radius` ahead of the eyes, where
+        // `radius` is half the player box's diagonal (22.6) plus how far the
+        // prop reaches back towards the player from its origin; only half of
+        // `radius` ahead when a wall is within 12 + `radius`; never closer than
+        // `radius` to the player's upright axis; and the view's pitch is
+        // clamped to 75 degrees for it. A barrel looked at level is held about
+        // 60 units out.
+        point: (gap: 24.0, max_pitch: 75.0),
         // The prop closes the gap to its hold point over about this long...
         follow_time: 0.05,
         // ...moving at most this fast (units/s) and turning at most this

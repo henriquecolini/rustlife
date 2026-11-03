@@ -20,6 +20,7 @@ use crate::combat::{Cause, Damage, Target, blast};
 use crate::movement::{Buttons, UserCmd, view_direction};
 use crate::rng::Rng;
 use crate::scene::Scene;
+use crate::tools::hold::Carrier;
 use crate::tools::manipulator::{Aim, Targets, ToolEvent};
 use crate::weapons::projectile::{Flight, Projectile};
 use crate::weapons::{Mode, WeaponId};
@@ -113,7 +114,11 @@ impl Simulation {
         let tool_event = match player.inventory.tool(&arsenal) {
             Some(intervals) => player.manipulator.tick(
                 player.body,
-                &aim,
+                &Carrier {
+                    origin: player.state.origin,
+                    hull: player.state.hull(&self.data.movement),
+                    aim,
+                },
                 cmd.buttons,
                 intervals,
                 &Targets {

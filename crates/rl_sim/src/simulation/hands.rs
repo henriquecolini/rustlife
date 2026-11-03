@@ -13,7 +13,8 @@ use crate::collision::contents::MASK_PLAYER_SOLID;
 use crate::movement::{Buttons, UserCmd};
 use crate::rng::Rng;
 use crate::scene::Scene;
-use crate::tools::hands::{Carrier, HandsEvent, UseTarget, find_prop};
+use crate::tools::hands::{HandsEvent, UseTarget, find_prop};
+use crate::tools::hold::Carrier;
 use crate::tools::manipulator::{Aim, ToolEvent};
 
 /// Seeds a toss's spin, apart from the other random draws of a command.
