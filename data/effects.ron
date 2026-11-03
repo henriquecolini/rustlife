@@ -241,8 +241,8 @@ Effects(
             life: 0.1,
         ),
     ),
-    // A bullet through a player: blood thrown out, and the stain it leaves
-    // on the floor or wall behind them.
+    // A shot or swing striking a player: blood thrown out, and the stains it
+    // leaves on whatever lies behind them, away from where the shot came from.
     blood: (
         sprites: ["effects/blood", "effects/blood2"],
         size: 2.6,
@@ -251,7 +251,13 @@ Effects(
         duration: 0.6,
         color: (0.32, 0.006, 0.004),
         lit: true,
-        decals: ["decals/flesh/blood1", "decals/flesh/blood2", "decals/flesh/blood3", "decals/flesh/blood4", "decals/flesh/blood5"],
+        // The game's "Blood" decal (scripts/decals_subrect.txt): one of six
+        // DecalModulate splats, 128 texels x $decalscale 0.25 = 32 units.
+        // TraceBleed (server.so 0x68a570) traces 172 units on along the shot
+        // from the wound, once for less than 10 damage, twice for less than
+        // 25 and four times above, each line strayed up to 0.1, 0.2 or 0.3 on
+        // each axis, and stains whatever map or prop it meets.
+        decals: ["decals/blood1", "decals/blood2", "decals/blood3", "decals/blood4", "decals/blood5", "decals/blood6"],
         decal_life: 35.0,
         pcf: Some("blood_impact_red_01"),
     ),

@@ -126,6 +126,11 @@ impl Default for DecalAssets {
 }
 
 impl DecalAssets {
+    /// The random numbers decals are placed and picked with.
+    pub(crate) fn rng(&mut self) -> &mut Rng {
+        &mut self.rng
+    }
+
     /// Starts loading decal material `name`, unless it already is, and returns
     /// its handle.
     pub(crate) fn request(&mut self, name: &str, server: &AssetServer) -> Handle<DecalAsset> {
@@ -807,34 +812,52 @@ fn clip(mut polygon: Vec<ClipVertex>, normal: Vec3, distance: f32, point: Vec3) 
     out
 }
 
-/// The hit point and surface of a blood stain, in Source space.
-pub(crate) fn trace_stain(
-    at: Vec3,
-    direction: Vec3,
-    trace: impl Fn(Vec3) -> Trace,
-) -> Option<(Vec3, Vec3, Struck)> {
-    let floor = trace(at - Vec3::Z * 192.0);
-    let ahead = trace(at + direction * 192.0);
-    let floor_distance = floor.hit().then(|| at.distance(floor.end));
-    let ahead_distance = ahead.hit().then(|| at.distance(ahead.end));
-    let hit = match (floor_distance, ahead_distance) {
-        (Some(floor_distance), Some(ahead_distance)) => {
-            if floor_distance <= ahead_distance {
-                &floor
-            } else {
-                &ahead
-            }
-        }
-        (Some(_), None) => &floor,
-        (None, Some(_)) => &ahead,
-        (None, None) => return None,
-    };
-    let struck = match (hit.body, hit.model) {
+/// How far behind a wound blood is traced, units (`TraceBleed`).
+pub(crate) const BLEED_REACH: f32 = 172.0;
+
+/// How many stains a wound of `damage` leaves, and how far each one's
+/// direction strays from the shot's on each axis (`TraceBleed`: one stain
+/// below 10 damage, two below 25, four above).
+pub(crate) fn bleed_spread(damage: f32) -> (usize, f32) {
+    if damage < 10.0 {
+        (1, 0.1)
+    } else if damage < 25.0 {
+        (2, 0.2)
+    } else {
+        (4, 0.3)
+    }
+}
+
+/// The lines the game traces blood along from a wound at `at`: one for each
+/// stain, [`BLEED_REACH`] times the shot's `direction` less a stray of up to
+/// the spread on each axis. The stray is not normalised away, as the game
+/// does not.
+pub(crate) fn bleed_lines(rng: &mut Rng, at: Vec3, direction: Vec3, damage: f32) -> Vec<Vec3> {
+    let (count, spread) = bleed_spread(damage);
+    (0..count)
+        .map(|_| {
+            let stray = Vec3::new(
+                spread * (2.0 * rng.unit() - 1.0),
+                spread * (2.0 * rng.unit() - 1.0),
+                spread * (2.0 * rng.unit() - 1.0),
+            );
+            at + (direction - stray) * BLEED_REACH
+        })
+        .collect()
+}
+
+/// Where a line traced from a wound stains, Source space: the point, the
+/// surface's normal and what it is; `None` if it struck nothing.
+pub(crate) fn stain(trace: &Trace) -> Option<(Vec3, Vec3, Struck)> {
+    if !trace.hit() {
+        return None;
+    }
+    let struck = match (trace.body, trace.model) {
         (Some(body), _) => Struck::Prop(body),
         (None, Some(model)) => Struck::Brush(u32::try_from(model).unwrap_or(u32::MAX)),
         (None, None) => Struck::World,
     };
-    Some((hit.end, hit.normal, struck))
+    Some((trace.end, trace.normal, struck))
 }
 
 #[cfg(test)]
@@ -991,5 +1014,66 @@ mod tests {
         assert_eq!(blend.lightmap_exposure, baked_light_scale());
         let mask = decal_material(&decal(DecalBlend::Mask(0.5)), true);
         assert_eq!(mask.alpha_mode, AlphaMode::Mask(0.5));
+    }
+
+    #[test]
+    fn a_wound_bleeds_more_and_wider_the_harder_it_was_hit() {
+        assert_eq!(bleed_spread(5.0), (1, 0.1));
+        assert_eq!(bleed_spread(9.9), (1, 0.1));
+        assert_eq!(bleed_spread(12.0), (2, 0.2));
+        assert_eq!(bleed_spread(25.0), (4, 0.3));
+        assert_eq!(bleed_spread(100.0), (4, 0.3));
+    }
+
+    #[test]
+    fn blood_is_traced_away_from_where_the_shot_came_from() {
+        let mut rng = Rng::seeded(&[3]);
+        let at = Vec3::new(10.0, 20.0, 30.0);
+        for (damage, count, spread) in [(8.0, 1, 0.1), (20.0, 2, 0.2), (40.0, 4, 0.3)] {
+            let lines = bleed_lines(&mut rng, at, Vec3::X, damage);
+            assert_eq!(lines.len(), count);
+            for end in lines {
+                let reach = (end - at) / BLEED_REACH;
+                // Along the shot, strayed by at most the spread on each axis
+                // and never pulled back to unit length.
+                assert!((reach.x - 1.0).abs() <= spread + 1e-5, "{reach}");
+                assert!(reach.y.abs() <= spread + 1e-5 && reach.z.abs() <= spread + 1e-5);
+            }
+        }
+        // Not downwards: a level shot stains the wall behind, not the floor.
+        let level = bleed_lines(&mut rng, at, Vec3::Y, 50.0);
+        assert!(
+            level
+                .iter()
+                .all(|end| end.z - at.z >= -0.3 * BLEED_REACH - 1e-3)
+        );
+        assert!(
+            level
+                .iter()
+                .all(|end| end.y - at.y >= 0.7 * BLEED_REACH - 1e-3)
+        );
+    }
+
+    #[test]
+    fn a_stain_is_where_the_line_struck_and_on_what() {
+        let mut trace = Trace {
+            fraction: 0.5,
+            end: Vec3::new(1.0, 2.0, 3.0),
+            normal: Vec3::NEG_X,
+            contents: 1,
+            start_solid: false,
+            all_solid: false,
+            body: None,
+            model: None,
+            material: None,
+        };
+        assert_eq!(
+            stain(&trace),
+            Some((Vec3::new(1.0, 2.0, 3.0), Vec3::NEG_X, Struck::World))
+        );
+        trace.model = Some(4);
+        assert_eq!(stain(&trace).map(|stain| stain.2), Some(Struck::Brush(4)));
+        trace.fraction = 1.0;
+        assert_eq!(stain(&trace), None);
     }
 }

@@ -30,7 +30,7 @@ use rl_data::{
     EffectsConfig, ImpactEffectConfig, ImpactFlashConfig, MuzzleFlashConfig, Shot, SurfaceEffect,
     TracerConfig,
 };
-use rl_sim::collision::contents::MASK_PLAYER_SOLID;
+use rl_sim::collision::contents::{MOVEABLE, SOLID, WINDOW};
 use rl_sim::collision::{CollisionQuery, Hull};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::view_direction;
@@ -43,7 +43,7 @@ use crate::AppState;
 use crate::actors::PlayerView;
 use crate::animation::Attachment;
 use crate::camera::FlyCam;
-use crate::decals::{DecalKind, DecalRequest, trace_stain};
+use crate::decals::{DecalAssets, DecalKind, DecalRequest, bleed_lines, stain};
 use crate::effect_material::{EffectMaterial, effect_material};
 use crate::explosion::random_vector;
 use crate::impact_debris::Debris;
@@ -72,6 +72,9 @@ const SPRAY_DRAG: f32 = 2.5;
 const SPRAY_SPREAD: f32 = 0.6;
 /// Most spray particles one hit spawns.
 const MAX_SPRAY: u32 = 16;
+/// What blood is traced against behind a wound (`TraceBleed`'s `0x4003`:
+/// the map and props, not players).
+const BLEED_MASK: u32 = SOLID | WINDOW | MOVEABLE;
 /// Most steps from an attachment up to the model that owns it.
 const MAX_DEPTH: usize = 64;
 
@@ -660,14 +663,14 @@ fn spawn_effects(
             match shot.trace.struck {
                 Struck::Nothing => {}
                 Struck::Player(_) => {
-                    let wound = Wound { shot, end, bullets };
+                    let wound = Wound { shot, end };
                     bleed(
                         &wound,
                         sim,
                         &quad,
                         &mut painter,
                         (&pcf, &mut pcf_spawns),
-                        &mut marks.decals,
+                        &mut marks,
                     );
                 }
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
@@ -696,6 +699,7 @@ fn spawn_effects(
 struct Marks<'w> {
     surfaces: Res<'w, MapSurfaces>,
     decals: MessageWriter<'w, DecalRequest>,
+    decal_assets: ResMut<'w, DecalAssets>,
     debris: MessageWriter<'w, Debris>,
     sparks: MessageWriter<'w, Sparks>,
 }
@@ -766,28 +770,41 @@ fn spark_direction(rng: &mut Rng, effects: &EffectsConfig, shot: &ShotEvent) -> 
     reflected + random_vector(rng, effects.impact_particles.sparks.jitter)
 }
 
-/// A bullet that struck a player.
+/// A shot that struck a player.
 struct Wound<'a> {
     shot: &'a ShotEvent,
     /// Where, Bevy space.
     end: Vec3,
-    /// Whether it was fired by a gun (and so leaves a stain).
-    bullets: bool,
 }
 
-/// Blood thrown out of a wound, and the stain on whatever lies beyond.
+/// What one hit of `weapon` deals: a bullet's, a swing's or a projectile's
+/// damage (the first fire mode that says).
+fn shot_damage(sim: &Simulation, weapon: WeaponId) -> f32 {
+    sim.arsenal()
+        .weapon(weapon)
+        .and_then(|weapon| {
+            weapon.fire_modes().find_map(|fire| match &fire.shot {
+                Shot::Hitscan(bullets) => Some(bullets.damage),
+                Shot::Melee(swing) => Some(swing.damage),
+                Shot::Projectile(projectile) => Some(projectile.hit_damage),
+                Shot::Manipulator => None,
+            })
+        })
+        .unwrap_or(0.0)
+}
+
+/// Blood thrown out of a wound, and the stains on whatever lies behind.
 fn bleed(
     wound: &Wound,
     sim: &Simulation,
     quad: &Handle<Mesh>,
     painter: &mut Painter,
     (pcf, pcf_spawns): (&Pcf, &mut MessageWriter<PcfSpawn>),
-    decals: &mut MessageWriter<DecalRequest>,
+    marks: &mut Marks,
 ) {
-    let Wound { shot, end, bullets } = wound;
-    let (end, bullets) = (*end, *bullets);
+    let Wound { shot, end } = wound;
     let blood = &sim.data().effects.blood;
-    let source_direction = (shot.trace.end - shot.start).normalize_or(shot.trace.normal);
+    let source_direction = (shot.trace.end - shot.start).normalize_or(-shot.trace.normal);
     let spray_direction = shot.trace.normal.normalize_or(source_direction);
     let played = pcf.play(
         blood.pcf.as_deref(),
@@ -799,38 +816,38 @@ fn bleed(
         painter.blood(
             quad,
             blood,
-            end,
+            *end,
             coords::direction(spray_direction.to_array()),
         );
     }
-    if bullets {
-        stain_behind(sim, shot.trace.end, source_direction, decals);
+    let damage = shot_damage(sim, shot.weapon);
+    if damage > 0.0 {
+        trace_bleed(sim, shot.trace.end, source_direction, damage, marks);
     }
 }
 
-/// Asks for a blood stain on whatever lies beyond a wound at `at`, along
-/// the bullet's `direction`.
-fn stain_behind(
-    sim: &Simulation,
-    at: Vec3,
-    direction: Vec3,
-    decals: &mut MessageWriter<DecalRequest>,
-) {
+/// The game's `TraceBleed`: stains on whatever lies behind a wound at `at`
+/// (Source space), traced along the shot's `direction`, more of them and
+/// more strayed the harder the hit (see [`crate::decals::bleed_lines`]).
+/// The lines pass through players and stop at the map and props.
+fn trace_bleed(sim: &Simulation, at: Vec3, direction: Vec3, damage: f32, marks: &mut Marks) {
     let scene = WorldScene {
         world: sim.world(),
         physics: sim.physics(),
         ignore: None,
         others: &[],
     };
-    let trace = |to| scene.trace_hull(at, to, &Hull::POINT, MASK_PLAYER_SOLID);
-    if let Some((stain, normal, target)) = trace_stain(at, direction, trace) {
-        decals.write(DecalRequest {
-            kind: DecalKind::Blood,
-            target,
-            at: stain,
-            normal,
-            direction,
-        });
+    for to in bleed_lines(marks.decal_assets.rng(), at, direction, damage) {
+        let trace = scene.trace_hull(at, to, &Hull::POINT, BLEED_MASK);
+        if let Some((stain, normal, target)) = stain(&trace) {
+            marks.decals.write(DecalRequest {
+                kind: DecalKind::Blood,
+                target,
+                at: stain,
+                normal,
+                direction: (to - at).normalize_or(direction),
+            });
+        }
     }
 }
 
