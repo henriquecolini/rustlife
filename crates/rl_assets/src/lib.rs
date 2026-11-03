@@ -28,6 +28,7 @@ pub mod light_field;
 pub mod map;
 pub mod material;
 pub mod model;
+pub mod pose;
 pub mod skeleton;
 pub mod sound;
 pub mod source;
@@ -42,6 +43,7 @@ pub use map::{
 };
 pub use material::{SinePulse, SourceMaterial, VmtLoadError, VmtLoader};
 pub use model::{MdlLoader, ModelAsset, ModelLoadError, ModelPart};
+pub use pose::{PlayTrack, PoseRig, RigSequence};
 pub use skeleton::{Joint, SequenceClips, Skeleton};
 pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};

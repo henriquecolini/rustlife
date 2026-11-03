@@ -701,7 +701,9 @@ fn read_movement(file: &File, at: usize) -> [f32; 3] {
             file.f32(last + 40)?,
         ])
     };
-    read().filter(|movement| movement.iter().all(|c| c.is_finite())).unwrap_or([0.0; 3])
+    read()
+        .filter(|movement| movement.iter().all(|c| c.is_finite()))
+        .unwrap_or([0.0; 3])
 }
 
 /// One bone's position and rotation at `frame` from its record's data at
@@ -840,9 +842,7 @@ fn read_sequences(
         return Err(AnimError::OutOfBounds("sequences"));
     }
     Ok((0..count)
-        .filter_map(|index| {
-            read_sequence(file, offset + index * SEQUENCE_SIZE, animations, bones)
-        })
+        .filter_map(|index| read_sequence(file, offset + index * SEQUENCE_SIZE, animations, bones))
         .collect())
 }
 

@@ -36,6 +36,7 @@ use source_formats::phy::{self, PhysicsModel};
 use thiserror::Error;
 
 use crate::coords;
+use crate::pose::PoseRig;
 use crate::skeleton::{self, SequenceClips, Skeleton};
 use crate::source::SOURCE;
 
@@ -101,6 +102,9 @@ pub struct ModelAnimationAsset {
     pub sequences: Vec<SequenceClips>,
     /// Named points on its bones: name (lower case), joint and offset.
     pub attachments: Vec<(String, usize, bevy_transform::components::Transform)>,
+    /// What posing it by hand takes, for a model whose sequences lay others
+    /// over themselves (a player's weapon holds): see [`crate::pose`].
+    pub rig: Option<Arc<PoseRig>>,
 }
 
 impl ModelAnimationAsset {
@@ -265,6 +269,8 @@ async fn load_animation(
     // The model, then its includes breadth first, each once.
     let mut queue: Vec<(ModelAnimation, usize)> = vec![(main.clone(), 0)];
     let mut seen: Vec<String> = Vec::new();
+    // Every model read, in the order its sequences were added.
+    let mut read_models: Vec<ModelAnimation> = Vec::new();
     while !queue.is_empty() {
         let (model, depth) = queue.remove(0);
         let mut add = |clip: AnimationClip| {
@@ -272,10 +278,13 @@ async fn load_animation(
             load_context.add_labeled_asset(format!("clip{clip_count}"), clip)
         };
         sequences.extend(skeleton::sequence_clips(&skeleton, &model, &mut add));
-        if depth >= MAX_INCLUDE_DEPTH {
-            continue;
-        }
-        for include in &model.includes {
+        let includes = if depth >= MAX_INCLUDE_DEPTH {
+            Vec::new()
+        } else {
+            model.includes.clone()
+        };
+        read_models.push(model);
+        for include in &includes {
             let path = include.to_ascii_lowercase();
             if seen.contains(&path) {
                 continue;
@@ -299,6 +308,13 @@ async fn load_animation(
             queue.push((included, depth + 1));
         }
     }
+    let layered = read_models.iter().any(|model| {
+        model
+            .sequences
+            .iter()
+            .any(|sequence| !sequence.layers.is_empty())
+    });
+    let rig = layered.then(|| Arc::new(PoseRig::build(&skeleton, &read_models)));
     let attachments = main
         .attachments
         .iter()
@@ -315,6 +331,7 @@ async fn load_animation(
         inverse_bindposes,
         sequences,
         attachments,
+        rig,
     })
 }
 
