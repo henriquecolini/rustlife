@@ -28,6 +28,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::net::Game;
+use crate::particles::play_fire;
 use crate::pcf_particles::{Follow, Pcf, PcfSpawn, PcfStop};
 use crate::player::Ticked;
 use crate::props::{ModelHandles, Moving, Prop, spawn_model};
@@ -63,8 +64,6 @@ const BURN_TIME: (f32, f32) = (3.0, 5.0);
 /// Most pieces of one explosion that burn: each burning one is an effect, and
 /// a chain of barrels must not use them all up.
 const MAX_BURNING: u32 = 4;
-/// The game's particle system for a burning piece, with its smoke as a child.
-const GIB_FIRE: &str = "burning_gib_01";
 /// Smallest collider half-extent, Source units.
 const MIN_HALF_EXTENT: f32 = 0.05 * UNITS_PER_METRE;
 
@@ -277,13 +276,12 @@ fn make_gib_bodies(
             gib.body = Some(body);
             if gib.burning > 0.0 {
                 let (low, high) = model.source_bounds;
-                pcf.play_on(
-                    GIB_FIRE,
+                play_fire(
+                    &pcf,
                     &mut fires,
                     Follow::Entity(entity),
                     gib.position,
                     (Vec3::from(low) + Vec3::from(high)) / 2.0,
-                    (1.0, 1.0),
                 );
             }
         } else {

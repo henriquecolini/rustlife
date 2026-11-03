@@ -575,6 +575,37 @@ const FIRE_SMOKE_SYSTEM: &str = "smoke_burning_engine_01";
 /// How long its particles live against the game's: its root system's are the
 /// smoke, its children's the flames, which vanish a bit faster.
 const FIRE_LIFE_SCALE: (f32, f32) = (1.0, 0.7);
+/// Sets `follow` on fire with the game's systems, as a burning prop is:
+/// [`FIRE_SMOKE_SYSTEM`] and [`FIRE_SYSTEM`], starting from `position` and
+/// staying `offset` from an entity's origin (see [`Pcf::play_on`]). Everything
+/// that burns, a barrel or a piece it threw, looks the same. Says whether the
+/// game's fire is there to play; stop it with a [`PcfStop`] on `follow`.
+pub(crate) fn play_fire(
+    pcf: &Pcf,
+    spawns: &mut MessageWriter<PcfSpawn>,
+    follow: Follow,
+    position: Vec3,
+    offset: Vec3,
+) -> bool {
+    // The smoke first: drawn in order, it stays behind the flames.
+    pcf.play_on(
+        FIRE_SMOKE_SYSTEM,
+        spawns,
+        follow,
+        position,
+        offset,
+        (1.0, 1.0),
+    );
+    pcf.play_on(
+        FIRE_SYSTEM,
+        spawns,
+        follow,
+        position,
+        offset,
+        FIRE_LIFE_SCALE,
+    )
+}
+
 /// How often a burning prop gives off a puff of flame, seconds.
 const FLAME_INTERVAL: f32 = 0.03;
 /// Seconds the flames made here take to grow to their fiercest: how long a
@@ -623,23 +654,7 @@ fn note_fires(
     let (caught, out) = fire_changes(&burning.0, &now);
     for body in caught {
         let at = sim.physics().center_of_mass(body).unwrap_or_default();
-        // The smoke first: drawn in order, it stays behind the flames.
-        pcf.play_on(
-            FIRE_SMOKE_SYSTEM,
-            &mut fires,
-            Follow::Body(body),
-            at,
-            Vec3::ZERO,
-            (1.0, 1.0),
-        );
-        let own = pcf.play_on(
-            FIRE_SYSTEM,
-            &mut fires,
-            Follow::Body(body),
-            at,
-            Vec3::ZERO,
-            FIRE_LIFE_SCALE,
-        );
+        let own = play_fire(&pcf, &mut fires, Follow::Body(body), at, Vec3::ZERO);
         burning.0.insert(body, (time.elapsed_secs(), own));
     }
     for body in out {
