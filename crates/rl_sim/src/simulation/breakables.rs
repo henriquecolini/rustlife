@@ -9,13 +9,15 @@
 //! ([`PropBreak`]) and, for an explosive prop, sets off its blast, which
 //! hits other props in turn, so barrels chain.
 //!
-//! Explosive props are the exception to health: bullets and knocks do not
-//! break them. They go through a [`Fuse`] instead: a first bullet primes
-//! one, a second sets it on fire, a bullet into a burning one sets it off at
-//! once, a swing of a club sets it off at once, a blast near one sets it
-//! off or on fire, and one thrown with the gravity gun goes off on the
-//! first thing it touches. A prop that is
-//! merely pushed about, or falls, never explodes.
+//! Explosive props are the exception: they burn. They are HL2DM's barrels. A
+//! blast or a flame sets one on fire, and a blast that would kill it leaves it
+//! some health to burn through, less the nearer the blast, so neighbours chain
+//! with a delay. A bullet that would leave it at half its health or less sets
+//! it on fire with its health restored; a bullet that would kill it, or any
+//! into a burning one, sets it off at once, as does a swing of a club. Flames
+//! eat its health until it explodes and light other barrels touching it. One
+//! thrown with the gravity gun goes off on the first thing it touches. A prop
+//! that is merely pushed about, or falls, never explodes.
 //!
 //! Whoever broke a prop is credited with its blast, and with the breaking of
 //! the props that blast breaks: a barrel shot by a player is that player's
@@ -28,7 +30,9 @@ use rl_data::{ExplosionConfig, ImpactOther, PropImpact};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
+use crate::combat::blast;
 use crate::physics::{BodyId, Breakable, ContactImpact};
+use crate::rng::Rng;
 
 /// A prop does not come back while a player is this close to where it
 /// would appear, units.
@@ -38,16 +42,25 @@ const RESPAWN_CLEARANCE: f32 = 96.0;
 /// loop forever.
 const MAX_ROUNDS: usize = 32;
 
+/// Size of a flame on a prop less than twice this across, units (HL2DM's
+/// `CEntityFlame::Create`); on larger ones it is half the prop's extent.
+const SMALLEST_FLAME: f32 = 16.0;
+
+/// Seed of the random health a blast leaves an explosive prop.
+const BLAST_SEED: u64 = 0x0062_6c61_7374;
+
 /// What kind of blow a prop took, which decides how much of its damage the
 /// prop feels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum Blow {
     /// A bullet.
     Bullet,
     /// A melee swing.
     Club,
-    /// A blast.
-    Explosion,
+    /// A blast, `distance` units from the prop's centre.
+    Explosion { distance: f32 },
+    /// The heat of a flame on another prop.
+    Burn,
     /// Another prop or the map hitting it hard.
     Impact,
     /// Touching anything at all: what a prop thrown with the gravity gun
@@ -64,17 +77,6 @@ pub(super) struct PropHit {
     attacker: Option<PlayerId>,
 }
 
-/// How far an explosive prop is from going off.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Fuse {
-    /// Untouched.
-    Idle,
-    /// Shot once: the next bullet sets it on fire.
-    Primed,
-    /// On fire: it explodes in this many seconds, or at once if shot.
-    Burning { left: f32 },
-}
-
 /// A breakable prop's state.
 #[derive(Debug, Clone)]
 pub(super) struct PropHealth {
@@ -86,8 +88,8 @@ pub(super) struct PropHealth {
     /// The tick it was added, so the contacts it makes while it settles
     /// into the map do not hurt it.
     born: u64,
-    /// How near an explosive prop is to going off.
-    fuse: Fuse,
+    /// While an explosive prop burns, seconds until the flame next bites.
+    flame: Option<f32>,
     /// Who set it burning, for the credit.
     igniter: Option<PlayerId>,
     /// Seconds left that it explodes on touching anything: it was thrown
@@ -100,7 +102,8 @@ pub(super) struct PropHealth {
 pub struct PropIgnition {
     /// The prop.
     pub body: BodyId,
-    /// Seconds until it goes off, unless something sets it off sooner.
+    /// Seconds until it goes off at the health it has now, unless something
+    /// sets it off sooner.
     pub fuse: f32,
 }
 
@@ -173,7 +176,7 @@ impl Breakables {
                 broken: false,
                 respawn_in: None,
                 born: tick,
-                fuse: Fuse::Idle,
+                flame: None,
                 igniter: None,
                 launched: 0.0,
             },
@@ -216,7 +219,7 @@ impl Breakables {
             state.broken = false;
             state.respawn_in = None;
             state.health = state.spec.health;
-            state.fuse = Fuse::Idle;
+            state.flame = None;
             state.igniter = None;
             state.launched = 0.0;
         }
@@ -469,9 +472,9 @@ impl Simulation {
         let scale = match hit.blow {
             Blow::Bullet => state.spec.bullets,
             Blow::Club => state.spec.club,
-            Blow::Explosion => state.spec.explosive,
+            Blow::Explosion { .. } => state.spec.explosive,
             Blow::Impact => 1.0,
-            Blow::Slam => return,
+            Blow::Burn | Blow::Slam => return,
         };
         state.health -= hit.amount * scale;
         if state.health <= 0.0 {
@@ -479,45 +482,55 @@ impl Simulation {
         }
     }
 
-    /// What a blow does to an explosive prop: advances its fuse, sets it
-    /// off, or nothing.
+    /// What a blow does to an explosive prop: `OnTakeDamage` of HL2DM's
+    /// `CBreakableProp`. It may set it off, set it on fire or take health.
     fn hit_explosive(&mut self, hit: PropHit, events: &mut TickEvents) {
         let config = self.data.physics.breakables.barrels;
+        let tick = self.tick;
         let Some(state) = self.breakables.props.get_mut(&hit.body) else {
             return;
         };
-        let fuse = match (hit.blow, state.fuse) {
-            (Blow::Bullet, Fuse::Idle) => Fuse::Primed,
-            (Blow::Bullet, Fuse::Primed) => Fuse::Burning {
-                left: config.burn_seconds,
-            },
-            (Blow::Bullet, Fuse::Burning { .. }) | (Blow::Club, _) => {
-                return self.explode_prop(hit, events);
-            }
-            (Blow::Explosion, _) if hit.amount >= config.instant_damage => {
-                return self.explode_prop(hit, events);
-            }
-            (Blow::Explosion, current) => {
-                let left = config.blast_fuse(hit.amount);
-                match current {
-                    Fuse::Burning { left: sooner } if sooner <= left => current,
-                    _ => Fuse::Burning { left },
+        let burning = state.flame.is_some();
+        let full = state.spec.health;
+        let health = match hit.blow {
+            Blow::Club => return self.explode_prop(hit, events),
+            Blow::Slam if state.launched > 0.0 => return self.explode_prop(hit, events),
+            Blow::Slam | Blow::Impact => return,
+            Blow::Burn if burning => return,
+            Blow::Burn if hit.amount >= state.health => return self.explode_prop(hit, events),
+            Blow::Burn => state.health - hit.amount,
+            Blow::Bullet => {
+                let damage = hit.amount * state.spec.bullets;
+                if burning || damage >= state.health {
+                    return self.explode_prop(hit, events);
                 }
+                if state.health - damage > full / 2.0 {
+                    state.health -= damage;
+                    return;
+                }
+                full - damage
             }
-            (Blow::Slam, _) if state.launched > 0.0 => return self.explode_prop(hit, events),
-            _ => return,
+            Blow::Explosion { distance } => {
+                let damage = hit.amount * state.spec.explosive;
+                let left = if damage >= state.health {
+                    let body = u64::from(hit.body.index() as u32);
+                    let unit = Rng::seeded(&[BLAST_SEED, tick, body]).unit();
+                    config.blast_health(distance, unit)
+                } else {
+                    (state.health - damage).max(config.min_blast_health)
+                };
+                left.min(state.health)
+            }
         };
-        if let (Fuse::Burning { left }, true) = (fuse, !matches!(state.fuse, Fuse::Burning { .. }))
-        {
+        state.health = health;
+        if !burning {
+            state.flame = Some(config.flame_first_bite);
+            state.igniter = state.igniter.or(hit.attacker);
             events.prop_ignitions.push(PropIgnition {
                 body: hit.body,
-                fuse: left,
+                fuse: config.burn_time(health),
             });
         }
-        if matches!(fuse, Fuse::Burning { .. }) && state.igniter.is_none() {
-            state.igniter = hit.attacker;
-        }
-        state.fuse = fuse;
     }
 
     fn explode_prop(&mut self, hit: PropHit, events: &mut TickEvents) {
@@ -530,25 +543,68 @@ impl Simulation {
         self.break_prop(hit.body, attacker, events);
     }
 
-    /// Burns the props that are on fire down by a tick, setting off those
-    /// whose fuse is spent, and lets launched ones' danger run out.
+    /// Burns the props that are on fire down by a tick, as HL2DM's
+    /// `CEntityFlame::FlameThink`: each bite takes health, setting off those
+    /// it leaves with none, and heats what is close by. Lets launched ones'
+    /// danger run out.
     pub(super) fn burn_props(&mut self, events: &mut TickEvents) {
         let dt = self.dt;
-        let mut spent = Vec::new();
+        let config = self.data.physics.breakables.barrels;
+        let mut bites = Vec::new();
         for (&body, state) in &mut self.breakables.props {
             if state.broken {
                 continue;
             }
             state.launched = (state.launched - dt).max(0.0);
-            if let Fuse::Burning { left } = &mut state.fuse {
-                *left -= dt;
-                if *left <= 0.0 {
-                    spent.push((body, state.igniter));
+            if let Some(next) = &mut state.flame {
+                *next -= dt;
+                if *next <= 0.0 {
+                    *next += config.flame_interval;
+                    state.health -= config.flame_damage;
+                    bites.push((body, state.igniter, state.health <= 0.0));
                 }
             }
         }
-        for (body, igniter) in spent {
-            self.break_prop(body, igniter, events);
+        for (body, igniter, spent) in bites {
+            self.heat_around(body, igniter);
+            if spent {
+                self.break_prop(body, igniter, events);
+            }
+        }
+    }
+
+    /// Heats the other explosive props within half the size of the flame on
+    /// `body`: `RadiusDamage` of `DMG_BURN`, which sets them on fire. It
+    /// reaches their edge, not their centre as in the game (the game's reach
+    /// is less than a barrel's own width, so its flames rarely light another).
+    fn heat_around(&mut self, body: BodyId, igniter: Option<PlayerId>) {
+        let Some(center) = self.physics.center_of_mass(body) else {
+            return;
+        };
+        let Some((low, high)) = self.physics.bounds(body) else {
+            return;
+        };
+        let extent = (high - low).max_element();
+        let size = if extent < 2.0 * SMALLEST_FLAME {
+            SMALLEST_FLAME
+        } else {
+            extent / 2.0
+        };
+        let heat = ExplosionConfig {
+            radius: size / 2.0,
+            damage: self.data.physics.breakables.barrels.flame_radius_damage,
+            knockback: 0.0,
+            knockback_cap: None,
+            force: 0.0,
+        };
+        for reach in blast::props(center, &heat, &self.physics, &self.world) {
+            let catches = self
+                .breakables
+                .spec(reach.body)
+                .is_some_and(|spec| spec.explosion.is_some());
+            if reach.body != body && reach.exposed && catches {
+                self.hit_prop(reach.body, heat.damage * reach.scale, Blow::Burn, igniter);
+            }
         }
     }
 

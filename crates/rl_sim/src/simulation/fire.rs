@@ -597,7 +597,9 @@ impl Simulation {
                 self.hit_prop(
                     reach.body,
                     explosion.damage * reach.scale,
-                    Blow::Explosion,
+                    Blow::Explosion {
+                        distance: reach.center.distance(center),
+                    },
                     owner,
                 );
             }

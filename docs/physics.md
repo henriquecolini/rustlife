@@ -230,20 +230,37 @@ later), the client scatters its gibs as small Box3D bodies (the chunk's
 else, and the prop comes back where it was
 if it respawns (`prop_physics_respawnable`).
 
-**Explosive barrels** do not use health. Bullets and knocks cannot break
-one, so shoving one off a ledge, or dropping it, does nothing. Instead a
-barrel has a fuse (`breakables.barrels` in `physics.ron`):
+**Explosive barrels** are HL2DM's (`CBreakableProp::OnTakeDamage`,
+`CEntityFlame`; `breakables.barrels` in `physics.ron`). Knocks do not hurt one,
+so shoving one off a ledge, or dropping it, does nothing. They burn:
 
-| What happens to it | Result |
+| What happens to it (20 hp) | Result |
 |--------------------|--------|
-| shot once | primed; nothing shows |
-| shot while primed | set on fire: it explodes after `burn_seconds` |
-| shot while burning, or hit with a crowbar | explodes at once |
-| a blast of `instant_damage` or more at the barrel | explodes at once |
-| a weaker blast | set on fire, with a fuse between `longest_fuse` (barely reached) and `shortest_fuse` (just short of instant); a burning barrel keeps the sooner fuse |
+| a bullet that would kill it, or a crowbar | explodes at once |
+| a bullet into a burning one | explodes at once |
+| a bullet that would leave half its health or less | health restored less that bullet, set on fire |
+| another bullet | takes the damage |
+| a blast that would kill it | set on fire with `5 * (min(d, 256) * 5/256 + random(0, 0.5))` hp for `d` units from the blast, at most what it had |
+| a weaker blast | set on fire, taking the damage |
 | thrown or punted with the Manipulator | for `launched_seconds`, explodes on the first thing it touches faster than `breakables.impact.report_speed`: the map, another prop, a pickup or a player (not the one who launched it, which it ignores until they have come apart), hurt or not |
 
-Whoever lit the fuse is credited with the blast and its kills, so
+**Deviation:** no blast leaves a barrel under `min_blast_health` (5 hp), if it
+had that much. The game leaves one within 32 units about 0.5 to 1 hp, gone in
+0.2 s; here a barrel always burns for about a second first, so a chain of
+barrels spreads with a visible delay. (Blasts that are not deadly obey the same
+floor.)
+
+A flame bites `flame_damage` (1 hp) off 0.1 s after catching and every 0.2 s
+from then, 5 hp/s, so a barrel lit at full health explodes 3.9 s later. At each
+bite it also heats other barrels within half its size, up to
+`flame_radius_damage` (4), which lights them. That reach is measured to their
+edge, where the game's goes to their centre, so here fire spreads between barrels
+touching each other. A burning barrel ignores other flames. Only explosive
+props catch, and every explosive prop behaves as a barrel does: the game also
+reads `fire_interactions`, whose `flammable`, `explosive_resist` and
+`ignite halfhealth` are the barrel's. Fire does not hurt players.
+
+Whoever first lit it is credited with the blast and its kills, so
 barrels set off by other barrels chain, each credited to the first
 shooter. The server sends `PropIgnite` when a barrel catches fire so
 clients can draw the flames (`rl_client::particles`).

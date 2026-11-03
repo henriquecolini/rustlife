@@ -62,36 +62,58 @@ pub struct BreakablesConfig {
     pub barrels: BarrelConfig,
 }
 
-/// How an explosive prop is set off. Bullets and knocks do not break it:
-/// the first bullet only primes it, the second sets it on fire, a bullet
-/// into a burning one sets it off at once, a nearby blast sets it off or
-/// on fire, and one thrown with the gravity gun goes off on whatever it
-/// touches first.
+/// How an explosive prop is set off, as HL2DM's barrels are. A bullet that
+/// would leave it at half its health or less sets it on fire with its health
+/// restored; a bullet into a burning one, or one that would kill it outright,
+/// sets it off at once, as does a swing of a club. A blast or a flame sets it
+/// on fire. Fire eats its health until it explodes. One thrown with the
+/// gravity gun goes off on whatever it touches first.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BarrelConfig {
-    /// Seconds a barrel burns, set on fire by a bullet, before it explodes.
-    pub burn_seconds: f32,
-    /// A blast's damage, at the barrel, that sets it off at once; weaker
-    /// ones set it on fire.
-    pub instant_damage: f32,
-    /// Fuse, seconds, of a barrel set on fire by a blast of next to no
-    /// damage...
-    pub longest_fuse: f32,
-    /// ...and of one set on fire by a blast just short of `instant_damage`.
-    pub shortest_fuse: f32,
     /// Seconds a barrel stays dangerous after being thrown or punted by
     /// the gravity gun, if it touches nothing.
     pub launched_seconds: f32,
+    /// Seconds from catching fire to the flame's first bite...
+    pub flame_first_bite: f32,
+    /// ...and between its bites after that.
+    pub flame_interval: f32,
+    /// Health each bite takes.
+    pub flame_damage: f32,
+    /// Damage of the heat around a flame at each bite, at its centre, to
+    /// other explosive props: what spreads fire without a blast.
+    pub flame_radius_damage: f32,
+    /// Health a deadly blast leaves a barrel with `blast_far_distance` units
+    /// or more away, to burn through...
+    pub blast_health_far: f32,
+    /// ...falling evenly to nothing at the blast's centre...
+    pub blast_far_distance: f32,
+    /// ...with up to this much more, at random.
+    pub blast_health_spread: f32,
+    /// But no blast leaves a barrel with less than this (or more than it
+    /// had), however near or strong.
+    pub min_blast_health: f32,
 }
 
 impl BarrelConfig {
-    /// The fuse, seconds, of a barrel that a blast of `damage` (less than
-    /// `instant_damage`) sets on fire: the harder the blast, the shorter.
+    /// The health a deadly blast `distance` units away leaves a barrel with,
+    /// before it is limited to what the barrel had; `unit` is random, `0..1`.
     #[must_use]
-    pub fn blast_fuse(&self, damage: f32) -> f32 {
-        let hardness = (damage / self.instant_damage).clamp(0.0, 1.0);
-        self.longest_fuse + (self.shortest_fuse - self.longest_fuse) * hardness
+    pub fn blast_health(&self, distance: f32, unit: f32) -> f32 {
+        let far = self.blast_far_distance.max(f32::EPSILON);
+        let nearness = distance.clamp(0.0, far) / far;
+        (self.blast_health_far * nearness + self.blast_health_spread * unit)
+            .max(self.min_blast_health)
+    }
+
+    /// Seconds until a barrel of `health` set on fire now goes off, unless
+    /// something sets it off sooner.
+    #[must_use]
+    pub fn burn_time(&self, health: f32) -> f32 {
+        let bites = (health / self.flame_damage.max(f32::EPSILON))
+            .ceil()
+            .max(1.0);
+        self.flame_first_bite + self.flame_interval * (bites - 1.0)
     }
 }
 
@@ -480,19 +502,35 @@ impl PhysicsConfig {
             );
         }
         let barrels = &breakables.barrels;
-        check.positive("breakables.barrels.burn_seconds", barrels.burn_seconds);
-        check.positive("breakables.barrels.instant_damage", barrels.instant_damage);
-        check.positive("breakables.barrels.shortest_fuse", barrels.shortest_fuse);
-        check.positive("breakables.barrels.longest_fuse", barrels.longest_fuse);
-        if barrels.shortest_fuse > barrels.longest_fuse {
-            check.fail(
-                "breakables.barrels.shortest_fuse",
-                "must not exceed longest_fuse",
-            );
-        }
         check.positive(
             "breakables.barrels.launched_seconds",
             barrels.launched_seconds,
+        );
+        check.non_negative(
+            "breakables.barrels.flame_first_bite",
+            barrels.flame_first_bite,
+        );
+        check.positive("breakables.barrels.flame_interval", barrels.flame_interval);
+        check.positive("breakables.barrels.flame_damage", barrels.flame_damage);
+        check.non_negative(
+            "breakables.barrels.flame_radius_damage",
+            barrels.flame_radius_damage,
+        );
+        check.non_negative(
+            "breakables.barrels.blast_health_far",
+            barrels.blast_health_far,
+        );
+        check.positive(
+            "breakables.barrels.blast_far_distance",
+            barrels.blast_far_distance,
+        );
+        check.non_negative(
+            "breakables.barrels.blast_health_spread",
+            barrels.blast_health_spread,
+        );
+        check.non_negative(
+            "breakables.barrels.min_blast_health",
+            barrels.min_blast_health,
         );
     }
 }
@@ -590,6 +628,47 @@ mod tests {
             speed_sqr: speed * speed,
             ..ImpactOther::MAP
         }
+    }
+
+    fn barrels() -> BarrelConfig {
+        crate::GameData::builtin()
+            .expect("builtin")
+            .physics
+            .breakables
+            .barrels
+    }
+
+    #[test]
+    fn a_nearer_blast_leaves_a_barrel_less_to_burn() {
+        let barrels = barrels();
+        assert!(barrels.blast_health(200.0, 0.0) > barrels.blast_health(100.0, 0.0));
+        assert_eq!(
+            barrels.blast_health(256.0, 0.0),
+            barrels.blast_health(9000.0, 0.0),
+            "no less beyond the far distance"
+        );
+        assert!(barrels.blast_health(100.0, 1.0) > barrels.blast_health(100.0, 0.0));
+        // As in the game: 5 * (d * 5 / 256 + random 0..0.5).
+        assert!((barrels.blast_health(128.0, 0.5) - 13.75).abs() < 1e-3);
+    }
+
+    #[test]
+    fn however_near_a_blast_a_barrel_burns_visibly_first() {
+        let barrels = barrels();
+        assert_eq!(barrels.blast_health(0.0, 0.0), barrels.min_blast_health);
+        assert_eq!(barrels.min_blast_health, 5.0);
+        assert!(
+            (barrels.burn_time(5.0) - 0.9).abs() < 1e-3,
+            "about a second"
+        );
+    }
+
+    #[test]
+    fn a_full_barrel_burns_for_the_games_time() {
+        let barrels = barrels();
+        assert!((barrels.burn_time(20.0) - 3.9).abs() < 1e-3);
+        assert!((barrels.burn_time(1.0) - 0.1).abs() < 1e-3);
+        assert!((barrels.burn_time(0.5) - 0.1).abs() < 1e-3, "a bite to go");
     }
 
     #[test]

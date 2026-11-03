@@ -198,20 +198,36 @@ Physics(
                 ),
             },
         ),
-        // Explosive barrels do not break from bullets or knocks. A bullet
-        // primes one, a second sets it on fire (it explodes burn_seconds
-        // later), a bullet into a burning one, or a swing of a crowbar, sets it off at
-        // once. A blast
-        // of at least instant_damage at the barrel sets it off; a weaker
-        // one sets it on fire with a fuse that is shorter the harder the
-        // blast. One thrown or punted with the gravity gun explodes on the
-        // first thing it touches, for launched_seconds.
+        // Explosive barrels, as HL2DM's CBreakableProp::OnTakeDamage and
+        // CEntityFlame have them, read from server.so. Being pushed about or
+        // falling does nothing to one. A swing of a crowbar, a bullet that
+        // would kill it, or a bullet into a burning one sets it off at once;
+        // a bullet that would leave it at half health or less sets it on fire
+        // with its health restored. A blast or a flame sets it on fire. One
+        // thrown or punted with the gravity gun explodes on the first thing
+        // it touches, for launched_seconds.
         barrels: (
-            burn_seconds: 4.0,
-            instant_damage: 60.0,
-            longest_fuse: 3.0,
-            shortest_fuse: 0.4,
             launched_seconds: 6.0,
+            // The flame bites flame_damage off its health flame_first_bite
+            // after it caught and every flame_interval from then: 5 hp/s, so
+            // a full 20 hp barrel goes off 3.9 s after catching. It breathes
+            // flame_radius_damage (at its centre) over half its size at each
+            // bite, which lights other barrels touching it.
+            flame_first_bite: 0.1,
+            flame_interval: 0.2,
+            flame_damage: 1.0,
+            flame_radius_damage: 4.0,
+            // A blast that would kill a barrel instead leaves it with
+            //   5 * (min(d, 256) * 5 / 256 + random(0, 0.5))
+            // health for d units from the blast, at most what it had.
+            blast_health_far: 25.0,
+            blast_far_distance: 256.0,
+            blast_health_spread: 2.5,
+            // Our deviation from the game, which leaves barrels within 32
+            // units about 0.5 to 1 hp, gone in 0.2 s: a blast always leaves 5
+            // hp if it can, about a second of burning, so a barrel next to
+            // a blast is seen to burn first and chains spread with a delay.
+            min_blast_health: 5.0,
         ),
     ),
     impact_damage: (

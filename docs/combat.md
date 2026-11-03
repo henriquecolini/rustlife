@@ -263,6 +263,11 @@ A blast hurts its own thrower by the rules' `self_damage` factor, which is 1
 in HL2DM: a rocket fired at your feet does about 140 damage and kills you.
 There are no rocket jumps.
 
+A blast does not detonate an explosive barrel: it sets it on fire, with some
+health left to burn through, less the nearer the blast but at least about a
+second's worth, so chains of barrels go off one after another. A bullet into a
+burning barrel sets it off at once (see [physics.md](physics.md)).
+
 ## Health and armor
 
 `Vitals` holds health and armor (`player.ron`). Damage is split by armor

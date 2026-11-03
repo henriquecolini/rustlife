@@ -1025,19 +1025,39 @@ fn ignitions(events: &[TickEvents]) -> usize {
     events.iter().map(|e| e.prop_ignitions.len()).sum()
 }
 
-/// A barrel dead ahead of the shooter, and the arena.
-fn barrel_arena(data: &GameData) -> (Arena, BodyId) {
-    let mut arena = Arena::new(data, 600.0);
-    let barrel = arena.sim.add_prop(&heavy(breakable_box(
+/// `oildrum001_explosive`'s health, and its blast.
+const BARREL_HEALTH: f32 = 20.0;
+const BARREL_BLAST: (f32, f32) = (120.0, 256.0);
+
+/// A barrel at `x` on the line of fire, too heavy for blasts to move it away.
+fn barrel_at(data: &GameData, x: f32) -> PropDesc {
+    heavy(breakable_box(
         data,
-        Vec3::new(200.0, 0.0, 0.0),
+        Vec3::new(x, 0.0, 0.0),
         (16.0, 90.0),
-        10.0,
-        Some((120.0, 256.0)),
-    )));
-    arena.arm("magnum");
+        BARREL_HEALTH,
+        Some(BARREL_BLAST),
+    ))
+}
+
+/// A barrel dead ahead of the shooter holding `weapon`, and the arena.
+fn barrel_arena(data: &GameData, weapon: &str) -> (Arena, BodyId) {
+    let mut arena = Arena::new(data, 600.0);
+    let barrel = arena.sim.add_prop(&barrel_at(data, 200.0));
+    arena.arm(weapon);
     (arena, barrel)
 }
+
+/// The tick of each break among `events`, in order, counted from their start.
+fn break_ticks(events: &[TickEvents]) -> Vec<usize> {
+    events
+        .iter()
+        .enumerate()
+        .flat_map(|(tick, e)| e.prop_breaks.iter().map(move |_| tick))
+        .collect()
+}
+
+const TICKS_PER_SECOND: f32 = 66.0;
 
 #[test]
 fn a_swing_of_the_crowbar_sets_a_barrel_off_at_once() {
@@ -1060,21 +1080,22 @@ fn a_swing_of_the_crowbar_sets_a_barrel_off_at_once() {
 }
 
 #[test]
-fn a_barrel_takes_three_shots_the_first_primes_the_second_ignites_the_third_explodes() {
+fn a_pistol_takes_three_shots_the_second_lights_the_barrel_the_third_sets_it_off() {
     let data = data();
-    let (mut arena, barrel) = barrel_arena(&data);
+    let (mut arena, barrel) = barrel_arena(&data, "sidearm");
     let first = shoot(&mut arena);
-    assert_eq!(ignitions(&first), 0, "a first shot does nothing to see");
+    assert_eq!(ignitions(&first), 0, "8 of 20 is not half its health");
     assert!(breaks(&first).is_empty());
     let second = shoot(&mut arena);
     assert_eq!(ignitions(&second), 1, "the second sets it on fire");
-    let fuse = second
+    let ignition = second
         .iter()
         .flat_map(|e| &e.prop_ignitions)
-        .map(|ignition| (ignition.body, ignition.fuse))
         .next()
         .expect("ignited");
-    assert_eq!(fuse, (barrel, data.physics.breakables.barrels.burn_seconds));
+    assert_eq!(ignition.body, barrel);
+    // Restored to 20 and taking that bullet's 8: 12 bites, 2.3 s.
+    assert!((ignition.fuse - 2.3).abs() < 1e-3, "{}", ignition.fuse);
     assert!(breaks(&second).is_empty(), "it burns for a while first");
     let third = shoot(&mut arena);
     let broke = breaks(&third);
@@ -1083,9 +1104,21 @@ fn a_barrel_takes_three_shots_the_first_primes_the_second_ignites_the_third_expl
 }
 
 #[test]
-fn a_burning_barrel_explodes_when_its_fuse_runs_out_and_credits_who_lit_it() {
+fn a_bullet_that_would_kill_it_sets_a_barrel_off_at_once() {
     let data = data();
-    let (mut arena, _) = barrel_arena(&data);
+    let (mut arena, barrel) = barrel_arena(&data, "magnum");
+    let first = shoot(&mut arena);
+    assert_eq!(ignitions(&first), 0, "it never burned");
+    let broke = breaks(&first);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, barrel);
+    assert!(broke[0].exploded);
+}
+
+#[test]
+fn a_burning_barrel_explodes_when_its_health_burns_away_and_credits_who_lit_it() {
+    let data = data();
+    let (mut arena, _) = barrel_arena(&data, "sidearm");
     // The target stands next to the barrel, off the line of fire.
     arena
         .sim
@@ -1096,18 +1129,19 @@ fn a_burning_barrel_explodes_when_its_fuse_runs_out_and_credits_who_lit_it() {
         .expect("target")
         .vitals
         .health = 30.0;
-    let mut events = shoot(&mut arena);
-    events.extend(shoot(&mut arena));
-    let burn_ticks = (data.physics.breakables.barrels.burn_seconds * 66.0) as usize;
-    assert!(breaks(&events).is_empty());
-    events.extend(arena.idle(burn_ticks / 2));
-    assert!(breaks(&events).is_empty(), "still burning");
-    events.extend(arena.idle(burn_ticks));
-    let broke = breaks(&events);
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(80));
+    let lit = arena.hold(Buttons::ATTACK, 0.0, 1);
+    assert_eq!(ignitions(&lit), 1);
+    let burn_ticks = (2.3 * TICKS_PER_SECOND) as usize;
+    let mut burning = arena.idle(burn_ticks - 4);
+    assert!(breaks(&burning).is_empty(), "still burning");
+    burning.extend(arena.idle(8));
+    let broke = breaks(&burning);
     assert_eq!(broke.len(), 1, "{broke:?}");
     assert!(broke[0].exploded);
-    assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 1);
-    let kills: Vec<_> = events.iter().flat_map(|e| &e.kills).collect();
+    assert_eq!(burning.iter().flat_map(|e| &e.explosions).count(), 1);
+    let kills: Vec<_> = burning.iter().flat_map(|e| &e.kills).collect();
     assert_eq!(kills.len(), 1, "{kills:?}");
     assert_eq!(kills[0].victim, arena.target);
     assert_eq!(kills[0].killer, Some(arena.shooter));
@@ -1117,41 +1151,119 @@ fn a_burning_barrel_explodes_when_its_fuse_runs_out_and_credits_who_lit_it() {
 }
 
 #[test]
-fn barrels_set_each_other_off() {
+fn barrels_set_each_other_off_one_after_another() {
     let data = data();
     let mut arena = Arena::new(&data, 900.0);
     let barrels: Vec<_> = [200.0, 330.0, 460.0]
         .into_iter()
-        .map(|x| {
-            arena.sim.add_prop(&heavy(breakable_box(
-                &data,
-                Vec3::new(x, 0.0, 0.0),
-                (16.0, 90.0),
-                10.0,
-                Some((120.0, 200.0)),
-            )))
-        })
+        .map(|x| arena.sim.add_prop(&barrel_at(&data, x)))
         .collect();
     arena.arm("magnum");
-    let mut events = shoot(&mut arena);
-    events.extend(shoot(&mut arena));
-    assert!(breaks(&events).is_empty(), "two shots only set one on fire");
-    events.extend(shoot(&mut arena));
-    events.extend(arena.idle(66 * 8));
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    let shot = events
+        .iter()
+        .position(|e| !e.prop_breaks.is_empty())
+        .expect("the magnum sets off the first");
+    assert_eq!(events[shot].prop_breaks[0].body, barrels[0]);
+    assert_eq!(events[shot].prop_breaks.len(), 1, "only the first, at once");
+    let caught: Vec<_> = events[shot]
+        .prop_ignitions
+        .iter()
+        .map(|ignition| ignition.body)
+        .collect();
+    assert_eq!(caught, barrels[1..], "the others in reach catch");
+    let next_tick = arena.idle(1);
+    assert!(breaks(&next_tick).is_empty(), "the second is burning");
+    assert!(!arena.sim.physics().is_broken(barrels[1]));
+    events.extend(next_tick);
+    events.extend(arena.idle(66 * 12));
     let broke: Vec<_> = breaks(&events).iter().map(|b| b.body).collect();
-    for barrel in &barrels {
-        assert!(broke.contains(barrel), "{barrel:?} not in {broke:?}");
-    }
+    assert_eq!(broke, barrels, "in order");
     assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 3);
+    let at = break_ticks(&events);
+    assert!(at[1] - at[0] >= TICKS_PER_SECOND as usize, "{at:?}");
+    assert!(at[2] > at[1], "{at:?}");
+}
+
+/// A barrel shot off by the magnum, with another `apart` units along the line
+/// of fire: the blast, and when the other goes off after it (ticks).
+fn blast_beside_a_barrel(data: &GameData, apart: f32) -> (f32, usize) {
+    let (mut arena, _) = barrel_arena(data, "magnum");
+    let other = arena.sim.add_prop(&barrel_at(data, 200.0 + apart));
+    let events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    let blast = events.iter().position(|e| !e.prop_breaks.is_empty());
+    assert_eq!(blast, Some(0));
+    let fuse = events[0]
+        .prop_ignitions
+        .iter()
+        .find(|ignition| ignition.body == other)
+        .expect("the other caught")
+        .fuse;
+    let after = arena.idle(66 * 6);
+    let broke = breaks(&after);
+    assert_eq!(broke.len(), 1, "{broke:?}");
+    assert_eq!(broke[0].body, other);
+    (fuse, break_ticks(&after)[0])
 }
 
 #[test]
 fn a_nearer_blast_gives_a_shorter_fuse() {
-    let barrels = data().physics.breakables.barrels;
-    assert!((barrels.blast_fuse(0.0) - barrels.longest_fuse).abs() < 1e-4);
-    let hardest = barrels.blast_fuse(barrels.instant_damage);
-    assert!((hardest - barrels.shortest_fuse).abs() < 1e-4);
-    assert!(barrels.blast_fuse(10.0) > barrels.blast_fuse(40.0));
+    let data = data();
+    let (near, near_ticks) = blast_beside_a_barrel(&data, 100.0);
+    let (far, far_ticks) = blast_beside_a_barrel(&data, 180.0);
+    assert!(near < far, "{near} then {far}");
+    assert!(near_ticks < far_ticks, "{near_ticks} then {far_ticks}");
+    // The time it is told it has is when it goes.
+    let near_seconds = near_ticks as f32 / TICKS_PER_SECOND;
+    assert!(
+        (near_seconds - near).abs() < 0.1,
+        "{near_seconds} and {near}"
+    );
+}
+
+#[test]
+fn a_blast_right_beside_a_barrel_leaves_it_burning_for_about_a_second() {
+    let data = data();
+    let barrels = data.physics.breakables.barrels;
+    let (fuse, ticks) = blast_beside_a_barrel(&data, 34.0);
+    assert!(
+        fuse <= barrels.burn_time(barrels.min_blast_health + barrels.blast_health_spread + 7.0),
+        "{fuse}"
+    );
+    assert!(
+        fuse >= barrels.burn_time(barrels.min_blast_health),
+        "{fuse}"
+    );
+    assert!(ticks as f32 >= 0.85 * TICKS_PER_SECOND, "{ticks}");
+}
+
+#[test]
+fn a_flame_lights_a_barrel_touching_it_but_not_one_further_off() {
+    let data = data();
+    let mut arena = Arena::new(&data, 900.0);
+    let lit = arena.sim.add_prop(&barrel_at(&data, 200.0));
+    let touching = arena.sim.add_prop(&PropDesc {
+        origin: Vec3::new(200.0, 36.0, 0.0),
+        ..barrel_at(&data, 0.0)
+    });
+    let further = arena.sim.add_prop(&PropDesc {
+        origin: Vec3::new(200.0, 200.0, 0.0),
+        ..barrel_at(&data, 0.0)
+    });
+    arena.arm("sidearm");
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.idle(80);
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    // Up to just before the first goes off, 2.3 s after it caught.
+    events.extend(arena.idle((2.2 * TICKS_PER_SECOND) as usize));
+    let caught: Vec<_> = events
+        .iter()
+        .flat_map(|e| &e.prop_ignitions)
+        .map(|ignition| ignition.body)
+        .collect();
+    assert_eq!(caught, [lit, touching], "without any blast");
+    assert!(breaks(&events).is_empty());
+    assert!(!caught.contains(&further));
 }
 
 #[test]
