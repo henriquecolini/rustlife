@@ -34,13 +34,9 @@ pub struct PlayerConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerAnimationConfig {
-    /// Below this speed (units/s) a player stands still.
+    /// Below this speed (units/s) a player stands still (HL2's
+    /// `MOVING_MINIMUM_SPEED`).
     pub still_speed: f32,
-    /// The speed at which a run plays at its own pace; faster or slower
-    /// running speeds it up or slows it down.
-    pub run_speed: f32,
-    /// The same for crouched walking.
-    pub crouch_speed: f32,
     /// Stance prefixes: standing, running, crouched, crouch-walking and in
     /// the air.
     pub idle: String,
@@ -52,10 +48,45 @@ pub struct PlayerAnimationConfig {
     pub crouch_walk: String,
     /// See [`PlayerAnimationConfig::idle`].
     pub jump: String,
+    /// The prefix of the gesture a shot plays over the stance
+    /// (`range_smg1`).
+    pub attack: String,
+    /// The prefix of the gesture a reload plays over the stance.
+    pub reload: String,
     /// The hold of weapons that name none.
     pub default_hold: String,
     /// Seconds over which one sequence fades into the next.
     pub fade: f32,
+    /// A player leaving the ground this fast upwards (units/s) has jumped,
+    /// and plays the jump until they land; falling off a ledge is no jump.
+    pub jump_speed: f32,
+    /// Seconds after a jump begins before landing can end it (the client
+    /// may still see the ground it left).
+    pub jump_grace: f32,
+    /// Degrees per second the feet turn to face the view, at most
+    /// (HL2DM's turn rate), slowing as they come round.
+    pub feet_turn_rate: f32,
+    /// Within this many degrees of the way they are turning to, the feet
+    /// ease out of the turn.
+    pub feet_ease_zone: f32,
+    /// A player standing still twists their body up to this far from their
+    /// feet before the feet turn to follow.
+    pub max_twist: f32,
+    /// A player standing still, view turned away from their feet, turns
+    /// the feet to match after this many seconds (`mp_facefronttime`).
+    pub face_front_time: f32,
+    /// The most the body (the aim yaw) twists from the feet, degrees.
+    pub aim_yaw_limit: f32,
+    /// How quickly the direction a still player last moved in comes round
+    /// to where they face, per second (a share of the way).
+    pub heading_ease: f32,
+    /// Degrees per second a head turns to look at what it looks at.
+    pub head_turn_rate: f32,
+    /// A head looks at another player this near (units) and in front.
+    pub look_at_range: f32,
+    /// With no one near, a head looks at a point this far ahead of the
+    /// feet along the view (units).
+    pub look_ahead: f32,
 }
 
 /// Health.
@@ -112,15 +143,26 @@ impl PlayerConfig {
         }
         let animation = &self.animation;
         check.non_negative("animation.still_speed", animation.still_speed);
-        check.positive("animation.run_speed", animation.run_speed);
-        check.positive("animation.crouch_speed", animation.crouch_speed);
         check.non_negative("animation.fade", animation.fade);
+        check.positive("animation.jump_speed", animation.jump_speed);
+        check.non_negative("animation.jump_grace", animation.jump_grace);
+        check.positive("animation.feet_turn_rate", animation.feet_turn_rate);
+        check.positive("animation.feet_ease_zone", animation.feet_ease_zone);
+        check.positive("animation.max_twist", animation.max_twist);
+        check.non_negative("animation.face_front_time", animation.face_front_time);
+        check.positive("animation.aim_yaw_limit", animation.aim_yaw_limit);
+        check.non_negative("animation.heading_ease", animation.heading_ease);
+        check.positive("animation.head_turn_rate", animation.head_turn_rate);
+        check.non_negative("animation.look_at_range", animation.look_at_range);
+        check.positive("animation.look_ahead", animation.look_ahead);
         for (field, prefix) in [
             ("animation.idle", &animation.idle),
             ("animation.run", &animation.run),
             ("animation.crouch", &animation.crouch),
             ("animation.crouch_walk", &animation.crouch_walk),
             ("animation.jump", &animation.jump),
+            ("animation.attack", &animation.attack),
+            ("animation.reload", &animation.reload),
             ("animation.default_hold", &animation.default_hold),
         ] {
             if prefix.trim().is_empty() {

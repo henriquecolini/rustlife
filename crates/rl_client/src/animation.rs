@@ -20,7 +20,7 @@ use std::sync::Arc;
 use bevy::animation::AnimatedBy;
 use bevy::prelude::*;
 use rl_assets::model::ModelAnimationAsset;
-use rl_assets::{ModelAsset, SequenceClips};
+use rl_assets::{ModelAsset, PoseRig, SequenceClips};
 
 /// Plays sequences on animated models.
 pub struct ModelAnimationPlugin;
@@ -67,6 +67,16 @@ impl Animated {
         })
     }
 }
+
+/// The joints of a skeletal model, in the model's bone order.
+#[derive(Component, Debug, Clone)]
+pub struct Joints(pub Vec<Entity>);
+
+/// A model whose pose the game works out itself, joint by joint, from
+/// what its sequences lay over each other (a player's weapon hold and
+/// aim): no animation player drives it. See [`PoseRig`].
+#[derive(Component, Debug, Clone)]
+pub struct Posed(pub Arc<PoseRig>);
 
 /// A named point on a model's bone (`muzzle`, `eyes`), which follows the
 /// bone as it moves: effects start from these.
@@ -303,7 +313,7 @@ impl SequencePlayer {
 /// Gives each new animated model its player and graph.
 fn prepare(
     mut commands: Commands,
-    roots: Query<(Entity, &Animated), Without<AnimationPlayer>>,
+    roots: Query<(Entity, &Animated), (Without<AnimationPlayer>, Without<Posed>)>,
     mut graphs: ResMut<Graphs>,
     mut assets: ResMut<Assets<AnimationGraph>>,
 ) {

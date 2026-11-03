@@ -262,7 +262,9 @@ impl RigSequence {
 #[derive(Debug)]
 pub struct PoseRig {
     rest: Vec<Transform>,
-    parameters: Vec<String>,
+    /// Pose parameters: name (lower case) and the range of values the
+    /// model gives it.
+    parameters: Vec<(String, f32, f32)>,
     sequences: Vec<RigSequence>,
 }
 
@@ -325,7 +327,7 @@ impl PoseRig {
             };
             let (start, end) = sequence.ranges[axis];
             *slot = Some(Axis {
-                parameter: self.parameter_index(&parameter.name),
+                parameter: self.parameter_index(&parameter.name, parameter.start, parameter.end),
                 start,
                 end,
             });
@@ -375,13 +377,13 @@ impl PoseRig {
         }
     }
 
-    fn parameter_index(&mut self, name: &str) -> usize {
+    fn parameter_index(&mut self, name: &str, start: f32, end: f32) -> usize {
         let name = name.to_ascii_lowercase();
         self.parameters
             .iter()
-            .position(|known| *known == name)
+            .position(|(known, ..)| *known == name)
             .unwrap_or_else(|| {
-                self.parameters.push(name);
+                self.parameters.push((name, start, end));
                 self.parameters.len() - 1
             })
     }
@@ -420,7 +422,16 @@ impl PoseRig {
     pub fn parameter(&self, name: &str) -> Option<usize> {
         self.parameters
             .iter()
-            .position(|known| known.eq_ignore_ascii_case(name))
+            .position(|(known, ..)| known.eq_ignore_ascii_case(name))
+    }
+
+    /// The values pose parameter `index` ranges over, as its model gives
+    /// them: what a head's turn is held to.
+    #[must_use]
+    pub fn parameter_range(&self, index: usize) -> Option<(f32, f32)> {
+        self.parameters
+            .get(index)
+            .map(|&(_, start, end)| (start, end))
     }
 
     /// How many pose parameters sequences use.
@@ -429,12 +440,21 @@ impl PoseRig {
         self.parameters.len()
     }
 
-    /// The first sequence labelled `label` (any case).
+    /// The sequence labelled `label` (any case): the first that names an
+    /// activity, as the engine picks sequences by activity, else the first
+    /// of that label (hidden helper sequences have none).
     #[must_use]
     pub fn find(&self, label: &str) -> Option<usize> {
-        self.sequences
+        let mut labelled = self
+            .sequences
             .iter()
-            .position(|sequence| sequence.label.eq_ignore_ascii_case(label))
+            .enumerate()
+            .filter(|(_, sequence)| sequence.label.eq_ignore_ascii_case(label));
+        let first = labelled.next()?;
+        std::iter::once(first)
+            .chain(labelled)
+            .find(|(_, sequence)| !sequence.activity.is_empty())
+            .map_or(Some(first.0), |(index, _)| Some(index))
     }
 
     /// The sequence at `index`.

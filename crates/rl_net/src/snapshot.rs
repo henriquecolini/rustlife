@@ -441,6 +441,10 @@ impl WorldState {
                 player.vitals = private.vitals;
                 player.inventory = private.inventory.clone();
                 player.manipulator = private.manipulator.clone();
+            } else {
+                // Of everyone else only the weapon in hand is known: it is
+                // what their model holds.
+                player.inventory.set_held(view.motion.weapon);
             }
         }
         for (pickup, &there) in sim.pickups_mut().iter_mut().zip(&self.pickups) {
@@ -932,6 +936,29 @@ mod tests {
         second.restore(&mut client);
         assert_eq!(client.logic_state(), sim.logic_state());
         assert_eq!(client.logic().mover_pose(0), sim.logic().mover_pose(0));
+    }
+
+    #[test]
+    fn a_replica_shows_the_weapon_other_players_hold_as_they_change_it() {
+        let (mut server, a, b) = sim();
+        let (mut client, ..) = sim();
+        let arsenal = server.arsenal().clone();
+        let weapons: Vec<_> = arsenal.weapons().map(|(id, _)| id).take(2).collect();
+        for &weapon in &weapons {
+            let other = server.player_mut(b).expect("b");
+            other.inventory.give_weapon(&arsenal, weapon);
+        }
+        for &weapon in &weapons {
+            let other = server.player_mut(b).expect("b");
+            other.inventory.select(&arsenal, weapon);
+            walk(&mut server, b, 1);
+            WorldState::capture(&server, Some(a)).restore(&mut client);
+            assert_eq!(
+                client.player(b).expect("b").inventory.active(),
+                Some(weapon),
+                "the replica of b holds what b holds"
+            );
+        }
     }
 
     #[test]

@@ -47,7 +47,7 @@ use rl_sim::physics::BodyId;
 
 use crate::AppState;
 use crate::actors::PickupView;
-use crate::animation::{Animated, SequencePlayer, spawn_skeleton};
+use crate::animation::{Animated, Joints, Posed, SequencePlayer, spawn_skeleton};
 use crate::net::{Drawn, Game, LevelBodies};
 use crate::world::{
     MapHandle, MapScoped, MaterialMaps, PartSlot, Placeholder, SKY_LAYER, Surface, UnlitMesh,
@@ -340,8 +340,20 @@ fn attach_models(
                     model: prop.model.clone(),
                     animation: Arc::clone(animation),
                 },
-                SequencePlayer::default(),
+                Joints(joints.clone()),
             ));
+            match &animation.rig {
+                // A model that lays sequences over each other (a player's)
+                // is posed by the game itself.
+                Some(rig) => {
+                    commands.entity(entity).try_insert(Posed(Arc::clone(rig)));
+                }
+                None => {
+                    commands
+                        .entity(entity)
+                        .try_insert(SequencePlayer::default());
+                }
+            }
             SkinnedMesh {
                 inverse_bindposes: animation.inverse_bindposes.clone(),
                 joints,

@@ -23,14 +23,14 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use rl_assets::coords;
 use rl_data::PlayerAnimationConfig;
-use rl_sim::movement::PlayerState;
 use rl_sim::simulation::{PlayerId, Simulation};
 
 use crate::AppState;
-use crate::animation::{Animated, SequencePlayer};
+use crate::animation::{Animated, Joints, Posed};
 use crate::effect_material::{EffectMaterial, effect_material};
 use crate::net::{Drawn, Game};
-use crate::player::Gameplay;
+use crate::player::{Gameplay, Ticked};
+use crate::player_anim::{BodyInput, Doing, FrameInput, PlayerAnim};
 use crate::props::{LightAt, ModelHandles, Moving, PhysicsBody, spawn_model};
 use crate::ragdolls::Ragdoll;
 
@@ -230,6 +230,7 @@ fn draw_players(
         );
         commands.entity(entity).insert((
             PlayerView(id),
+            PlayerAnimation::default(),
             Moving,
             // A model spawned for a player who is already dead must not
             // show its rest pose for a frame before the next pass hides it.
@@ -242,86 +243,119 @@ fn draw_players(
     }
 }
 
-/// What a player is doing, as their model shows it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Stance {
-    Idle,
-    Run,
-    Crouch,
-    CrouchWalk,
-    Jump,
-}
+/// How a player model is animated: see [`crate::player_anim`].
+#[derive(Component, Default)]
+struct PlayerAnimation(PlayerAnim);
 
-impl Stance {
-    /// The stance of a player in `state`.
-    fn of(state: &PlayerState, config: &PlayerAnimationConfig) -> Self {
-        let moving = state.speed_2d() > config.still_speed;
-        match (
-            state.on_ground || state.ladder.is_some(),
-            state.ducked,
-            moving,
-        ) {
-            (false, ..) => Self::Jump,
-            (true, true, false) => Self::Crouch,
-            (true, true, true) => Self::CrouchWalk,
-            (true, false, false) => Self::Idle,
-            (true, false, true) => Self::Run,
-        }
-    }
-
-    fn prefix(self, config: &PlayerAnimationConfig) -> &str {
-        match self {
-            Self::Idle => &config.idle,
-            Self::Run => &config.run,
-            Self::Crouch => &config.crouch,
-            Self::CrouchWalk => &config.crouch_walk,
-            Self::Jump => &config.jump,
-        }
-    }
-}
-
-/// The direction a player moves relative to where they face, degrees in
-/// `-180..=180` (the `move_yaw` of a run's blends).
-fn move_yaw(state: &PlayerState, yaw: f32) -> f32 {
-    let heading = state.velocity.y.atan2(state.velocity.x).to_degrees();
-    (heading - yaw + 180.0).rem_euclid(360.0) - 180.0
-}
-
-/// Plays on each other player's model the sequence of their stance with
-/// the weapon in hand (`run_smg1`), a run blended by direction and paced by
-/// speed.
+/// Works out the pose of every other player's model and lays it on its
+/// joints: turned to its feet, its torso, arms and weapon aimed where its
+/// player looks, running, crouching or jumping with the weapon in hand,
+/// shooting and reloading as the player does.
 fn animate_players(
+    time: Res<Time>,
     game: Game,
     drawn: Res<Drawn>,
-    mut views: Query<(&PlayerView, &Animated, &mut SequencePlayer)>,
+    mut ticks: MessageReader<Ticked>,
+    mut views: Query<(
+        &PlayerView,
+        &Posed,
+        &Joints,
+        &Visibility,
+        &mut PlayerAnimation,
+        &mut Transform,
+    )>,
+    mut joints: Query<&mut Transform, Without<PlayerAnimation>>,
 ) {
+    let mut doing: HashMap<PlayerId, Doing> = HashMap::new();
+    for Ticked(events) in ticks.read() {
+        for &(who, ..) in &events.fired {
+            doing.entry(who).or_default().fired = true;
+        }
+        for &(who, _) in &events.reloads {
+            doing.entry(who).or_default().reloaded = true;
+        }
+    }
     let Some(sim) = game.sim() else {
         return;
     };
     let config = &sim.data().player.animation;
-    for (view, animated, mut sequences) in &mut views {
+    for (view, posed, bones, visibility, mut animation, mut transform) in &mut views {
         let Some(player) = sim.player(view.0) else {
             continue;
         };
-        let yaw = drawn
+        if *visibility == Visibility::Hidden {
+            continue;
+        }
+        let state = &player.state;
+        let pose = drawn
             .0
             .as_ref()
-            .and_then(|world| world.players.get(&view.0))
-            .map_or(player.look.1, |pose| pose.yaw);
-        let state = &player.state;
-        let stance = Stance::of(state, config);
-        let hold = hold_of(sim, player.inventory.active(), config);
-        let Some(sequence) = player_sequence(animated, stance.prefix(config), hold, config) else {
-            continue;
+            .and_then(|world| world.players.get(&view.0));
+        let (pitch, yaw) = pose.map_or(player.look, |pose| (pose.pitch, pose.yaw));
+        let hulls = &sim.data().movement.hulls;
+        let eye_height = hulls.standing.eye_height
+            + (hulls.ducked.eye_height - hulls.standing.eye_height) * state.duck_amount;
+        let eyes = state.origin + Vec3::Z * eye_height;
+        let input = FrameInput {
+            body: BodyInput {
+                eye: (pitch, yaw),
+                velocity: state.velocity,
+                now: time.elapsed_secs(),
+                dt: time.delta_secs(),
+            },
+            on_ground: state.on_ground || state.ladder.is_some(),
+            ducked: state.ducked,
+            hold: hold_of(sim, player.inventory.active(), config),
+            doing: doing.get(&view.0).copied().unwrap_or_default(),
+            look_at: look_target(sim, view.0, eyes, (pitch, yaw), config.look_at_range),
+            eye_height,
         };
-        let rate = match stance {
-            Stance::Run => state.speed_2d() / config.run_speed,
-            Stance::CrouchWalk => state.speed_2d() / config.crouch_speed,
-            _ => 1.0,
-        };
-        sequences.fade = config.fade;
-        sequences.play(sequence, move_yaw(state, yaw), rate.clamp(0.25, 2.5));
+        let frame = animation.0.update(config, posed.0.as_ref(), &input);
+        transform.rotation = coords::rotation([0.0, frame.feet_yaw, 0.0]);
+        let locals = posed
+            .0
+            .evaluate(&frame.parameters, &frame.main, &frame.overlays);
+        for (&joint, local) in bones.0.iter().zip(locals) {
+            if let Ok(mut at) = joints.get_mut(joint) {
+                *at = local;
+            }
+        }
     }
+}
+
+/// What a player's head looks at, as the vector from their `eyes`: the eyes
+/// of the first other living player within `range` and in front of them,
+/// else nothing in particular (the head then looks where the player does).
+fn look_target(
+    sim: &Simulation,
+    who: PlayerId,
+    eyes: Vec3,
+    (pitch, yaw): (f32, f32),
+    range: f32,
+) -> Option<Vec3> {
+    let me = sim.player(who)?.state.origin;
+    let (pitch, yaw) = (pitch.to_radians(), yaw.to_radians());
+    let forward = Vec3::new(
+        pitch.cos() * yaw.cos(),
+        pitch.cos() * yaw.sin(),
+        -pitch.sin(),
+    );
+    let hulls = &sim.data().movement.hulls;
+    sim.players()
+        .filter(|&(id, other)| id != who && other.alive())
+        .find_map(|(_, other)| {
+            let toward = other.state.origin - me;
+            (toward.length() <= range && forward.dot(toward.normalize_or_zero()) >= 0.0).then(
+                || {
+                    let hull = if other.state.ducked {
+                        &hulls.ducked
+                    } else {
+                        &hulls.standing
+                    };
+                    other.state.origin + Vec3::Z * hull.eye_height - eyes
+                },
+            )
+        })
 }
 
 /// Gives each other player the world model of the weapon in their hand,
@@ -476,19 +510,6 @@ fn hold_of<'a>(
         .and_then(|weapon| sim.arsenal().weapon(weapon))
         .and_then(|weapon| weapon.hold.as_deref())
         .unwrap_or(&config.default_hold)
-}
-
-/// The model's `<prefix>_<hold>` sequence, or `<prefix>_<default hold>`
-/// when it has none for this hold.
-fn player_sequence(
-    animated: &Animated,
-    prefix: &str,
-    hold: &str,
-    config: &PlayerAnimationConfig,
-) -> Option<usize> {
-    animated
-        .sequence(&format!("{prefix}_{hold}"))
-        .or_else(|| animated.sequence(&format!("{prefix}_{}", config.default_hold)))
 }
 
 /// Places every projectile where it is drawn this frame: new ones get a
@@ -705,36 +726,6 @@ mod tests {
         let transform = projectile_transform(Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0));
         let facing = transform.rotation * Vec3::X;
         assert!(facing.y > 0.6, "{facing}");
-    }
-
-    #[test]
-    fn stances_follow_movement() {
-        let config = rl_data::GameData::builtin().expect("data").player.animation;
-        let mut state = PlayerState::at(Vec3::ZERO);
-        state.on_ground = true;
-        assert_eq!(Stance::of(&state, &config), Stance::Idle);
-        state.velocity = Vec3::new(200.0, 0.0, 0.0);
-        assert_eq!(Stance::of(&state, &config), Stance::Run);
-        state.ducked = true;
-        assert_eq!(Stance::of(&state, &config), Stance::CrouchWalk);
-        state.on_ground = false;
-        assert_eq!(Stance::of(&state, &config), Stance::Jump);
-    }
-
-    #[test]
-    fn runs_blend_by_direction_relative_to_the_view() {
-        let mut state = PlayerState::at(Vec3::ZERO);
-        state.velocity = Vec3::new(0.0, 100.0, 0.0);
-        assert!((move_yaw(&state, 90.0)).abs() < 1e-4, "forward");
-        assert!((move_yaw(&state, 0.0) - 90.0).abs() < 1e-4, "to the left");
-        assert!(
-            (move_yaw(&state, 180.0) + 90.0).abs() < 1e-4,
-            "to the right"
-        );
-        assert!(
-            (move_yaw(&state, -90.0).abs() - 180.0).abs() < 1e-4,
-            "backwards"
-        );
     }
 
     #[test]

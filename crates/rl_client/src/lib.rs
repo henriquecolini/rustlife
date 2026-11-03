@@ -71,6 +71,7 @@ pub mod particles;
 pub mod pcf_particles;
 mod physcannon_impact;
 pub mod player;
+pub mod player_anim;
 pub mod props;
 pub mod ragdolls;
 mod screen_fade;

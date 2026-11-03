@@ -398,6 +398,13 @@ impl Inventory {
         self.active
     }
 
+    /// Shows `weapon` in hand with none of the state of using it: how the
+    /// replica of another player, told only which weapon they hold, keeps
+    /// it drawn. Their own inventory never needs this.
+    pub fn set_held(&mut self, weapon: Option<WeaponId>) {
+        self.active = weapon;
+    }
+
     /// What the weapon in hand is doing.
     #[must_use]
     pub fn phase(&self) -> Phase {

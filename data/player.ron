@@ -26,22 +26,48 @@ Player(
     ],
     // Player models are animated by their own sequences, named
     // <stance>_<hold> as HL2DM's models name them (run_smg1, cidle_pistol);
-    // the hold comes from the weapon in hand.
+    // the hold comes from the weapon in hand. The weapon's aim is not a
+    // sequence of its own: every stance's sequence plays an aim matrix along
+    // with it, steered by the pose parameters set from where the player looks.
+    // The values below are HL2DM's own, read from its client.
     animation: (
         // Below this speed a player stands still.
-        still_speed: 10.0,
-        // Running (and crouch-walking) at these speeds plays the sequence
-        // at its own pace; other speeds play it faster or slower.
-        run_speed: 190.0,
-        crouch_speed: 70.0,
+        still_speed: 0.5,
         idle: "idle",
         run: "run",
         crouch: "cidle",
         crouch_walk: "cwalk",
         jump: "jump",
+        // A shot and a reload play these (range_smg1, reload_smg1) over
+        // the stance, on the arms and upper body.
+        attack: "range",
+        reload: "reload",
         // For weapons whose data names no hold.
         default_hold: "smg1",
         // Seconds over which one sequence fades into the next.
         fade: 0.2,
+        // Leaving the ground this fast upwards is a jump (HL2's jump leaves
+        // at 268); falling off a ledge is not.
+        jump_speed: 200.0,
+        // Landing ends a jump only this long after it began.
+        jump_grace: 0.2,
+        // The feet turn to face the view at up to 360 degrees a second,
+        // slowing over the last 45 degrees.
+        feet_turn_rate: 360.0,
+        feet_ease_zone: 45.0,
+        // A player standing still twists their body up to 45 degrees from
+        // their feet, then the feet follow; or after mp_facefronttime (3 s)
+        // of looking aside. The body twists at most 60 degrees.
+        max_twist: 45.0,
+        face_front_time: 3.0,
+        aim_yaw_limit: 60.0,
+        // How fast the direction of last movement comes round to the view
+        // once they stop, per second.
+        heading_ease: 4.0,
+        // A head turns at 130 degrees a second to look at a player within
+        // 128 units in front of it, else at a point 512 units ahead.
+        head_turn_rate: 130.0,
+        look_at_range: 128.0,
+        look_ahead: 512.0,
     ),
 )
