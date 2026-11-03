@@ -413,7 +413,13 @@ fn spawn_ragdolls(
     game: Game,
     mut physics: ResMut<RagdollPhysics>,
     mut hits: ResMut<RecentHits>,
-    roots: Query<(Entity, &PlayerView, &Animated, &GlobalTransform, Option<&Holding>)>,
+    roots: Query<(
+        Entity,
+        &PlayerView,
+        &Animated,
+        &GlobalTransform,
+        Option<&Holding>,
+    )>,
     existing: Query<(Entity, &Ragdoll)>,
     children: Query<&Children>,
     names: Query<&Name>,
@@ -518,7 +524,13 @@ fn spawn_ragdolls(
             }
             commands
                 .entity(entity)
-                .remove::<(PlayerView, Animated, SequencePlayer, AnimationPlayer, Holding)>()
+                .remove::<(
+                    PlayerView,
+                    Animated,
+                    SequencePlayer,
+                    AnimationPlayer,
+                    Holding,
+                )>()
                 .insert((
                     Ragdoll {
                         player: kill.victim,
