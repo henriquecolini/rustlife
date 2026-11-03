@@ -42,7 +42,7 @@ use rl_sim::physics::UNITS_PER_METRE;
 use rl_sim::simulation::{ExplosionEvent, PlayerId, ShotEvent, Simulation};
 
 use crate::AppState;
-use crate::actors::PlayerView;
+use crate::actors::{Holding, PlayerView};
 use crate::animation::{Animated, SequencePlayer};
 use crate::net::Game;
 use crate::player::Ticked;
@@ -413,7 +413,7 @@ fn spawn_ragdolls(
     game: Game,
     mut physics: ResMut<RagdollPhysics>,
     mut hits: ResMut<RecentHits>,
-    roots: Query<(Entity, &PlayerView, &Animated, &GlobalTransform)>,
+    roots: Query<(Entity, &PlayerView, &Animated, &GlobalTransform, Option<&Holding>)>,
     existing: Query<(Entity, &Ragdoll)>,
     children: Query<&Children>,
     names: Query<&Name>,
@@ -453,7 +453,7 @@ fn spawn_ragdolls(
         }
 
         for kill in &events.kills {
-            let Some((entity, _view, animated, root)) =
+            let Some((entity, _view, animated, root, holding)) =
                 roots.iter().find(|(_, view, ..)| view.0 == kill.victim)
             else {
                 continue;
@@ -510,9 +510,15 @@ fn spawn_ragdolls(
             let anchor = rig.positions.iter().copied().sum::<Vec3>() / rig.positions.len() as f32;
             apply_death_forces(world, &rig, &shots, &events.explosions, sim, kill.victim);
 
+            // The weapon in hand is parented to the hand joint, which the
+            // corpse keeps: the dead drop nothing, so it goes with the
+            // living player.
+            if let Some(model) = holding.and_then(|holding| holding.model) {
+                commands.entity(model).try_despawn();
+            }
             commands
                 .entity(entity)
-                .remove::<(PlayerView, Animated, SequencePlayer, AnimationPlayer)>()
+                .remove::<(PlayerView, Animated, SequencePlayer, AnimationPlayer, Holding)>()
                 .insert((
                     Ragdoll {
                         player: kill.victim,

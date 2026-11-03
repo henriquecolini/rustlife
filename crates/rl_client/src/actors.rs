@@ -82,9 +82,9 @@ struct HeldWeapon {
 
 /// Which weapon a player model holds, and the entity of its model.
 #[derive(Component)]
-struct Holding {
+pub(crate) struct Holding {
     weapon: Option<rl_sim::weapons::WeaponId>,
-    model: Option<Entity>,
+    pub(crate) model: Option<Entity>,
 }
 
 /// A held weapon not yet laid in its holder's hand (its model, or the
