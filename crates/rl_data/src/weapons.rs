@@ -392,10 +392,10 @@ pub struct ProjectileConfig {
     /// Crossbow's bolt).
     #[serde(default)]
     pub ricochet: Option<RicochetConfig>,
-    /// Seconds it stays stuck where it embeds in the map before it is gone,
-    /// if it embeds rather than bursts or bounces.
+    /// A hit on the map that does not glance off embeds it: it ends there,
+    /// and the client leaves it stuck where it went in (the Crossbow's bolt).
     #[serde(default)]
-    pub stick: Option<f32>,
+    pub stick: bool,
     /// Glow sprites drawn on it besides its model (the energy ball's core).
     #[serde(default)]
     pub glow: Option<GlowConfig>,
@@ -432,6 +432,10 @@ pub enum ProjectileEffect {
     /// `cball_explode`, two spreading rings and a shake where it bursts
     /// (`effects.ron`'s `combine_ball`).
     CombineBall,
+    /// The Crossbow's bolt: electric sparks where it glances off or embeds,
+    /// and where it embeds, the game's `BoltImpact`: a bolt left stuck in
+    /// the wall (its model, unlit skin) for the rest of the map.
+    Bolt,
 }
 
 /// A projectile glancing off the map: when it meets a surface at less than

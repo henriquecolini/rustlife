@@ -9,8 +9,8 @@
 //!   bursts if it has an explosion). Its own thrower is never touched: it
 //!   starts inside their box;
 //! - touching the **map or a prop**, a bouncing projectile rebounds keeping
-//!   `bounce` of its speed, and settles once it is slow on a floor; any
-//!   other ends there;
+//!   `bounce` of its speed, and settles once it is slow on a floor; a bolt
+//!   glances off the map or embeds in it; any other ends there;
 //! - a **fuse** bursts it that long after launch, wherever it is;
 //! - past its **lifetime** it is simply gone.
 
@@ -72,12 +72,6 @@ pub struct Projectile {
     /// The fraction of the world's gravity it falls under, once a ricochet
     /// has changed it.
     pub gravity_scale: Option<f32>,
-    /// Seconds it has left stuck in the map, if it has embedded.
-    pub stuck: Option<f32>,
-    /// Where and against what it last bounced, glanced off or embedded:
-    /// `(point, surface normal, material)`, taken by the simulation for
-    /// effects.
-    pub impact: Option<(Vec3, Vec3, Option<u16>)>,
 }
 
 /// How a projectile's tick ended.
@@ -102,6 +96,19 @@ pub enum Flight {
         point: Vec3,
         /// The surface's normal.
         normal: Vec3,
+    },
+    /// It embedded in the map and ends there, the client leaving it stuck
+    /// where it went in: at `point`, flying along `direction`, into a surface
+    /// facing along `normal` of `material`.
+    Embedded {
+        /// Where it went in.
+        point: Vec3,
+        /// The way it was flying (a unit vector).
+        direction: Vec3,
+        /// The surface's normal.
+        normal: Vec3,
+        /// The surface's material, as the map's collision indexes it.
+        material: Option<u16>,
     },
     /// Its fuse ran out: it bursts where it is.
     Fused,
@@ -134,12 +141,6 @@ impl Projectile {
             return Flight::Expired;
         }
         if self.resting {
-            if let Some(left) = self.stuck.as_mut() {
-                *left -= dt;
-                if *left <= 0.0 {
-                    return Flight::Expired;
-                }
-            }
             return Flight::Flying;
         }
         if !self.lit {
@@ -209,27 +210,27 @@ impl Projectile {
         let normal = map.normal.normalize_or(Vec3::Z);
         let speed = self.velocity.length();
         let direction = self.velocity.normalize_or(Vec3::X);
-        let impact = Some((map.end, normal, map.material));
+        let point = surface_point(map.end, normal, config.size);
         if let Some(glance) = &config.ricochet {
             let head_on = normal.dot(-direction);
             if head_on < glance.max_dot && speed > glance.min_speed {
                 let reflected = direction + 2.0 * normal * head_on;
                 self.velocity = reflected.normalize_or(direction) * speed * glance.speed_scale;
                 self.gravity_scale = Some(glance.gravity);
-                self.impact = impact;
-                return Some(Flight::Bounced {
-                    point: surface_point(map.end, normal, config.size),
-                    normal,
-                });
+                return Some(Flight::Bounced { point, normal });
             }
         }
-        let stay = config.stick?;
+        if !config.stick {
+            return None;
+        }
         self.velocity = Vec3::ZERO;
         self.heading = direction;
-        self.resting = true;
-        self.stuck = Some(stay);
-        self.impact = impact;
-        Some(Flight::Flying)
+        Some(Flight::Embedded {
+            point,
+            direction,
+            normal,
+            material: map.material,
+        })
     }
 
     /// A missile's motor and steering: before the motor lights it only
@@ -280,7 +281,7 @@ mod tests {
             lifetime: 5.0,
             dissolves: false,
             ricochet: None,
-            stick: None,
+            stick: false,
             glow: None,
             impact_force: 0.0,
             missile: None,
@@ -326,8 +327,6 @@ mod tests {
             lit: false,
             steer_clock: 0.0,
             gravity_scale: None,
-            stuck: None,
-            impact: None,
         }
     }
 

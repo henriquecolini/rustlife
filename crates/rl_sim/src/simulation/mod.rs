@@ -157,7 +157,8 @@ pub struct ShotEvent {
     /// Where it went.
     pub trace: ShotTrace,
     /// Not a shot the shooter's prediction made, so they must be told of
-    /// it too: a projectile glancing off or embedding in the map.
+    /// it too: a projectile's impact on the surface it embedded in, which
+    /// marks it as a bullet does.
     pub late: bool,
 }
 
@@ -190,15 +191,19 @@ pub struct ProjectileEvent {
     pub kind: ProjectileEventKind,
     /// Where, Source space.
     pub position: Vec3,
-    /// The normal of the surface it bounced off; straight up where it burst.
+    /// The normal of the surface it bounced off; the way it flew where it
+    /// embedded; straight up where it burst.
     pub normal: Vec3,
 }
 
 /// What a projectile did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectileEventKind {
-    /// It bounced off the map or a prop.
+    /// It bounced off the map or a prop, or glanced off the map.
     Bounce,
+    /// It embedded in the map and ended there; the event's `normal` is the
+    /// way it flew in.
+    Embed,
     /// Its time ran out and it burst where it was.
     Burst,
 }

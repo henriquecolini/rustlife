@@ -327,7 +327,7 @@ fn projectiles_without_effects_of_their_own_report_nothing() {
 }
 
 #[test]
-fn a_bolt_embeds_in_a_wall_for_two_seconds_sparking() {
+fn a_bolt_embeds_in_a_wall_and_is_left_stuck_there_by_the_client() {
     let data = data();
     let wall = WorldBuilder::new().solid_box(
         Vec3::new(300.0, -500.0, 0.0),
@@ -342,14 +342,25 @@ fn a_bolt_embeds_in_a_wall_for_two_seconds_sparking() {
         .flat_map(|e| &e.shots)
         .filter(|s| s.late)
         .collect();
-    assert_eq!(impacts.len(), 1, "one impact for the effects");
-    let bolt = arena.sim.projectiles()[0].clone();
-    assert_eq!(bolt.velocity, Vec3::ZERO);
-    assert!((bolt.position.x - 300.0).abs() < 3.0, "{bolt:?}");
-    arena.idle(100);
-    assert_eq!(arena.sim.projectiles().len(), 1, "still there at 1.5 s");
-    arena.idle(60);
-    assert!(arena.sim.projectiles().is_empty(), "gone after 2 s");
+    assert_eq!(impacts.len(), 1, "one impact trace, for the mark");
+    assert!((impacts[0].trace.end.x - 300.0).abs() < 1.0, "{impacts:?}");
+    assert_eq!(impacts[0].trace.normal, Vec3::NEG_X);
+    let reported: Vec<_> = events.iter().flat_map(|e| &e.projectiles).collect();
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    let embed = reported[0];
+    assert_eq!(embed.kind, ProjectileEventKind::Embed);
+    assert!(
+        (embed.position.x - 300.0).abs() < 1.0,
+        "on the wall: {embed:?}"
+    );
+    assert!(
+        embed.normal.dot(Vec3::X) > 0.99,
+        "the way it flew in: {embed:?}"
+    );
+    assert!(
+        arena.sim.projectiles().is_empty(),
+        "the client draws it from here on"
+    );
 }
 
 #[test]
@@ -388,6 +399,39 @@ fn a_bolt_that_grazes_a_wall_glances_off_and_falls() {
     assert!(
         (bolt.velocity.length() - 0.75 * 3500.0).abs() < 100.0,
         "{bolt:?}"
+    );
+}
+
+#[test]
+fn a_glancing_bolt_sparks_without_marking_the_wall() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(100.0, -3000.0, 0.0),
+        Vec3::new(120.0, 3000.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    arena.arm("boltcaster");
+    let fire = UserCmd {
+        yaw: 80.0,
+        buttons: Buttons::ATTACK,
+        ..UserCmd::default()
+    };
+    let mut events = vec![arena.tick(&fire)];
+    let aim = UserCmd {
+        yaw: 80.0,
+        ..UserCmd::default()
+    };
+    events.extend((0..40).map(|_| arena.tick(&aim)));
+    let reported: Vec<_> = events.iter().flat_map(|e| &e.projectiles).collect();
+    let glance = reported
+        .iter()
+        .find(|e| e.kind == ProjectileEventKind::Bounce)
+        .expect("it glanced off");
+    assert_eq!(glance.normal, Vec3::NEG_X);
+    assert!((glance.position.x - 100.0).abs() < 1.0, "{glance:?}");
+    assert!(
+        events.iter().flat_map(|e| &e.shots).all(|s| !s.late),
+        "HL2DM's ricochet leaves no impact trace"
     );
 }
 

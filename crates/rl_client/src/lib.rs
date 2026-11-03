@@ -45,6 +45,7 @@ use crate::world::WorldPlugin;
 pub mod actors;
 pub mod animation;
 pub mod audio;
+mod bolts;
 pub mod camera;
 pub mod capture;
 mod combine_ball;
@@ -212,6 +213,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         impact_debris::ImpactDebrisPlugin,
         physcannon_impact::PhyscannonImpactPlugin,
         combine_ball::CombineBallPlugin,
+        bolts::BoltsPlugin,
         screen_fade::ScreenFadePlugin,
         view_punch::ViewPunchPlugin,
         pcf_particles::PcfPlugin,

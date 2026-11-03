@@ -185,10 +185,14 @@ bursting: the simulation does not know which surfaces are sky.
 A projectile with a `ricochet` that meets the map at less than `max_dot` of the
 way into it (HL2's 0.5) and faster than `min_speed` glances off at
 `speed_scale` of its speed and falls under `gravity` from then on; any other
-hit on the map embeds it (`stick`: the crossbow's bolt stays two seconds) and
-either way the impact is reported as a late `ShotEvent` so the client draws
-sparks, a mark and the sound there. A projectile that strikes a prop shoves
-it with `impact_force`.
+hit on the map embeds it (`stick`, the crossbow's bolt). A glance is reported as
+a `Bounce` and an embedding as an `Embed` `ProjectileEvent` (the bolt's
+`effect`, `Bolt`: the client sparks there, and leaves the bolt stuck where it
+went in for the rest of the map); an embedded bolt ends at once, and its impact
+on the surface (HL2DM's `UTIL_ImpactTrace`) is reported as a late `ShotEvent`,
+for the surface's impact effect, sound and mark. A glance leaves no mark, as
+HL2DM's ricochet traces no impact. A projectile that strikes a prop shoves it
+with `impact_force`.
 
 A **missile** (the RPG's rocket) leaves the launcher's muzzle (offset from
 the eyes) at `launch_forward` and `launch_up`, falling under gravity until its

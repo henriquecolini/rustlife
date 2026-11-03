@@ -158,6 +158,7 @@ fn start_effects(
                         burst: Burst::Electric { magnitude, trail },
                     });
                 }
+                ProjectileEventKind::Embed => {}
                 ProjectileEventKind::Burst => {
                     let at = coords::position(event.position.to_array());
                     let (magnitude, trail) = config.burst_sparks;

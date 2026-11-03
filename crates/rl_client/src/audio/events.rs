@@ -244,6 +244,7 @@ fn weapon_sounds(
     for event in &events.projectiles {
         let purpose = match event.kind {
             ProjectileEventKind::Bounce => "bounce",
+            ProjectileEventKind::Embed => "embed",
             ProjectileEventKind::Burst => "burst",
         };
         if let Some(name) = weapon_sound(sim, event.weapon, purpose) {

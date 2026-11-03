@@ -317,7 +317,7 @@ impl Burst {
 }
 
 /// A burst of sparks to draw: where (Bevy space, metres) and which way
-/// (a Source-space unit vector).
+/// (a Source-space unit vector; zero for an electric spark with none).
 #[derive(Message, Debug, Clone, Copy)]
 pub(crate) struct Sparks {
     pub at: Vec3,
@@ -467,7 +467,8 @@ fn spawn_sparks(
         let groups = match burst.burst {
             Burst::Gauss => gauss_explosion(rng, burst.direction),
             Burst::Electric { magnitude, trail } => {
-                electric_spark(rng, magnitude, trail, Some(burst.direction))
+                // No direction (zero) throws them up as a fountain.
+                electric_spark(rng, magnitude, trail, burst.direction.try_normalize())
             }
             Burst::Metal => {
                 let Some(sim) = game.sim() else {

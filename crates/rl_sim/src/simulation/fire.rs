@@ -40,11 +40,15 @@ pub(super) struct Bullet {
 }
 
 /// What a projectile's tick ending in `flight` shows, if anything: a bounce
-/// where it bounced, a burst where its time ran out (the energy ball's
+/// where it bounced or glanced off, where it embedded and which way it flew
+/// in, a burst where its time ran out (the energy ball's
 /// four seconds end in its explosion, whether by fuse or lifetime).
 fn projectile_event(projectile: &Projectile, flight: Flight) -> Option<ProjectileEvent> {
     let (kind, position, normal) = match flight {
         Flight::Bounced { point, normal } => (ProjectileEventKind::Bounce, point, normal),
+        Flight::Embedded {
+            point, direction, ..
+        } => (ProjectileEventKind::Embed, point, direction),
         Flight::Fused | Flight::Expired => {
             (ProjectileEventKind::Burst, projectile.position, Vec3::Z)
         }
@@ -398,8 +402,6 @@ impl Simulation {
             lit: false,
             steer_clock: 0.0,
             gravity_scale: None,
-            stuck: None,
-            impact: None,
         });
         self.next_projectile = self.next_projectile.wrapping_add(1);
     }
@@ -469,7 +471,6 @@ impl Simulation {
             others: &[],
         };
         let mut ended = Vec::new();
-        let mut impacts = Vec::new();
         let mut dots = dots.into_iter();
         self.projectiles.retain_mut(|projectile| {
             let dot = dots.next().flatten();
@@ -487,9 +488,6 @@ impl Simulation {
                 &targets,
                 dot,
             );
-            if let Some(impact) = projectile.impact.take() {
-                impacts.push((projectile.owner, projectile.weapon, impact));
-            }
             if config.effect.is_some()
                 && let Some(event) = projectile_event(projectile, flight)
             {
@@ -503,21 +501,6 @@ impl Simulation {
                 }
             }
         });
-        for (owner, weapon, (point, normal, material)) in impacts {
-            events.shots.push(ShotEvent {
-                player: owner,
-                weapon,
-                start: point + normal,
-                trace: ShotTrace {
-                    end: point,
-                    normal,
-                    struck: Struck::World,
-                    material,
-                    head: false,
-                },
-                late: true,
-            });
-        }
         for (projectile, flight) in ended {
             if let Some(player) = self.player_mut(projectile.owner) {
                 player
@@ -576,6 +559,29 @@ impl Simulation {
                     }
                 }
                 point
+            }
+            Flight::Embedded {
+                point,
+                normal,
+                material,
+                ..
+            } => {
+                // The game's `UTIL_ImpactTrace`: the surface's own impact
+                // effect, sound and mark, which the shooter did not predict.
+                events.shots.push(ShotEvent {
+                    player: projectile.owner,
+                    weapon: projectile.weapon,
+                    start: point + normal,
+                    trace: ShotTrace {
+                        end: point,
+                        normal,
+                        struck: Struck::World,
+                        material,
+                        head: false,
+                    },
+                    late: true,
+                });
+                return;
             }
             Flight::Fused => projectile.position,
             Flight::Expired | Flight::Flying | Flight::Bounced { .. } => return,

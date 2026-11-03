@@ -733,7 +733,9 @@ fn spawn_effects(
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
                     let blow = Blow {
                         bullets,
-                        marks: marks_surface(sim, shot.weapon),
+                        // A late shot is a projectile's impact trace (a bolt
+                        // embedding: `UTIL_ImpactTrace(DMG_BULLET)`).
+                        marks: shot.late || marks_surface(sim, shot.weapon),
                     };
                     strike_surface(shot, blow, sim, &quad, &mut painter, &mut marks);
                 }
