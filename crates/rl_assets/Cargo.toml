@@ -12,6 +12,7 @@ description = "Bevy asset integration that loads Source engine content through t
 [dependencies]
 source_fs.workspace = true
 source_formats.workspace = true
+rl_audio.workspace = true
 bevy_animation.workspace = true
 bevy_app.workspace = true
 bevy_asset.workspace = true

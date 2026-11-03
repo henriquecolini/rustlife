@@ -203,3 +203,16 @@ fn manifests_list_their_files() {
         ["scripts/soundscapes.txt", "scripts/soundscapes_prison.txt"]
     );
 }
+
+#[test]
+fn a_soundscape_sets_its_own_room_effect_and_not_its_childrens() {
+    let scapes = scapes(FILE);
+    assert_eq!(
+        scapes.get("prison.control_room").expect("room").dsp,
+        Some(1)
+    );
+    assert_eq!(scapes.get("distant").expect("distant").dsp, None);
+    let started = scapes.start("prison.control_room", 0, &mut middle());
+    assert_eq!(started.dsp, Some(1));
+    assert_eq!(scapes.start("distant", 0, &mut middle()).dsp, None);
+}

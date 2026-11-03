@@ -15,12 +15,11 @@
 
 use std::collections::HashMap;
 
-use bevy::audio::{AudioSink, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use rl_sim::physics::BodyId;
 use source_formats::surfaceprops::SurfaceTable;
 
-use super::{Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
+use super::{Emitter, Repeat, SoundPlayer};
 use crate::net::Game;
 use crate::player::Ticked;
 use crate::{AppState, GameVfs};
@@ -77,15 +76,9 @@ fn hear_props(
     time: Res<Time>,
     game: Game,
     surfaces: Res<Surfaces>,
-    volumes: Volumes,
     mut scrapes: ResMut<Scrapes>,
     mut player: SoundPlayer,
-    mut emitters: Query<(
-        &mut Emitter,
-        &mut Transform,
-        Option<&mut SpatialAudioSink>,
-        Option<&mut AudioSink>,
-    )>,
+    mut emitters: Query<(&mut Emitter, &mut Transform)>,
 ) {
     let Some(sim) = game.sim() else {
         ticks.clear();
@@ -136,18 +129,9 @@ fn hear_props(
             match scrapes.emitters.get_mut(&scrape.body) {
                 Some((entity, last)) => {
                     *last = now;
-                    if let Ok((mut emitter, mut transform, spatial, plain)) =
-                        emitters.get_mut(*entity)
-                    {
+                    if let Ok((mut emitter, mut transform)) = emitters.get_mut(*entity) {
                         transform.translation = position;
                         emitter.volume = volume;
-                        let level = Volume::Linear(volume * volumes.gain(SoundCategory::Effects));
-                        if let Some(mut sink) = spatial {
-                            sink.set_volume(level);
-                        }
-                        if let Some(mut sink) = plain {
-                            sink.set_volume(level);
-                        }
                     }
                 }
                 None => {

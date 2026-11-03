@@ -9,7 +9,7 @@
 //! ([`props`]), the baked light that models are lit by ([`ambient`],
 //! [`lights`], [`vhv`]), what players collide with ([`collision`]) and the
 //! map's entities ([`entities`]), and the game's sounds ([`wav`],
-//! [`soundscript`], [`soundscape`]).
+//! [`soundscript`], [`soundscape`], [`dsp_presets`]).
 //!
 //! Nothing here depends on Bevy. Every decoder is a pure function over bytes,
 //! so the format layer can be unit-tested without an `App`, a window or a GPU,
@@ -30,6 +30,7 @@ pub mod ambient;
 pub mod anim;
 pub mod bsp;
 pub mod collision;
+pub mod dsp_presets;
 pub mod entities;
 pub mod eyes;
 mod leaves;

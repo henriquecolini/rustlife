@@ -1,0 +1,22 @@
+[package]
+name = "rl_audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "rustlife's sound mixer: Source's distance falloff, panning and room effects, independent of any engine."
+
+[dependencies]
+glam.workspace = true
+source_formats.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+source_fs.workspace = true
+
+[lints]
+workspace = true

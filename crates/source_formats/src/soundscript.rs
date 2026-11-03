@@ -21,7 +21,8 @@
 //! Wave paths are relative to `sound/` and may start with characters that
 //! tell the engine's mixer how to play them (`)` spatial stereo, `^`
 //! distance-variant, `*` streamed, `#` no effects, `@` everywhere...);
-//! [`SoundEntry::waves`] has them stripped.
+//! [`SoundEntry::waves`] has them stripped off each [`Wave::path`] and
+//! kept as its [`WaveFlags`].
 
 use std::collections::BTreeMap;
 
@@ -39,11 +40,77 @@ const PITCH_NORM: f32 = 100.0;
 /// Sound level of `SNDLVL_NORM`, decibels.
 pub const SNDLVL_NORM: f32 = 75.0;
 
+/// The mixer hints a wave path's leading characters give.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct WaveFlags(u8);
+
+impl WaveFlags {
+    /// `#`: dry, no room effect.
+    pub const DRY: Self = Self(1);
+    /// `@`: omnidirectional, heard in both ears alike.
+    pub const OMNI: Self = Self(1 << 1);
+    /// `^`: distance variant, a stereo wave whose left channel is the
+    /// sound near by and right channel the sound far off.
+    pub const DISTANCE_VARIANT: Self = Self(1 << 2);
+    /// `)`: spatial stereo, a stereo wave placed in the world like a mono
+    /// one.
+    pub const SPATIAL_STEREO: Self = Self(1 << 3);
+    /// `<`: directional, louder in front of its source.
+    pub const DIRECTIONAL: Self = Self(1 << 4);
+    /// `>`: the same, with the far side muffled.
+    pub const DIRECTIONAL_FAR: Self = Self(1 << 5);
+
+    /// The flags of `path`'s leading characters.
+    #[must_use]
+    pub fn of(path: &str) -> Self {
+        let mut flags = Self::default();
+        for prefix in path.chars().take_while(|c| WAVE_PREFIXES.contains(c)) {
+            flags.0 |= match prefix {
+                '#' => Self::DRY.0,
+                '@' => Self::OMNI.0,
+                '^' => Self::DISTANCE_VARIANT.0,
+                ')' => Self::SPATIAL_STEREO.0,
+                '<' => Self::DIRECTIONAL.0,
+                '>' => Self::DIRECTIONAL_FAR.0,
+                _ => 0,
+            };
+        }
+        flags
+    }
+
+    /// Whether every flag of `other` is set.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+/// A wave file of a sound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wave {
+    /// The file, relative to `sound/`: prefixes stripped, `/`-separated,
+    /// lower case.
+    pub path: String,
+    /// What its prefixes asked of the mixer.
+    pub flags: WaveFlags,
+}
+
+impl Wave {
+    /// The wave a soundscript names as `raw`.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        Self {
+            path: clean_wave(raw),
+            flags: WaveFlags::of(raw),
+        }
+    }
+}
+
 /// One named sound.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SoundEntry {
-    /// Wave files to pick from, relative to `sound/`, prefixes stripped.
-    pub waves: Vec<String>,
+    /// Wave files to pick from.
+    pub waves: Vec<Wave>,
     /// Volume range, `0..=1`.
     pub volume: (f32, f32),
     /// Pitch range, percent (100 plays at the recorded pitch).
@@ -130,38 +197,21 @@ pub fn clean_wave(path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// How a sound fades with distance: the factor Source multiplies distance
-/// by (`SNDLVL_TO_ATTN`, over the engine's nominal clip distance of 1000
-/// units) so that the gain is `1 / (distance × factor)`, at most 1. Zero
-/// for sounds heard everywhere at full volume.
-#[must_use]
-pub fn distance_factor(soundlevel: f32) -> f32 {
-    if soundlevel <= 0.0 {
-        return 0.0;
-    }
-    let attenuation = if soundlevel > 50.0 {
-        20.0 / (soundlevel - 50.0)
-    } else {
-        4.0
-    };
-    attenuation / 1000.0
-}
-
 fn entry(block: &Block) -> Option<SoundEntry> {
-    let mut waves: Vec<String> = block
+    let mut waves: Vec<Wave> = block
         .get_all("wave")
         .filter_map(|value| value.as_str())
-        .map(clean_wave)
+        .map(Wave::parse)
         .collect();
     if let Some(random) = block.get_block("rndwave") {
         waves.extend(
             random
                 .get_all("wave")
                 .filter_map(|value| value.as_str())
-                .map(clean_wave),
+                .map(Wave::parse),
         );
     }
-    waves.retain(|wave| !wave.is_empty());
+    waves.retain(|wave| !wave.path.is_empty());
     if waves.is_empty() {
         return None;
     }
@@ -276,14 +326,21 @@ mod tests {
             "a sound without waves is no sound"
         );
         let shotgun = scripts.get("weapon_shotgun.single").expect("shotgun");
-        assert_eq!(shotgun.waves, ["weapons/shotgun/shotgun_fire6.wav"]);
+        assert_eq!(
+            shotgun.waves,
+            [Wave {
+                path: "weapons/shotgun/shotgun_fire6.wav".to_owned(),
+                flags: WaveFlags::SPATIAL_STEREO,
+            }]
+        );
         assert_eq!(
             (shotgun.volume, shotgun.pitch, shotgun.soundlevel),
             ((0.9, 1.0), (100.0, 100.0), 140.0)
         );
         let ricochet = scripts.get("FX_RicochetSound.Ricochet").expect("ricochet");
+        let paths: Vec<&str> = ricochet.waves.iter().map(|w| w.path.as_str()).collect();
         assert_eq!(
-            ricochet.waves,
+            paths,
             ["weapons/fx/rics/ric1.wav", "weapons/fx/rics/ric2.wav"]
         );
         assert_eq!((ricochet.pitch, ricochet.soundlevel), ((90.0, 110.0), 80.0));
@@ -297,7 +354,7 @@ mod tests {
         let again = r#""Weapon_Shotgun.Single" { "wave" "other.wav" }"#;
         assert_eq!(scripts.add_script(again), Some(0));
         assert_eq!(
-            scripts.get("weapon_shotgun.single").expect("kept").waves[0],
+            scripts.get("weapon_shotgun.single").expect("kept").waves[0].path,
             "weapons/shotgun/shotgun_fire6.wav"
         );
         assert_eq!(scripts.len(), 2);
@@ -318,12 +375,22 @@ mod tests {
     }
 
     #[test]
-    fn louder_sounds_carry_further() {
-        assert_eq!(distance_factor(0.0), 0.0, "heard everywhere");
-        assert!(distance_factor(140.0) < distance_factor(75.0));
-        // SNDLVL_NORM: full volume out to 1250 units, as in Source.
-        assert!((1.0 / distance_factor(75.0) - 1250.0).abs() < 1e-3);
+    fn wave_prefixes_become_flags() {
+        let wave = Wave::parse("#^Ambient\\Hum.wav");
+        assert_eq!(wave.path, "ambient/hum.wav");
+        assert!(wave.flags.contains(WaveFlags::DRY));
+        assert!(wave.flags.contains(WaveFlags::DISTANCE_VARIANT));
+        assert!(!wave.flags.contains(WaveFlags::OMNI));
+        assert_eq!(WaveFlags::of("plain.wav"), WaveFlags::default());
+        assert!(WaveFlags::of("@a.wav").contains(WaveFlags::OMNI));
+        // Only leading characters are prefixes.
+        assert_eq!(WaveFlags::of("a#b.wav"), WaveFlags::default());
+    }
+
+    #[test]
+    fn sound_levels_read_by_name_or_number() {
         assert_eq!(soundlevel("SNDLVL_95dB"), Some(95.0));
+        assert_eq!(soundlevel("SNDLVL_GUNFIRE"), Some(140.0));
         assert_eq!(soundlevel("garbage"), None);
     }
 }

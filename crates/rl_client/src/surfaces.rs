@@ -98,6 +98,8 @@ pub struct SurfaceInfo {
     pub prop: String,
     /// Its broad class.
     pub class: SurfaceClass,
+    /// Whether it is the sky (`tools/toolsskybox`, `toolsskybox2d`).
+    pub sky: bool,
 }
 
 impl SurfaceInfo {
@@ -106,8 +108,17 @@ impl SurfaceInfo {
             .filter(|prop| !prop.trim().is_empty())
             .unwrap_or_else(|| classify(material).name().to_owned());
         let class = classify(&prop);
-        Self { prop, class }
+        Self {
+            prop,
+            class,
+            sky: is_sky(material),
+        }
     }
+}
+
+/// Whether `material` is the sky's.
+fn is_sky(material: &str) -> bool {
+    material.to_ascii_lowercase().contains("toolsskybox")
 }
 
 /// The map's collision materials, by the index a trace reports.

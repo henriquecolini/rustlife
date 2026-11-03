@@ -163,6 +163,8 @@ pub struct AudioSettings {
     pub effects: f32,
     /// The soundscape of the place the player is in.
     pub ambient: f32,
+    /// What the player listens on, which decides how sounds are panned.
+    pub speakers: Speakers,
 }
 
 impl Default for AudioSettings {
@@ -171,8 +173,21 @@ impl Default for AudioSettings {
             master: 0.8,
             effects: 1.0,
             ambient: 1.0,
+            speakers: Speakers::Stereo,
         }
     }
+}
+
+/// What the player listens on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Speakers {
+    /// A pair of speakers in front: sounds behind are quieter than sounds
+    /// ahead.
+    #[default]
+    Stereo,
+    /// Headphones: a sound to one side is in that ear alone.
+    Headphones,
 }
 
 /// A rebindable game action.

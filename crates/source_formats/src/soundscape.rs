@@ -120,6 +120,10 @@ pub struct Soundscape {
     pub random: Vec<RandomSound>,
     /// Other soundscapes mixed in.
     pub children: Vec<ChildScape>,
+    /// `dsp`: the room effect preset (`dsp_presets.txt`) the soundscape
+    /// sets while it plays, if it names one: 0 none, 1 automatic (from the
+    /// shape of the place), others a fixed room.
+    pub dsp: Option<u32>,
 }
 
 /// A looping sound of a started soundscape, its values drawn.
@@ -167,6 +171,9 @@ pub struct Started {
     pub looping: Vec<StartedLoop>,
     /// Its random sounds, children's included.
     pub random: Vec<StartedRandom>,
+    /// The room effect preset it sets: the started soundscape's own `dsp`
+    /// (its children's are ignored, as in HL2DM).
+    pub dsp: Option<u32>,
 }
 
 /// What a (sub-)soundscape starts with (`subsoundscapeparams_t`).
@@ -240,6 +247,7 @@ impl Soundscapes {
             ambient_position_override: -1,
         };
         if let Some(scape) = self.get(name) {
+            started.dsp = scape.dsp;
             self.start_into(scape, top, positions, unit, &mut started);
         }
         started
@@ -412,6 +420,15 @@ pub fn manifest_files(text: &str) -> Vec<String> {
 fn soundscape(block: &Block) -> Soundscape {
     let mut scape = Soundscape::default();
     for pair in block.iter() {
+        if pair.key.eq_ignore_ascii_case("dsp") {
+            scape.dsp = pair
+                .value
+                .as_str()
+                .and_then(|text| text.trim().parse::<f32>().ok())
+                .filter(|preset| preset.is_finite() && *preset >= 0.0)
+                .map(|preset| preset as u32);
+            continue;
+        }
         let Some(body) = pair.value.as_block() else {
             continue;
         };

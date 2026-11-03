@@ -5408,6 +5408,7 @@ dependencies = [
  "futures-lite",
  "half",
  "proptest",
+ "rl_audio",
  "source_formats",
  "source_fs",
  "tempfile",
@@ -5417,12 +5418,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rl_audio"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "proptest",
+ "source_formats",
+ "source_fs",
+ "tracing",
+]
+
+[[package]]
 name = "rl_client"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "box3d-rust",
  "rl_assets",
+ "rl_audio",
  "rl_config",
  "rl_data",
  "rl_level",

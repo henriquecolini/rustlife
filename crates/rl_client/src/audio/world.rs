@@ -32,10 +32,9 @@ use crate::player::Ticked;
 const LATE_SECS: f32 = 1.0;
 /// Seconds a station's sound keeps playing after the last drawing heard.
 const CHARGE_LINGER: f32 = 0.2;
-/// The share of an ambient sound's radius at which it is still at full
-/// volume: rodio's falloff then brings it to about a twentieth at the
-/// radius.
-const AMBIENT_FULL_SHARE: f32 = 1.0 / 4.5;
+/// Level of a bare-file ambient sound at the reference distance, before
+/// its radius adds to it (`CAmbientGeneric`'s `ComputeSoundlevel`).
+const AMBIENT_BASE_DB: f32 = 40.0;
 
 /// Plays the map's ongoing sounds.
 pub(super) struct WorldSoundsPlugin;
@@ -113,27 +112,34 @@ fn ambient_sounds(
             continue;
         };
         let at = (!sound.everywhere).then_some(sound.position);
-        // A soundscript gives its own level; a bare file fades by the
+        let mut chosen = chosen;
+        // A soundscript gives its own level; a bare file's comes from the
         // entity's radius.
-        let spatial = if player.is_scripted(&sound.sound) {
-            super::spatial_scale(chosen.soundlevel)
-        } else {
-            let full_volume_metres = (sound.radius * AMBIENT_FULL_SHARE).max(1.0) * 0.0254;
-            Some(1.0 / full_volume_metres)
-        };
+        if !player.is_scripted(&sound.sound) {
+            chosen.soundlevel = radius_soundlevel(sound.radius);
+        }
         let repeat = if sound.looped {
             Repeat::AsRecorded
         } else {
             Repeat::Once
         };
-        let mut chosen = chosen;
         chosen.speed *= sound.state.pitch;
-        let entity = player.spawn_chosen(&chosen, at, sound.state.volume, spatial, repeat);
+        let entity = player.spawn_chosen(&chosen, at, sound.state.volume, repeat);
         if let Some(entity) = entity {
             player.categorize(entity, SoundCategory::Ambient);
         }
         playing.ambient[index] = Some((entity.unwrap_or(Entity::PLACEHOLDER), started));
     }
+}
+
+/// The sound level of an ambient sound of `radius` units: 40 dB at the
+/// reference distance, plus the fall-off to the radius (HL2DM's
+/// `ComputeSoundlevel`); heard everywhere without a radius.
+fn radius_soundlevel(radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    (AMBIENT_BASE_DB + 20.0 * (radius / rl_audio::falloff::REFERENCE_DISTANCE).log10()).trunc()
 }
 
 /// Starts and stops movers' sounds as they start and stop moving.

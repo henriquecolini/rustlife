@@ -6,7 +6,7 @@
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
-use rl_config::{ACTIONS, Antialiasing, Quality, WindowMode};
+use rl_config::{ACTIONS, Antialiasing, Quality, Speakers, WindowMode};
 
 use super::{Ctx, Menu, Screen, Scrollable, heading};
 use crate::settings::{Binding, Settings};
@@ -81,6 +81,8 @@ pub(super) enum Setting {
     Effects,
     /// Ambient volume.
     Ambient,
+    /// Stereo speakers or headphones.
+    Speakers,
     /// Mouse sensitivity.
     Sensitivity,
     /// Inverted mouse.
@@ -111,6 +113,16 @@ pub(super) const RESOLUTIONS: [(u32, u32); 6] = [
     (2560, 1440),
     (3840, 2160),
 ];
+
+/// Speaker setups offered, with their names.
+const SPEAKERS: [Speakers; 2] = [Speakers::Stereo, Speakers::Headphones];
+
+fn speakers_label(speakers: Speakers) -> &'static str {
+    match speakers {
+        Speakers::Stereo => "Stereo speakers",
+        Speakers::Headphones => "Headphones",
+    }
+}
 
 const MODES: [WindowMode; 3] = [
     WindowMode::Windowed,
@@ -153,6 +165,11 @@ pub(super) fn apply_setting(settings: &mut rl_config::Settings, setting: Setting
         (Setting::Master, Value::Float(volume)) => settings.audio.master = *volume,
         (Setting::Effects, Value::Float(volume)) => settings.audio.effects = *volume,
         (Setting::Ambient, Value::Float(volume)) => settings.audio.ambient = *volume,
+        (Setting::Speakers, Value::Index(i)) => {
+            if let Some(speakers) = SPEAKERS.get(*i) {
+                settings.audio.speakers = *speakers;
+            }
+        }
         (Setting::Sensitivity, Value::Float(sensitivity)) => {
             settings.controls.sensitivity = *sensitivity;
         }
@@ -375,6 +392,23 @@ fn audio_rows(rows: &mut ChildSpawnerCommands, ctx: &Ctx) {
             ),
         ));
     }
+    rows.spawn((
+        Setting::Speakers,
+        choice(
+            ctx.fonts,
+            "Listening on",
+            Choice {
+                options: SPEAKERS
+                    .iter()
+                    .map(|s| speakers_label(*s).to_owned())
+                    .collect(),
+                index: SPEAKERS
+                    .iter()
+                    .position(|s| *s == audio.speakers)
+                    .unwrap_or(0),
+            },
+        ),
+    ));
 }
 
 fn control_rows(rows: &mut ChildSpawnerCommands, ctx: &Ctx) {
@@ -552,6 +586,8 @@ mod tests {
         apply_setting(&mut settings, Setting::Antialiasing, &Value::Index(1));
         apply_setting(&mut settings, Setting::Name, &Value::Text("Alyx".into()));
         apply_setting(&mut settings, Setting::InvertY, &Value::Bool(true));
+        apply_setting(&mut settings, Setting::Speakers, &Value::Index(1));
+        assert_eq!(settings.audio.speakers, Speakers::Headphones);
         assert!(!settings.video.vsync);
         assert_eq!(settings.video.fov, 100.0);
         assert_eq!(settings.audio.master, 0.3);

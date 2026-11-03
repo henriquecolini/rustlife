@@ -32,7 +32,7 @@ pub use content::{ContentArgs, ContentConfig, GAME_DIR_ENV, GameConfig};
 pub use server::ServerConfig;
 pub use settings::{
     ACTIONS, Action, Antialiasing, AudioSettings, ControlSettings, PlayerSettings, Quality,
-    Settings, VideoSettings, WindowMode,
+    Settings, Speakers, VideoSettings, WindowMode,
 };
 
 /// Errors from loading or saving a configuration file.

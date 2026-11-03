@@ -12,6 +12,9 @@ use source_fs::keyvalues;
 
 /// How deep `"base"` chains are followed.
 const MAX_BASE_DEPTH: usize = 8;
+/// `audioreflectivity` of a surface the table says nothing about (that of
+/// HL2DM's `default`).
+pub const DEFAULT_REFLECTIVITY: f32 = 0.66;
 
 /// What a surface sounds like. Names are soundscript entries; empty when the
 /// surface (and `default`) do not say.
@@ -35,6 +38,9 @@ pub struct SurfaceSounds {
     pub break_sound: String,
     /// Being shot.
     pub bullet_impact: String,
+    /// `audioreflectivity`: how much sound it sends back, `0..=1` (dirt
+    /// 0.03, concrete 0.66, tile 0.99); it colours a room's echo.
+    pub reflectivity: f32,
 }
 
 /// The surfaces of `surfaceproperties.txt`.
@@ -77,7 +83,10 @@ impl SurfaceTable {
     /// last underscore, then to `default`.
     #[must_use]
     pub fn sounds(&self, surface: &str) -> SurfaceSounds {
-        let mut sounds = SurfaceSounds::default();
+        let mut sounds = SurfaceSounds {
+            reflectivity: DEFAULT_REFLECTIVITY,
+            ..SurfaceSounds::default()
+        };
         self.apply("default", &mut sounds, 0);
         let mut name = surface.trim().to_ascii_lowercase();
         loop {
@@ -113,6 +122,14 @@ impl SurfaceTable {
             self.apply(base, sounds, depth + 1);
         }
         for (key, value) in own {
+            if key == "audioreflectivity" {
+                if let Ok(reflectivity) = value.trim().parse::<f32>()
+                    && reflectivity.is_finite()
+                {
+                    sounds.reflectivity = reflectivity.clamp(0.0, 1.0);
+                }
+                continue;
+            }
             let slot = match key.as_str() {
                 "stepleft" => &mut sounds.step_left,
                 "stepright" => &mut sounds.step_right,
@@ -137,7 +154,9 @@ mod tests {
     const TABLE: &str = r#"
 "default" { "stepleft" "Default.StepLeft" "stepright" "Default.StepRight" "bulletimpact" "Default.BulletImpact" "impacthard" "Default.ImpactHard" "impactsoft" "Default.ImpactSoft" "scraperough" "Default.ScrapeRough" "scrapesmooth" "Default.ScrapeSmooth" "density" "2000" }
 "metal_box" { "stepleft" "Metal_Box.StepLeft" "stepright" "Metal_Box.StepRight" "impacthard" "Metal_Box.ImpactHard" "impactsoft" "Metal_Box.ImpactSoft" "scraperough" "MetalBox.Scrape" }
-"Metal_Barrel" { "base" "metal_box" "impacthard" "Metal_Barrel.ImpactHard" "roll" "Metal_Barrel.Roll" }
+"Metal_Barrel" { "base" "metal_box" "impacthard" "Metal_Barrel.ImpactHard" "roll" "Metal_Barrel.Roll" "audioreflectivity" "0.83" }
+"dirt" { "audioreflectivity" "0.03" }
+"bad" { "audioreflectivity" "loud" }
 "loop_a" { "base" "loop_b" "break" "A" }
 "loop_b" { "base" "loop_a" "roll" "B" }
 "#;
@@ -154,6 +173,15 @@ mod tests {
         assert_eq!(barrel.scrape_smooth, "Default.ScrapeSmooth", "from default");
         assert_eq!(barrel.roll, "Metal_Barrel.Roll");
         assert_eq!(barrel.break_sound, "");
+    }
+
+    #[test]
+    fn reflectivity_is_inherited_and_defaults_to_concretes() {
+        let table = SurfaceTable::parse(TABLE);
+        assert_eq!(table.sounds("dirt").reflectivity, 0.03);
+        assert_eq!(table.sounds("metal_barrel_buoyant").reflectivity, 0.83);
+        assert_eq!(table.sounds("metal_box").reflectivity, DEFAULT_REFLECTIVITY);
+        assert_eq!(table.sounds("bad").reflectivity, DEFAULT_REFLECTIVITY);
     }
 
     #[test]
@@ -191,6 +219,12 @@ mod tests {
             ("A", "B")
         );
         let silent = SurfaceTable::parse("}{ nonsense").sounds("wood");
-        assert_eq!(silent, SurfaceSounds::default());
+        assert_eq!(
+            silent,
+            SurfaceSounds {
+                reflectivity: DEFAULT_REFLECTIVITY,
+                ..SurfaceSounds::default()
+            }
+        );
     }
 }

@@ -21,7 +21,6 @@
 //! from the eye in a random direction, drawn anew each time. Volumes are
 //! the scripts' alone, times the ambient volume setting.
 
-use bevy::audio::{AudioSink, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use rl_assets::coords;
 use rl_sim::collision::contents::{GRATE, MASK_WATER, MOVEABLE, SOLID, WINDOW};
@@ -30,8 +29,10 @@ use source_formats::entities::MapEntity;
 use source_formats::soundscape::{
     self, RandomPlace, Soundscapes, StartedLoop, StartedRandom, draw,
 };
+use source_formats::soundscript::WaveFlags;
 
-use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer, Volumes, spatial_scale};
+use super::room::RoomChoice;
+use super::{Chosen, Emitter, Repeat, SoundCategory, SoundPlayer};
 use crate::camera::FlyCam;
 use crate::net::{Game, LevelEntities};
 use crate::{AppState, GameVfs};
@@ -365,6 +366,7 @@ fn choose(
     scapes: Res<Scapes>,
     camera: Query<&GlobalTransform, With<FlyCam>>,
     mut ambience: ResMut<Ambience>,
+    mut room: ResMut<RoomChoice>,
     mut player: SoundPlayer,
 ) {
     ambience.until_look -= time.delta_secs();
@@ -394,7 +396,7 @@ fn choose(
         return;
     }
     debug!(soundscape = spot.soundscape, "soundscape");
-    start(
+    room.soundscape = start(
         spot,
         &scapes.0,
         time.elapsed_secs(),
@@ -404,16 +406,18 @@ fn choose(
 }
 
 /// Starts `spot`'s soundscape over whatever plays (`StartNewSoundscape`).
+/// Returns the room effect it asks for (its `dsp`).
 fn start(
     spot: &Spot,
     scapes: &Soundscapes,
     now: f32,
     ambience: &mut Ambience,
     player: &mut SoundPlayer,
-) {
+) -> Option<u32> {
     let Ambience { mix, rng, .. } = ambience;
     let mut unit = || rng.unit();
     let started = scapes.start(spot.soundscape, spot.position_bits(), &mut unit);
+    let dsp = started.dsp;
     mix.begin();
     let place = |index: Option<usize>| index.and_then(|n| spot.positions.get(n).copied()?);
     for sound in &started.looping {
@@ -442,6 +446,7 @@ fn start(
             }
         })
         .collect();
+    dsp
 }
 
 /// Starts a loop's sound at the volume it has now.
@@ -451,42 +456,27 @@ fn start_loop(sound: &Loop, player: &mut SoundPlayer) -> Option<Entity> {
         volume: 1.0,
         speed: (sound.pitch / 100.0).clamp(0.05, 4.0),
         soundlevel: sound.soundlevel,
+        flags: WaveFlags::default(),
     };
-    let spatial = sound.place.and_then(|_| spatial_scale(sound.soundlevel));
-    let emitter =
-        player.spawn_chosen(&chosen, sound.place, sound.current, spatial, Repeat::Loop)?;
+    let emitter = player.spawn_chosen(&chosen, sound.place, sound.current, Repeat::Loop)?;
     player.categorize(emitter, SoundCategory::Ambient);
     Some(emitter)
 }
 
-/// Fades the loops and sets their sounds' volumes; stops the silent ones.
+/// Fades the loops and sets their emitters' volumes; stops the silent
+/// ones.
 fn fade_loops(
     mut commands: Commands,
     time: Res<Time>,
-    volumes: Volumes,
     mut ambience: ResMut<Ambience>,
-    mut emitters: Query<(
-        &mut Emitter,
-        Option<&mut AudioSink>,
-        Option<&mut SpatialAudioSink>,
-    )>,
+    mut emitters: Query<&mut Emitter>,
 ) {
     for stopped in ambience.mix.fade(time.delta_secs()) {
         commands.entity(stopped).try_despawn();
     }
-    let level = volumes.gain(SoundCategory::Ambient);
     for sound in &ambience.mix.loops {
-        let Some(Ok((mut emitter, plain, spatial))) = sound.emitter.map(|e| emitters.get_mut(e))
-        else {
-            continue;
-        };
-        emitter.volume = sound.current;
-        let volume = Volume::Linear(sound.current * level);
-        if let Some(mut sink) = plain {
-            sink.set_volume(volume);
-        }
-        if let Some(mut sink) = spatial {
-            sink.set_volume(volume);
+        if let Some(Ok(mut emitter)) = sound.emitter.map(|e| emitters.get_mut(e)) {
+            emitter.volume = sound.current;
         }
     }
 }
@@ -530,9 +520,9 @@ fn play_random(
             volume: volume.clamp(0.0, 1.0),
             speed: (pitch / 100.0).clamp(0.05, 4.0),
             soundlevel,
+            flags: WaveFlags::default(),
         };
-        let spatial = place.and_then(|_| spatial_scale(soundlevel));
-        if let Some(emitter) = player.spawn_chosen(&chosen, place, 1.0, spatial, Repeat::Once) {
+        if let Some(emitter) = player.spawn_chosen(&chosen, place, 1.0, Repeat::Once) {
             player.categorize(emitter, SoundCategory::Ambient);
         }
     }

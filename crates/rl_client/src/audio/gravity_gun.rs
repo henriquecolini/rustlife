@@ -18,10 +18,9 @@
 //! The sounds are the weapon's `sounds` (`open`, `close`, `hold`), so they are
 //! data like its others.
 
-use bevy::audio::{AudioSink, AudioSinkPlayback, SpatialAudioSink, Volume};
 use bevy::prelude::*;
 
-use super::{Emitter, Repeat, SoundCategory, SoundPlayer, Volumes};
+use super::{Emitter, Repeat, SoundPlayer};
 use crate::AppState;
 use crate::gravity_gun::{GunLook, Look};
 use crate::net::Game;
@@ -230,15 +229,10 @@ fn gun_sounds(
     look: Res<GunLook>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
-    volumes: Volumes,
     mut sounding: ResMut<Sounding>,
     mut player: SoundPlayer,
     mut commands: Commands,
-    mut emitters: Query<(
-        &mut Emitter,
-        Option<&mut SpatialAudioSink>,
-        Option<&mut AudioSink>,
-    )>,
+    mut emitters: Query<&mut Emitter>,
 ) {
     let now = time.elapsed_secs();
     let phase = Phase::of(&look);
@@ -278,18 +272,9 @@ fn gun_sounds(
         sounding.hold = None;
         return;
     }
-    if let Ok((mut emitter, spatial, plain)) = emitters.get_mut(live.emitter) {
+    if let Ok(mut emitter) = emitters.get_mut(live.emitter) {
         emitter.volume = (live.base * live.hold.volume(now)).clamp(0.0, 1.0);
         emitter.speed = live.hold.speed(now);
-        let level = Volume::Linear(emitter.volume * volumes.gain(SoundCategory::Effects));
-        if let Some(mut sink) = spatial {
-            sink.set_volume(level);
-            sink.set_speed(emitter.speed);
-        }
-        if let Some(mut sink) = plain {
-            sink.set_volume(level);
-            sink.set_speed(emitter.speed);
-        }
     }
 }
 
@@ -315,7 +300,7 @@ fn start_hold(
     let Some(chosen) = player.choose(&name) else {
         return;
     };
-    if let Some(emitter) = player.spawn_chosen(&chosen, None, 0.0, None, Repeat::Loop) {
+    if let Some(emitter) = player.spawn_chosen(&chosen, None, 0.0, Repeat::Loop) {
         sounding.hold = Some(Live {
             emitter,
             base: chosen.volume,
