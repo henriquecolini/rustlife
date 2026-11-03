@@ -55,10 +55,18 @@ Weapon(
     secondary: None,
     deploy_time: 1.0,
     pickup: Some((ammo: 4, owned_ammo: 5, respawn: 20.0, radius: 24.0)),
+    // The bolt's sounds are HL2DM's: `BoltHitWorld` where it glances off or
+    // embeds, `BoltHitBody` where it strikes someone, `BoltSkewer` where it
+    // pins a body; `BoltElectrify` as a reload puts the bolt in (at
+    // `loaded_skin.shows_at`, the reload's event 3005). `BoltFly` is in the
+    // game's soundscripts but nothing in its code plays it.
     sounds: {
         "fire": "Weapon_Crossbow.Single",
         "reload": "Weapon_Crossbow.Reload",
-        // A body the bolt pins to a wall.
+        "electrify": "Weapon_Crossbow.BoltElectrify",
+        "bounce": "Weapon_Crossbow.BoltHitWorld",
+        "embed": "Weapon_Crossbow.BoltHitWorld",
+        "hit_body": "Weapon_Crossbow.BoltHitBody",
         "skewer": "Weapon_Crossbow.BoltSkewer",
     },
     // Players hold it with the crossbow sequences of HL2DM's player models (run_crossbow, ...).

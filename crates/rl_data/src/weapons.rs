@@ -39,10 +39,35 @@ pub const MAX_SLOT: u8 = 9;
 /// - `bounce`, `burst`: a projectile with an effect of its own
 ///   ([`ProjectileConfig::effect`]) bouncing, and bursting at the end of its
 ///   flight (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`);
-/// - `skewer`: a crossbow bolt pinning a body to a wall.
-pub const WEAPON_SOUNDS: [&str; 20] = [
-    "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
-    "blip", "empty", "pump", "charge", "open", "close", "hold", "bounce", "burst", "skewer",
+/// - `embed`, `hit_body`: such a projectile embedding in the map, and
+///   striking a player (the crossbow bolt's `BoltHitWorld`, `BoltHitBody`);
+/// - `skewer`: a crossbow bolt pinning a body to a wall;
+/// - `electrify`: a reload putting the round in, [`LoadedSkinConfig::shows_at`]
+///   into it (the crossbow's `BoltElectrify`, at its reload's event 3005).
+pub const WEAPON_SOUNDS: [&str; 23] = [
+    "fire",
+    "fire2",
+    "hit",
+    "reload",
+    "deploy",
+    "pickup",
+    "drop",
+    "launch",
+    "punt",
+    "dryfire",
+    "blip",
+    "empty",
+    "pump",
+    "charge",
+    "open",
+    "close",
+    "hold",
+    "bounce",
+    "burst",
+    "embed",
+    "hit_body",
+    "skewer",
+    "electrify",
 ];
 
 /// For serde defaults.

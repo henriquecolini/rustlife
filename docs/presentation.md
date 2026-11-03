@@ -116,7 +116,7 @@ play at the listener. What plays, by source:
 
 | Source | Sounds |
 |--------|--------|
-| Weapons (their data's `sounds`) | `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`; where a projectile with an effect of its own bounces and bursts, `bounce` and `burst` (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`) |
+| Weapons (their data's `sounds`) | `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`; where a projectile with an effect of its own bounces, bursts, embeds or strikes someone, `bounce`, `burst`, `embed` and `hit_body` (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`; the crossbow bolt's `BoltHitWorld` and `BoltHitBody`, its wound playing no bullet impact of its own), `skewer` where a bolt pins a body (`BoltSkewer`), and `electrify` as a reload puts the round in, `loaded_skin.shows_at` into it (`BoltElectrify`, at the crossbow reload's event 3005; not if the weapon was put away meanwhile). The crossbow's view model has no sound events of its own, and `Weapon_Crossbow.BoltFly` is played by nothing in the game's code |
 | Items (their data's `sounds`) | `pickup`, and `use` looping while a station is drawn from |
 | `sounds.ron` | fallback footsteps, hard landings, weapon pickups, deaths, explosions, fallback bullet impacts, breakables by material, buttons by sound number |
 | `surfaceproperties.txt` | footstep and bullet-impact sounds from the surface underfoot or struck: concrete, metal, wood, glass, flesh, dirt and the rest |

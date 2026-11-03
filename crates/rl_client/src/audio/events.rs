@@ -156,6 +156,8 @@ fn play_events(
     local: Option<Res<LocalPlayer>>,
     entities: Res<LevelEntities>,
     mut skewers: MessageReader<crate::ragdolls::Skewered>,
+    time: Res<Time>,
+    mut loading: Local<Vec<Loading>>,
     mut player: SoundPlayer,
 ) {
     let Some(sim) = game.sim() else {
@@ -174,10 +176,52 @@ fn play_events(
         drawn: &drawn,
         local: local.map(|local| local.id),
     };
+    let now = time.elapsed_secs();
     for Ticked(events) in ticks.read() {
         weapon_sounds(events, &places, &surfaces, &map_surfaces, &mut player);
         world_sounds(events, &places, &entities.0, &mut player);
+        loading.extend(events.reloads.iter().filter_map(|&(who, weapon)| {
+            let loaded = sim.arsenal().weapon(weapon)?.loaded_skin?;
+            weapon_sound(sim, weapon, "electrify")?;
+            Some(Loading {
+                who,
+                weapon,
+                at: now + loaded.shows_at,
+            })
+        }));
     }
+    electrify(&mut loading, now, &places, &mut player);
+}
+
+/// A reload that will put a round in, with a sound for it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Loading {
+    who: PlayerId,
+    weapon: WeaponId,
+    /// When the round goes in, seconds of app time.
+    at: f32,
+}
+
+/// Plays `electrify` for the reloads whose round goes in now (the crossbow's
+/// `BoltElectrify`, which the game plays at its reload's event 3005), unless
+/// the weapon was put away meanwhile.
+fn electrify(loading: &mut Vec<Loading>, now: f32, places: &Places, player: &mut SoundPlayer) {
+    let sim = places.sim;
+    for load in take_due(loading, now) {
+        let in_hand = sim
+            .player(load.who)
+            .is_some_and(|p| p.alive() && p.inventory.active() == Some(load.weapon));
+        if in_hand && let Some(name) = weapon_sound(sim, load.weapon, "electrify") {
+            places.play(player, load.who, name);
+        }
+    }
+}
+
+/// The reloads of `loading` whose round goes in by `now`, taken out of it.
+fn take_due(loading: &mut Vec<Loading>, now: f32) -> Vec<Loading> {
+    let (due, waiting) = loading.drain(..).partition(|load| now >= load.at);
+    *loading = waiting;
+    due
 }
 
 /// The sound of `weapon` for `purpose`, if its data names one.
@@ -276,6 +320,9 @@ fn weapon_sounds(
         let sounds: &SoundsConfig = &data.sounds;
         let name = match shot.trace.struck {
             Struck::Nothing => continue,
+            // A bolt's wound: its own `hit_body` plays instead, as HL2DM
+            // plays no bullet impact for it.
+            Struck::Player(_) if shot.late => continue,
             Struck::Player(_) => sounds.flesh_impact.clone(),
             Struck::Prop(body) => {
                 let surface = sim.surface_of(body);
@@ -394,4 +441,40 @@ pub(super) fn entity_of(entities: &[MapEntity], model: u32) -> Option<&MapEntity
     entities
         .iter()
         .find(|entity| entity.brush_model() == Some(model as usize))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reloads_round_sounds_once_when_it_goes_in() {
+        let load = |at| Loading {
+            who: PlayerId::from_index(0),
+            weapon: WeaponId::from_index(0),
+            at,
+        };
+        let mut loading = vec![load(1.0), load(2.0)];
+        assert!(take_due(&mut loading, 0.5).is_empty());
+        assert_eq!(take_due(&mut loading, 1.0).len(), 1);
+        assert!(take_due(&mut loading, 1.5).is_empty(), "only once");
+        assert_eq!(take_due(&mut loading, 3.0).len(), 1);
+        assert!(loading.is_empty());
+    }
+
+    #[test]
+    fn the_crossbow_names_every_sound_of_its_bolt() {
+        let data = rl_data::GameData::builtin().expect("data");
+        let crossbow = data.weapons.get("boltcaster").expect("crossbow");
+        for (purpose, name) in [
+            ("bounce", "Weapon_Crossbow.BoltHitWorld"),
+            ("embed", "Weapon_Crossbow.BoltHitWorld"),
+            ("hit_body", "Weapon_Crossbow.BoltHitBody"),
+            ("skewer", "Weapon_Crossbow.BoltSkewer"),
+            ("electrify", "Weapon_Crossbow.BoltElectrify"),
+        ] {
+            assert_eq!(crossbow.sounds.get(purpose).map(String::as_str), Some(name));
+        }
+        assert!(crossbow.loaded_skin.is_some(), "electrify's time");
+    }
 }
