@@ -18,7 +18,9 @@ use rl_sim::hazards::Hazard;
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, Breakable, Motion, PropDesc};
 use rl_sim::rules::MatchEvent;
-use rl_sim::simulation::{Life, PlayerId, PropBreak, ScorchTrace, Simulation, Spawn, TickEvents};
+use rl_sim::simulation::{
+    Life, PlayerId, ProjectileEventKind, PropBreak, ScorchTrace, Simulation, Spawn, TickEvents,
+};
 use rl_sim::weapons::WeaponId;
 use source_formats::entities::MapEntity;
 
@@ -264,6 +266,64 @@ fn the_energy_ball_kills_outright_and_dissolves_the_body() {
     assert_eq!(kills[0].victim, arena.target);
     // The ball is spent on the kill, and a bullet's kill is no dissolving.
     assert!(arena.sim.projectiles().is_empty());
+}
+
+#[test]
+fn the_energy_ball_reports_its_bounces_and_bursts_when_its_time_is_up() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(300.0, -500.0, 0.0),
+        Vec3::new(320.0, 500.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    arena.arm("rifle");
+    let arsenal = arena.sim.arsenal().clone();
+    let charges = arsenal.find_ammo("rifle_charge").expect("ammo");
+    let shooter = arena.shooter;
+    arena
+        .sim
+        .player_mut(shooter)
+        .expect("shooter")
+        .inventory
+        .give_ammo(&arsenal, charges, 3);
+    let mut events = arena.hold(Buttons::ATTACK2, 0.0, 1);
+    // Half a second's charge, then four seconds of flight, and a little.
+    events.extend(arena.idle(66 * 5));
+    let reported: Vec<_> = events.iter().flat_map(|e| &e.projectiles).collect();
+    let rifle = arena.weapon("rifle");
+    assert!(reported.iter().all(|event| event.weapon == rifle));
+    let bounce = reported
+        .iter()
+        .find(|event| event.kind == ProjectileEventKind::Bounce)
+        .expect("it bounced off the wall");
+    assert_eq!(bounce.normal, Vec3::NEG_X);
+    assert!(
+        (bounce.position.x - 300.0).abs() < 1.0,
+        "on the wall: {bounce:?}"
+    );
+    let bursts: Vec<_> = reported
+        .iter()
+        .filter(|event| event.kind == ProjectileEventKind::Burst)
+        .collect();
+    assert_eq!(bursts.len(), 1, "{reported:?}");
+    assert_eq!(bursts[0].normal, Vec3::Z);
+    assert!(arena.sim.projectiles().is_empty(), "gone with its burst");
+    assert_eq!(explosions(&events), 0, "the burst hurts nobody");
+}
+
+#[test]
+fn projectiles_without_effects_of_their_own_report_nothing() {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(300.0, -500.0, 0.0),
+        Vec3::new(320.0, 500.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 2000.0, wall);
+    arena.arm("launcher");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(200));
+    assert_eq!(explosions(&events), 1, "the rocket burst on the wall");
+    assert!(events.iter().all(|e| e.projectiles.is_empty()));
 }
 
 #[test]

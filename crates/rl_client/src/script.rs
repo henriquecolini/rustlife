@@ -270,7 +270,20 @@ pub(crate) fn apply(
     sim: &mut Simulation,
     cmd: &mut UserCmd,
 ) {
-    if !script.progress.armed {
+    // The match's start deals everyone the loadout afresh, which may come
+    // after the first arming: arm again whenever the weapon is not carried.
+    let dropped = |sim: &Simulation, name: &str| {
+        sim.arsenal()
+            .find_weapon(name)
+            .zip(sim.player(player))
+            .is_some_and(|(weapon, p)| !p.inventory.has(weapon))
+    };
+    if !script.progress.armed
+        || script
+            .weapon
+            .as_deref()
+            .is_some_and(|name| dropped(sim, name))
+    {
         script.progress.armed = true;
         if let Some(name) = &script.weapon {
             cmd.select = arm(player, sim, name);
@@ -408,7 +421,7 @@ fn go_to_nearest_pickup(player: PlayerId, sim: &mut Simulation) -> Option<(f32, 
     Some(angles_to(sim.eye_position(player)?, look))
 }
 
-/// Gives `player` the weapon with id `name` and plenty of its ammo;
+/// Gives `player` the weapon with id `name` and plenty of each of its ammo;
 /// returns it, to be taken in hand.
 fn arm(player: PlayerId, sim: &mut Simulation, name: &str) -> Option<WeaponId> {
     let arsenal = sim.arsenal().clone();
@@ -416,13 +429,16 @@ fn arm(player: PlayerId, sim: &mut Simulation, name: &str) -> Option<WeaponId> {
         warn!("script: no weapon {name:?}");
         return None;
     };
-    let ammo = arsenal
+    // Every ammo it uses: the Pulse Rifle's energy balls as well as its rounds.
+    let ammo: Vec<_> = arsenal
         .weapon(weapon)
-        .and_then(rl_data::WeaponConfig::ammo_type)
-        .and_then(|ammo| arsenal.find_ammo(ammo));
+        .into_iter()
+        .flat_map(rl_data::WeaponConfig::ammo_types)
+        .filter_map(|ammo| arsenal.find_ammo(ammo))
+        .collect();
     let inventory = &mut sim.player_mut(player)?.inventory;
     inventory.give_weapon(&arsenal, weapon);
-    if let Some(ammo) = ammo {
+    for ammo in ammo {
         inventory.give_ammo(&arsenal, ammo, SCRIPT_AMMO);
     }
     Some(weapon)

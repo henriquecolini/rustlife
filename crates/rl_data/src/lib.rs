@@ -64,9 +64,10 @@ pub mod weapons;
 
 pub use ammo::{AmmoConfig, AmmoType};
 pub use effects::{
-    EffectsConfig, ExplosionEffectConfig, FleckConfig, GrenadeEffectConfig, ImpactEffectConfig,
-    ImpactFlashConfig, ImpactParticlesConfig, MuzzleFlashConfig, PuffAim, PuffConfig, ScorchConfig,
-    SparkConfig, SurfaceEffect, SurfaceImpactConfig, TracerConfig, Vertical,
+    BeamRingConfig, CombineBallEffectConfig, EffectsConfig, ExplosionEffectConfig, FleckConfig,
+    GrenadeEffectConfig, ImpactEffectConfig, ImpactFlashConfig, ImpactParticlesConfig,
+    MuzzleFlashConfig, PuffAim, PuffConfig, ScorchConfig, SparkConfig, SurfaceEffect,
+    SurfaceImpactConfig, TracerConfig, Vertical,
 };
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};
@@ -90,8 +91,8 @@ pub use validate::Problem;
 pub use weapons::{
     AccuracyConfig, BeamConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig,
     GlowConfig, HitscanConfig, LoadedSkinConfig, MeleeConfig, MissileConfig, ProjectileBodyConfig,
-    ProjectileConfig, Reload, Scorch, Shot, SlamSwitchConfig, WEAPON_SOUNDS, WeaponConfig,
-    WeaponPickupConfig, ZoomConfig,
+    ProjectileConfig, ProjectileEffect, Reload, Scorch, Shot, SlamSwitchConfig, WEAPON_SOUNDS,
+    WeaponConfig, WeaponPickupConfig, ZoomConfig,
 };
 
 /// File name of the movement data.

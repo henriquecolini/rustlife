@@ -132,7 +132,7 @@ can break, whatever its health: a vent's grate, a window, a `func_breakable`.
 | 9MM Pistol | 2 | 18 | 8 damage, every 0.5 s held or 0.1 s clicked, 1°→6° cone | — |
 | .357 Magnum | 2 | 6 | 75 damage, every 0.75 s, no spread | — |
 | SMG | 3 | 45 | 5 damage, every 0.075 s, 5° cone | grenade: 1000 u/s, bursts on contact, 100 damage over 250 units |
-| Pulse Rifle | 3 | 30 | 11 damage, every 0.1 s, 3° cone | energy ball after 0.5 s: 1000 u/s, bounces 4 s, kills on touch |
+| Pulse Rifle | 3 | 30 | 11 damage, every 0.1 s, 3° cone | energy ball after 0.5 s: 1000 u/s, bounces 4 s, kills on touch, then bursts |
 | Shotgun | 4 | 6 | 7 pellets × 9, 10° cone, 0.333 s + pump | 12 pellets for 2 shells |
 | Crossbow | 4 | 1 | bolt: 100 damage, 3500 u/s, auto-reload | 20° zoom |
 | RPG | 5 | — | rocket: 150 damage over 300 units, laser-guided | laser on/off |
@@ -171,6 +171,16 @@ includes grates) and players' boxes:
   an explosion.
 - A `fuse` bursts it that many seconds after launch, wherever it is.
 - Past its `lifetime` it is gone, without a burst.
+
+A projectile with an `effect` of the game's own (the energy ball's
+`CombineBall`) reports what it does as `ProjectileEvent`s, which every client
+hears of, the shooter too (projectiles are never predicted): a `Bounce` where
+it bounced, at the point its box touched the surface and with the surface's
+normal, and a `Burst` where its fuse or lifetime ran out. The energy ball's
+four-second fuse ends in a burst that hurts nobody, as HL2DM's `DoExplosion`
+deals no damage; the client draws it ([presentation.md](presentation.md)).
+Unlike HL2DM's, a ball that strikes the sky bounces off it rather than
+bursting: the simulation does not know which surfaces are sky.
 
 A projectile with a `ricochet` that meets the map at less than `max_dot` of the
 way into it (HL2's 0.5) and faster than `min_speed` glances off at

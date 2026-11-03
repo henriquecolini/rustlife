@@ -13,8 +13,8 @@
 
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{
-    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, PropBreak, PropIgnition,
-    PropImpactEvent, PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
+    DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, ProjectileEvent, PropBreak,
+    PropIgnition, PropImpactEvent, PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
 };
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, Noise, WeaponId};
@@ -59,6 +59,8 @@ pub enum Event {
     Shot(ShotEvent),
     /// An explosion.
     Explosion(ExplosionEvent),
+    /// A projectile with an effect of its own bounced or burst.
+    Projectile(ProjectileEvent),
     /// Damage taken.
     Damage(DamageEvent),
     /// A pickup taken.
@@ -176,6 +178,13 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
             .iter()
             .map(|&blast| Event::Explosion(blast)),
     );
+    // Projectiles are the server's alone: the shooter hears of theirs too.
+    out.extend(
+        events
+            .projectiles
+            .iter()
+            .map(|&projectile| Event::Projectile(projectile)),
+    );
     out.extend(events.damage.iter().map(|&damage| Event::Damage(damage)));
     out.extend(events.pickups.iter().map(|&(player, index)| Event::Pickup {
         player,
@@ -254,6 +263,7 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             Event::Deploy { player, weapon } => tick.deploys.push((player, weapon)),
             Event::Shot(shot) => tick.shots.push(shot),
             Event::Explosion(blast) => tick.explosions.push(blast),
+            Event::Projectile(projectile) => tick.projectiles.push(projectile),
             Event::Damage(damage) => tick.damage.push(damage),
             Event::Pickup { player, index } => tick.pickups.push((player, usize::from(index))),
             Event::Charging { player, index } => {
@@ -278,7 +288,7 @@ mod tests {
     use rl_sim::combat::hitscan::{ShotTrace, Struck};
     use rl_sim::combat::{Cause, Damage};
     use rl_sim::physics::BodyId;
-    use rl_sim::simulation::ScorchTrace;
+    use rl_sim::simulation::{ProjectileEventKind, ScorchTrace};
 
     use super::*;
 
@@ -362,6 +372,13 @@ mod tests {
                     scorch: None,
                 },
             ],
+            projectiles: vec![ProjectileEvent {
+                weapon: WeaponId::from_index(3),
+                mode: Mode::Secondary,
+                kind: ProjectileEventKind::Burst,
+                position: Vec3::new(7.0, 8.0, 9.0),
+                normal: Vec3::Z,
+            }],
             match_event: Some(MatchEvent::Restarted),
             ..TickEvents::default()
         }
@@ -375,6 +392,11 @@ mod tests {
         assert_eq!(back.fired[0].0, player(1));
         assert_eq!(back.shots, [shot(1)]);
         assert_eq!(back.damage.len(), 1, "damage to the viewer is heard");
+        assert_eq!(
+            back.projectiles.len(),
+            1,
+            "a projectile's doings are heard by its shooter too"
+        );
     }
 
     #[test]

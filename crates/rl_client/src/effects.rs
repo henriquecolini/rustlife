@@ -93,11 +93,13 @@ pub struct EffectsPlugin;
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Sprites>()
+            .add_message::<FlatFlash>()
             .add_systems(
                 Update,
                 (
                     load_sprites,
                     spawn_effects,
+                    lay_flat_flashes,
                     fly_tracers,
                     fly_spray,
                     animate_flashes,
@@ -203,6 +205,27 @@ fn frame_uv(frame: u32, frames: u32) -> Affine2 {
     )
 }
 
+/// A flash to lay flat on a surface (the game's `FX_AddQuad`) for another
+/// effect: where (Bevy space, metres) and which way the surface faces (a
+/// Bevy-space unit vector).
+#[derive(Message, Debug, Clone)]
+pub(crate) struct FlatFlash {
+    pub flash: ImpactFlashConfig,
+    pub at: Vec3,
+    pub normal: Vec3,
+}
+
+/// Lays the flat flashes other effects ask for.
+fn lay_flat_flashes(mut requests: MessageReader<FlatFlash>, mut painter: Painter) {
+    let Some(quad) = painter.sprites.quad.clone() else {
+        requests.clear();
+        return;
+    };
+    for request in requests.read() {
+        painter.surface_flash(&quad, &request.flash, request.at, request.normal);
+    }
+}
+
 /// An effect's quad, removed at `until` (seconds since startup).
 #[derive(Component)]
 struct Effect {
@@ -305,6 +328,13 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
         .chain(&effects.blood.sprites)
         .chain([&effects.impact_particles.spark_glow.sprite])
         .chain(effects.weapon_flashes.values().map(|flash| &flash.sprite))
+        .chain(
+            effects
+                .combine_ball
+                .iter()
+                .flat_map(|ball| &ball.bounce_flashes)
+                .map(|flash| &flash.sprite),
+        )
         .map(String::as_str)
 }
 
@@ -1165,6 +1195,10 @@ mod tests {
         assert!(names.contains(&"effects/muzzleflash1"));
         assert!(names.contains(&"effects/yellowflare"), "metal's glow");
         assert!(names.contains(&"effects/blood"));
+        assert!(
+            names.contains(&"effects/combinemuzzle1_nocull"),
+            "the energy ball's bounce"
+        );
         assert!(data.effects.bullet_impact("metal").is_some());
         assert!(data.effects.bullet_impact("nonsense").is_some(), "default");
     }

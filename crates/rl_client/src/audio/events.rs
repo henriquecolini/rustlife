@@ -13,7 +13,7 @@ use rl_data::{Shot, SoundsConfig};
 use rl_sim::combat::Cause;
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::pickups::Gives;
-use rl_sim::simulation::{MapEvent, PlayerId, Simulation, TickEvents};
+use rl_sim::simulation::{MapEvent, PlayerId, ProjectileEventKind, Simulation, TickEvents};
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, Noise, WeaponId};
 use source_formats::entities::MapEntity;
@@ -181,8 +181,8 @@ fn weapon_sound<'a>(sim: &'a Simulation, weapon: WeaponId, purpose: &str) -> Opt
         .map(String::as_str)
 }
 
-/// Firing, reloading, switching, swings landing, bullets striking and the
-/// Manipulator.
+/// Firing, reloading, switching, swings landing, bullets striking,
+/// projectiles bouncing and bursting, and the Manipulator.
 fn weapon_sounds(
     events: &TickEvents,
     places: &Places,
@@ -239,6 +239,15 @@ fn weapon_sounds(
         };
         if let Some(weapon) = sim.player(who).and_then(|p| p.inventory.active()) {
             play(player, who, weapon, purpose);
+        }
+    }
+    for event in &events.projectiles {
+        let purpose = match event.kind {
+            ProjectileEventKind::Bounce => "bounce",
+            ProjectileEventKind::Burst => "burst",
+        };
+        if let Some(name) = weapon_sound(sim, event.weapon, purpose) {
+            player.play(name, Some(event.position), 1.0);
         }
     }
     let mut impacts = 0;

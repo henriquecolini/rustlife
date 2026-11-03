@@ -176,6 +176,33 @@ pub struct ExplosionEvent {
     pub scorch: Option<ScorchTrace>,
 }
 
+/// What a projectile with an effect of the game's own
+/// ([`rl_data::ProjectileConfig::effect`]) did, for the client to show and
+/// sound. Projectiles are the server's alone, so everyone hears of these,
+/// the shooter too.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileEvent {
+    /// The weapon that fired it...
+    pub weapon: WeaponId,
+    /// ...and with which fire mode (its shot is the projectile's data).
+    pub mode: Mode,
+    /// What it did.
+    pub kind: ProjectileEventKind,
+    /// Where, Source space.
+    pub position: Vec3,
+    /// The normal of the surface it bounced off; straight up where it burst.
+    pub normal: Vec3,
+}
+
+/// What a projectile did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectileEventKind {
+    /// It bounced off the map or a prop.
+    Bounce,
+    /// Its time ran out and it burst where it was.
+    Burst,
+}
+
 /// Where the client looks for the surface a blast scorches. The mark is only
 /// drawn, so the client traces for it itself, as the game's code does.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -262,6 +289,8 @@ pub struct TickEvents {
     pub shots: Vec<ShotEvent>,
     /// Explosions.
     pub explosions: Vec<ExplosionEvent>,
+    /// What projectiles with effects of their own did.
+    pub projectiles: Vec<ProjectileEvent>,
     /// Damage taken.
     pub damage: Vec<DamageEvent>,
     /// Deaths.

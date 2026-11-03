@@ -36,6 +36,13 @@ const FLOOR_NORMAL_Z: f32 = 0.7;
 /// does not start inside it, units.
 const SURFACE_GAP: f32 = 0.25;
 
+/// Where a box of half-width `size` whose centre stopped at `center` against
+/// a surface facing along `normal` touches it: the box reaches
+/// `size × (|x| + |y| + |z|)` of the normal towards the surface.
+fn surface_point(center: Vec3, normal: Vec3, size: f32) -> Vec3 {
+    center - normal * size * normal.abs().element_sum()
+}
+
 /// A projectile in flight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Projectile {
@@ -78,8 +85,14 @@ pub struct Projectile {
 pub enum Flight {
     /// Still flying (or resting).
     Flying,
-    /// Bounced off something this tick.
-    Bounced,
+    /// Bounced off something this tick (or glanced off the map): at `point`,
+    /// off a surface facing along `normal`.
+    Bounced {
+        /// Where.
+        point: Vec3,
+        /// The surface's normal.
+        normal: Vec3,
+    },
     /// It struck something and ends there: at `point`, on a surface facing
     /// along `normal` (zero for a player).
     Struck {
@@ -180,7 +193,10 @@ impl Projectile {
             self.velocity = Vec3::ZERO;
             self.resting = true;
         }
-        Flight::Bounced
+        Flight::Bounced {
+            point: surface_point(map.end, normal, config.size),
+            normal,
+        }
     }
 
     /// A hit on the map by a projectile that glances off or embeds: `None`
@@ -201,7 +217,10 @@ impl Projectile {
                 self.velocity = reflected.normalize_or(direction) * speed * glance.speed_scale;
                 self.gravity_scale = Some(glance.gravity);
                 self.impact = impact;
-                return Some(Flight::Bounced);
+                return Some(Flight::Bounced {
+                    point: surface_point(map.end, normal, config.size),
+                    normal,
+                });
             }
         }
         let stay = config.stick?;
@@ -267,6 +286,7 @@ mod tests {
             missile: None,
             crouched: None,
             body: None,
+            effect: None,
         }
     }
 
@@ -390,7 +410,12 @@ mod tests {
         };
         let mut frag = projectile(Vec3::new(0.0, 0.0, 40.0), Vec3::new(300.0, 0.0, 0.0));
         let flights = fly(&mut frag, &grenade, &scene, &[], 200);
-        assert!(flights.contains(&Flight::Bounced));
+        assert!(
+            flights.iter().any(
+                |flight| matches!(flight, Flight::Bounced { normal, .. } if *normal == Vec3::Z)
+            ),
+            "bounced off the floor"
+        );
         assert!(frag.resting, "came to rest");
         assert!(
             frag.position.z > 0.0 && frag.position.z < 4.0,
@@ -404,6 +429,22 @@ mod tests {
             .position(|f| *f == Flight::Fused)
             .expect("fused");
         assert!((131..=133).contains(&(fused + 1)), "{fused}");
+    }
+
+    #[test]
+    fn a_bounce_is_reported_where_the_box_touched_the_surface() {
+        assert_eq!(
+            surface_point(Vec3::new(190.0, 0.0, 50.0), Vec3::NEG_X, 10.0),
+            Vec3::new(200.0, 0.0, 50.0)
+        );
+        // A slope: the box touches it with a corner.
+        let normal = Vec3::new(1.0, 0.0, 1.0).normalize();
+        let touch = surface_point(Vec3::new(0.0, 0.0, 30.0), normal, 10.0);
+        let reach = (Vec3::new(0.0, 0.0, 30.0) - touch).dot(normal);
+        assert!(
+            (reach - 10.0 * std::f32::consts::SQRT_2).abs() < 1e-4,
+            "{reach}"
+        );
     }
 
     #[test]

@@ -2,8 +2,8 @@
 // 0.1 s in a 3-degree cone, reloaded in the view model's 1.567 s, drawn in
 // 0.833 s. The alternate fire charges for half a second and launches an
 // energy ball at 1000 units/s that bounces about without losing speed for
-// four seconds and kills whoever it touches outright; the rifle is then
-// busy for a second.
+// four seconds, kills whoever it touches outright, and then bursts; the
+// rifle is then busy for a second.
 Weapon(
     name: "Pulse Rifle",
     slot: 3,
@@ -54,6 +54,10 @@ Weapon(
                 core: "effects/ar2_altfire1",
                 core_size: 9.0,
             )),
+            // Where it bounces it flashes on the surface and sparks; when its
+            // four seconds are up it bursts, with spreading rings and a shake
+            // (`effects.ron`'s `combine_ball`).
+            effect: Some(CombineBall),
         )),
     )),
     deploy_time: 0.833,
@@ -64,6 +68,8 @@ Weapon(
         "reload": "Weapon_AR2.Reload",
         "empty": "Weapon_AR2.Empty",
         "charge": "Weapon_AR2.Special1",
+        "bounce": "NPC_CombineBall.Impact",
+        "burst": "NPC_CombineBall.Explosion",
     },
     // Players hold it with the ar2 sequences of HL2DM's player models (run_ar2, ...).
     hold: Some("ar2"),

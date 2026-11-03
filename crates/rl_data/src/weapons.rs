@@ -35,10 +35,13 @@ pub const MAX_SLOT: u8 = 9;
 /// - `charge`: a delayed shot ([`FireConfig::charge`]) beginning to build;
 /// - `open`, `close`: the Manipulator's claws opening on something to take
 ///   and shutting on nothing;
-/// - `hold`: the loop the Manipulator hums while it holds or pulls a prop.
-pub const WEAPON_SOUNDS: [&str; 17] = [
+/// - `hold`: the loop the Manipulator hums while it holds or pulls a prop;
+/// - `bounce`, `burst`: a projectile with an effect of its own
+///   ([`ProjectileConfig::effect`]) bouncing, and bursting at the end of its
+///   flight (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`).
+pub const WEAPON_SOUNDS: [&str; 19] = [
     "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
-    "blip", "empty", "pump", "charge", "open", "close", "hold",
+    "blip", "empty", "pump", "charge", "open", "close", "hold", "bounce", "burst",
 ];
 
 /// For serde defaults.
@@ -414,6 +417,21 @@ pub struct ProjectileConfig {
     /// small box. Grenades are.
     #[serde(default)]
     pub body: Option<ProjectileBodyConfig>,
+    /// The game's own client effect it shows where it bounces, bursts or
+    /// strikes, if it has one. The simulation reports those moments
+    /// (`ProjectileEvent`s) only for a projectile that has one.
+    #[serde(default)]
+    pub effect: Option<ProjectileEffect>,
+}
+
+/// A projectile's client effect, drawn by the client's code as the game's
+/// is (the weapon's sounds name what they play: `bounce`, `burst`, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectileEffect {
+    /// The Pulse Rifle's energy ball: `cball_bounce` where it bounces and
+    /// `cball_explode`, two spreading rings and a shake where it bursts
+    /// (`effects.ron`'s `combine_ball`).
+    CombineBall,
 }
 
 /// A projectile glancing off the map: when it meets a surface at less than

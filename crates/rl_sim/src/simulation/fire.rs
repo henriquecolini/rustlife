@@ -8,7 +8,8 @@ use rl_data::{ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, Sho
 
 use super::breakables::Blow;
 use super::{
-    BlastSource, ExplosionEvent, PlayerId, ScorchTrace, ShotEvent, Simulation, TickEvents,
+    BlastSource, ExplosionEvent, PlayerId, ProjectileEvent, ProjectileEventKind, ScorchTrace,
+    ShotEvent, Simulation, TickEvents,
 };
 use crate::collision::Hull;
 use crate::combat::hitscan::{self, ShotTrace, Struck};
@@ -36,6 +37,26 @@ pub(super) struct Bullet {
     pub(super) trace: ShotTrace,
     /// The damage it deals, a headshot's multiplier included.
     pub(super) damage: f32,
+}
+
+/// What a projectile's tick ending in `flight` shows, if anything: a bounce
+/// where it bounced, a burst where its time ran out (the energy ball's
+/// four seconds end in its explosion, whether by fuse or lifetime).
+fn projectile_event(projectile: &Projectile, flight: Flight) -> Option<ProjectileEvent> {
+    let (kind, position, normal) = match flight {
+        Flight::Bounced { point, normal } => (ProjectileEventKind::Bounce, point, normal),
+        Flight::Fused | Flight::Expired => {
+            (ProjectileEventKind::Burst, projectile.position, Vec3::Z)
+        }
+        Flight::Flying | Flight::Struck { .. } => return None,
+    };
+    Some(ProjectileEvent {
+        weapon: projectile.weapon,
+        mode: projectile.mode,
+        kind,
+        position,
+        normal,
+    })
 }
 
 impl Simulation {
@@ -469,8 +490,13 @@ impl Simulation {
             if let Some(impact) = projectile.impact.take() {
                 impacts.push((projectile.owner, projectile.weapon, impact));
             }
+            if config.effect.is_some()
+                && let Some(event) = projectile_event(projectile, flight)
+            {
+                events.projectiles.push(event);
+            }
             match flight {
-                Flight::Flying | Flight::Bounced => true,
+                Flight::Flying | Flight::Bounced { .. } => true,
                 flight => {
                     ended.push((projectile.clone(), flight));
                     false
@@ -552,7 +578,7 @@ impl Simulation {
                 point
             }
             Flight::Fused => projectile.position,
-            Flight::Expired | Flight::Flying | Flight::Bounced => return,
+            Flight::Expired | Flight::Flying | Flight::Bounced { .. } => return,
         };
         if let Some(explosion) = &config.explosion {
             self.explode(

@@ -293,6 +293,27 @@ pub(crate) enum Burst {
     Gauss,
     /// `FX_MetalSpark`.
     Metal,
+    /// `FX_ElectricSpark` on its own, of this magnitude and trail length
+    /// (`g_pEffects->Sparks`, the energy ball's `cball_bounce` and
+    /// `cball_explode`).
+    Electric {
+        /// Scales the number of sparks and the glints' sizes.
+        magnitude: u32,
+        /// Scales how long the sparks' streaks are and the spray's life.
+        trail: u32,
+    },
+}
+
+impl Burst {
+    /// The magnitude of the electric spark's glints, if the burst makes
+    /// them: `FX_GaussExplosion` ends in an electric spark of magnitude one.
+    fn glints(self) -> Option<u32> {
+        match self {
+            Self::Gauss => Some(1),
+            Self::Electric { magnitude, .. } => Some(magnitude),
+            Self::Metal => None,
+        }
+    }
 }
 
 /// A burst of sparks to draw: where (Bevy space, metres) and which way
@@ -445,6 +466,9 @@ fn spawn_sparks(
     for burst in bursts.read() {
         let groups = match burst.burst {
             Burst::Gauss => gauss_explosion(rng, burst.direction),
+            Burst::Electric { magnitude, trail } => {
+                electric_spark(rng, magnitude, trail, Some(burst.direction))
+            }
             Burst::Metal => {
                 let Some(sim) = game.sim() else {
                     continue;
@@ -498,10 +522,10 @@ fn spawn_sparks(
                 ));
             }
         }
-        if burst.burst != Burst::Gauss {
+        let Some(magnitude) = burst.burst.glints() else {
             continue;
-        }
-        for glint in electric_glints(rng, 1) {
+        };
+        for glint in electric_glints(rng, magnitude) {
             let material = materials.add(effect_material(StandardMaterial {
                 base_color: Color::NONE,
                 base_color_texture: Some(glint_sprite.image.clone()),
@@ -648,6 +672,20 @@ mod tests {
             );
             assert!((16..=32).contains(&groups[2].sparks.len()));
         }
+    }
+
+    #[test]
+    fn only_bursts_with_an_electric_spark_make_glints_of_its_magnitude() {
+        assert_eq!(Burst::Gauss.glints(), Some(1));
+        assert_eq!(
+            Burst::Electric {
+                magnitude: 4,
+                trail: 1
+            }
+            .glints(),
+            Some(4)
+        );
+        assert_eq!(Burst::Metal.glints(), None);
     }
 
     #[test]

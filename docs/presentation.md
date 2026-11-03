@@ -116,7 +116,7 @@ play at the listener. What plays, by source:
 
 | Source | Sounds |
 |--------|--------|
-| Weapons (their data's `sounds`) | `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire` |
+| Weapons (their data's `sounds`) | `fire`, `fire2`, `hit`, `reload`, `deploy`, `pickup`, `drop`, `launch`, `punt`, `dryfire`; where a projectile with an effect of its own bounces and bursts, `bounce` and `burst` (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`) |
 | Items (their data's `sounds`) | `pickup`, and `use` looping while a station is drawn from |
 | `sounds.ron` | fallback footsteps, hard landings, weapon pickups, deaths, explosions, fallback bullet impacts, breakables by material, buttons by sound number |
 | `surfaceproperties.txt` | footstep and bullet-impact sounds from the surface underfoot or struck: concrete, metal, wood, glass, flesh, dirt and the rest |
@@ -251,6 +251,8 @@ Combat effects draw the game's own sprite materials, named in
 | Bullet decal | a bullet or a swing (Crowbar, Stun Stick) strikes a surface | one of the surface class's decal materials, as large as its texture times its `$decalscale` (a shot hole: 64 x 0.10 = 6.4 units), projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them, or for a material that is not `DecalModulate` (wood) blended over them |
 | Blood | a shot or swing strikes a player | the game's `blood_impact_red_01` (or lit blood sprites) thrown out of the wound, and the game's `TraceBleed`: lines traced 172 units on from the wound along the shot (one for less than 10 damage, two for less than 25, four above, each strayed up to 0.1, 0.2 or 0.3 on each axis), a 32-unit `decals/blood1`-`6` splat wherever one meets the map or a prop, so the blood lands away from where the shot came from |
 | Explosion | something blows up | particles the game makes itself (below), and a scorch on the floor or wall it burst against: the game's "Scorch" (`decals/scorch1/2`, 128 units across) or an SMG grenade's "SmallScorch" on a prop (`decals/smscorch1-3`, 32), translucent and lit by the lightmap under it, for `scorch.life` seconds ([combat.md](combat.md) says where each blast looks) |
+| Energy ball bounce | the Pulse Rifle's energy ball bounces | `effects.ron`'s `combine_ball` (client.so's `cball_bounce`): two quads lying on the surface, `combinemuzzle1_nocull` 160 units shrinking away in 0.25 s and `combinemuzzle2_nocull` growing from 32 to 64 in 0.5 s, and `FX_ElectricSpark`'s sparks (magnitude 2) thrown off it |
+| Energy ball burst | its four seconds are up | `cball_explode`'s sparks (magnitude 4) thrown up, two rings of `sprites/lgtning` spreading level from 10 to 1024 units while they fade (0.2 s from alpha 32, 0.5 s from 64; drawn as the engine's `DrawRing`: a ribbon round the circle, facing the camera, 64 units either side of it, its texture repeating every 800 units round), and the view shaken out to 1250 units |
 | Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |
 | Grenade trail | a grenade is in flight | a red ribbon of where it has been, turned to face the camera, tapering and fading over `grenade.trail_life` |
 

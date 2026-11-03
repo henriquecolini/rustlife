@@ -47,6 +47,7 @@ pub mod animation;
 pub mod audio;
 pub mod camera;
 pub mod capture;
+mod combine_ball;
 pub mod content;
 pub mod debris;
 pub mod decals;
@@ -210,6 +211,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         trail_sparks::TrailSparksPlugin,
         impact_debris::ImpactDebrisPlugin,
         physcannon_impact::PhyscannonImpactPlugin,
+        combine_ball::CombineBallPlugin,
         screen_fade::ScreenFadePlugin,
         view_punch::ViewPunchPlugin,
         pcf_particles::PcfPlugin,

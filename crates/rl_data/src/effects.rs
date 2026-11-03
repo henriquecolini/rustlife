@@ -49,6 +49,10 @@ pub struct EffectsConfig {
     /// (the game gives each gun a flash of its own kind).
     #[serde(default)]
     pub weapon_muzzle_flashes: BTreeMap<String, MuzzleFlashConfig>,
+    /// The Pulse Rifle's energy ball bouncing and bursting, if it is drawn
+    /// as the game draws it.
+    #[serde(default)]
+    pub combine_ball: Option<CombineBallEffectConfig>,
 }
 
 /// A muzzle flash: one of several sprites, briefly.
@@ -522,6 +526,75 @@ pub struct ExplosionEffectConfig {
     pub pcf: Option<String>,
 }
 
+/// What the Pulse Rifle's energy ball shows (HL2DM's `prop_combine_ball`).
+///
+/// Where it bounces the server dispatches `cball_bounce`, whose client code
+/// lays two flashes flat on the surface and throws electric sparks off it;
+/// where it bursts, `cball_explode` (sparks thrown up), two rings spreading
+/// out level (`te->BeamRingPoint`) and a shake (`UTIL_ScreenShake`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CombineBallEffectConfig {
+    /// The flashes lying on the surface it bounces off (`FX_AddQuad`s).
+    pub bounce_flashes: Vec<ImpactFlashConfig>,
+    /// The electric sparks thrown off that surface (`FX_ElectricSpark`):
+    /// their magnitude and trail length.
+    pub bounce_sparks: (u32, u32),
+    /// The electric sparks thrown up where it bursts, the same way.
+    pub burst_sparks: (u32, u32),
+    /// The rings that spread out where it bursts.
+    pub rings: Vec<BeamRingConfig>,
+    /// How hard the view shakes right at the burst, `0..=1`, on the scale
+    /// of `explosion.shake` (a grenade's, HL2DM's amplitude 25).
+    pub shake: f32,
+    /// How far the shake reaches, fading to nothing, units.
+    pub shake_radius: f32,
+}
+
+/// A ring of beam that spreads out level from a point and fades as it goes:
+/// the game's `TE_BEAMRINGPOINT` with `FBEAM_FADEOUT`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeamRingConfig {
+    /// The beam's sprite (a material under `materials/`).
+    pub sprite: String,
+    /// Its radius at birth and at death, units.
+    pub radius: (f32, f32),
+    /// The beam's width, units: the ribbon reaches this far either side of
+    /// the circle, as the engine's `DrawRing` draws it.
+    pub width: f32,
+    /// Its colour (linear RGB, `0..=1`).
+    pub color: [f32; 3],
+    /// Its opacity at birth, `0..=1`; it fades to nothing over its life.
+    pub alpha: f32,
+    /// Seconds it lasts.
+    pub life: f32,
+    /// How many of the sprite's frames it steps through a second.
+    pub framerate: f32,
+}
+
+impl CombineBallEffectConfig {
+    fn validate(&self, check: &mut Validator) {
+        for (index, flash) in self.bounce_flashes.iter().enumerate() {
+            flash.validate(check, &format!("combine_ball.bounce_flashes[{index}]"));
+        }
+        for (index, ring) in self.rings.iter().enumerate() {
+            let field = format!("combine_ball.rings[{index}]");
+            if ring.sprite.trim().is_empty() {
+                check.fail(&format!("{field}.sprite"), "must name a sprite");
+            }
+            check.non_negative(&format!("{field}.radius.0"), ring.radius.0);
+            check.positive(&format!("{field}.radius.1"), ring.radius.1);
+            check.positive(&format!("{field}.width"), ring.width);
+            check.range(&format!("{field}.alpha"), ring.alpha, 0.0, 1.0);
+            check.positive(&format!("{field}.life"), ring.life);
+            check.non_negative(&format!("{field}.framerate"), ring.framerate);
+        }
+        check.range("combine_ball.shake", self.shake, 0.0, 1.0);
+        check.positive("combine_ball.shake_radius", self.shake_radius);
+    }
+}
+
 /// What a grenade in flight shows: a glowing red dot on its top that
 /// flashes with each tick of its fuse and dims between, and a red trail of
 /// where it has been.
@@ -602,6 +675,9 @@ impl EffectsConfig {
         check.range("grenade.trail_alpha", grenade.trail_alpha, 0.0, 1.0);
         let blast = &self.explosion;
         check.range("explosion.shake", blast.shake, 0.0, 1.0);
+        if let Some(ball) = &self.combine_ball {
+            ball.validate(check);
+        }
         if blast
             .pcf
             .as_deref()
@@ -722,6 +798,7 @@ mod tests {
             },
             weapon_flashes: BTreeMap::new(),
             weapon_muzzle_flashes: BTreeMap::new(),
+            combine_ball: None,
             grenade: GrenadeEffectConfig {
                 dot_size: 6.0,
                 dot_offset: [0.0, 0.0, 5.0],
@@ -764,6 +841,49 @@ mod tests {
         let mut check = Validator::default();
         config.validate(&mut check);
         assert_eq!(check.finish().len(), 4);
+    }
+
+    #[test]
+    fn the_energy_balls_flashes_and_rings_are_checked() {
+        let ring = BeamRingConfig {
+            sprite: "sprites/lgtning".to_owned(),
+            radius: (10.0, 1024.0),
+            width: 64.0,
+            color: [1.0, 1.0, 0.88],
+            alpha: 0.25,
+            life: 0.5,
+            framerate: 2.0,
+        };
+        let mut config = config();
+        config.combine_ball = Some(CombineBallEffectConfig {
+            bounce_flashes: vec![flash()],
+            bounce_sparks: (2, 1),
+            burst_sparks: (4, 1),
+            rings: vec![ring.clone()],
+            shake: 0.68,
+            shake_radius: 1250.0,
+        });
+        let mut check = Validator::default();
+        config.validate(&mut check);
+        assert!(check.finish().is_empty());
+        let mut bad_flash = flash();
+        bad_flash.life = 0.0;
+        config.combine_ball = Some(CombineBallEffectConfig {
+            bounce_flashes: vec![bad_flash],
+            bounce_sparks: (2, 1),
+            burst_sparks: (4, 1),
+            rings: vec![BeamRingConfig {
+                sprite: String::new(),
+                alpha: 2.0,
+                life: 0.0,
+                ..ring
+            }],
+            shake: 1.5,
+            shake_radius: 0.0,
+        });
+        let mut check = Validator::default();
+        config.validate(&mut check);
+        assert_eq!(check.finish().len(), 6);
     }
 
     #[test]

@@ -308,6 +308,62 @@ Effects(
             life: 0.25,
         ),
     },
+    // The Pulse Rifle's energy ball. Where it bounces, the game's
+    // `cball_bounce` (client.so) lays two quads on the surface, its radius 16
+    // times ten shrinking to nothing in a quarter of a second, and twice it
+    // growing to four times it in half a second, and throws electric sparks
+    // (magnitude 2, trail 1) off it. Where it bursts, `cball_explode` throws
+    // sparks up (magnitude 4); the server's two `BeamRingPoint`s of
+    // sprites/lgtning spread from the ball's radius of 10 to 1024 units, 64
+    // wide, coloured (255, 255, 225), fading out, one in 0.2 s from alpha 32,
+    // one in 0.5 s from 64; and `UTIL_ScreenShake` has amplitude 20 out to
+    // 1250 units (a grenade's 25 is `explosion.shake`).
+    combine_ball: Some((
+        bounce_flashes: [
+            (
+                sprite: "effects/combinemuzzle1_nocull",
+                size: (160.0, 160.0),
+                end_size: 0.0,
+                size_bias: 0.75,
+                alpha: (1.0, 0.0),
+                alpha_bias: 0.4,
+                life: 0.25,
+            ),
+            (
+                sprite: "effects/combinemuzzle2_nocull",
+                size: (32.0, 32.0),
+                end_size: 64.0,
+                size_bias: 0.75,
+                alpha: (1.0, 0.0),
+                alpha_bias: 0.4,
+                life: 0.5,
+            ),
+        ],
+        bounce_sparks: (2, 1),
+        burst_sparks: (4, 1),
+        rings: [
+            (
+                sprite: "sprites/lgtning",
+                radius: (10.0, 1024.0),
+                width: 64.0,
+                color: (1.0, 1.0, 0.882),
+                alpha: 0.125,
+                life: 0.2,
+                framerate: 2.0,
+            ),
+            (
+                sprite: "sprites/lgtning",
+                radius: (10.0, 1024.0),
+                width: 64.0,
+                color: (1.0, 1.0, 0.882),
+                alpha: 0.251,
+                life: 0.5,
+                framerate: 2.0,
+            ),
+        ],
+        shake: 0.68,
+        shake_radius: 1250.0,
+    )),
     // A thrown grenade: a red dot on its top that flashes with each tick of
     // its fuse (the dot's size at the flash, how bright it stays between
     // ticks, how long a flash takes to fade) and a red trail of where it has
