@@ -125,6 +125,21 @@ struct Cli {
     #[arg(long, default_value_t = 0, value_name = "N")]
     dummies: usize,
 
+    /// Give the training dummies this weapon (by id, e.g. `smg`), with
+    /// ammo to spare (for looking at how other players hold it).
+    #[arg(long, value_name = "ID", hide = true)]
+    dummy_weapon: Option<String>,
+
+    /// Where the training dummies look, `PITCH,YAW` degrees (pitch down is
+    /// positive).
+    #[arg(long, value_name = "PITCH,YAW", value_parser = parse_look, hide = true)]
+    dummy_look: Option<(f32, f32)>,
+
+    /// What the training dummies do: any of `fire`, `reload`, `crouch`,
+    /// `jump` and `forward`, comma separated.
+    #[arg(long, value_name = "ACTIONS", value_parser = parse_dummy_actions, hide = true)]
+    dummy_do: Option<DummyActions>,
+
     /// Take this weapon (by id, e.g. `launcher`) in hand from the start,
     /// with plenty of ammo (for scripted captures).
     #[arg(long, value_name = "ID")]
@@ -187,6 +202,41 @@ const VISIT_SECS: f32 = 0.5;
 /// Seconds after a scripted throw before the shot, with the prop in flight
 /// (props are drawn a tenth of a second in the past).
 const THROW_SHOT_SECS: f32 = 0.35;
+
+/// What a dummy was told to do.
+#[derive(Debug, Clone, Copy, Default)]
+struct DummyActions {
+    buttons: rl_sim::movement::Buttons,
+    forward: f32,
+}
+
+/// `PITCH,YAW`.
+fn parse_look(text: &str) -> Result<(f32, f32), String> {
+    let (pitch, yaw) = text.split_once(',').ok_or("expected PITCH,YAW")?;
+    let number = |part: &str| {
+        part.trim()
+            .parse::<f32>()
+            .map_err(|error| error.to_string())
+    };
+    Ok((number(pitch)?, number(yaw)?))
+}
+
+/// A comma separated list of `fire`, `reload`, `crouch`, `jump`, `forward`.
+fn parse_dummy_actions(text: &str) -> Result<DummyActions, String> {
+    use rl_sim::movement::Buttons;
+    let mut actions = DummyActions::default();
+    for action in text.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+        match action {
+            "fire" => actions.buttons = actions.buttons | Buttons::ATTACK,
+            "reload" => actions.buttons = actions.buttons | Buttons::RELOAD,
+            "crouch" => actions.buttons = actions.buttons | Buttons::DUCK,
+            "jump" => actions.buttons = actions.buttons | Buttons::JUMP,
+            "forward" => actions.forward = 1.0,
+            other => return Err(format!("unknown action `{other}`")),
+        }
+    }
+    Ok(actions)
+}
 
 /// `X,Y,Z` or `X,Y,Z,PITCH,YAW`.
 fn parse_teleport(text: &str) -> Result<([f32; 3], (f32, f32)), String> {
@@ -282,6 +332,12 @@ fn main() -> Result<()> {
         name: cli.name,
         conditions: cli.net_sim.unwrap_or(NetConditions::NONE),
         dummies: cli.dummies,
+        dummy_script: rl_server::DummyScript {
+            weapon: cli.dummy_weapon,
+            look: cli.dummy_look.unwrap_or_default(),
+            buttons: cli.dummy_do.unwrap_or_default().buttons,
+            forward: cli.dummy_do.unwrap_or_default().forward,
+        },
     };
     rl_client::run(
         vfs,

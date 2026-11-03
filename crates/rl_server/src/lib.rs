@@ -41,11 +41,12 @@ use rl_net::protocol::{
     ServerMessage, Welcome,
 };
 use rl_net::snapshot::{self, WorldState};
-use rl_sim::movement::UserCmd;
+use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::rng::Rng;
 use rl_sim::rules::MatchEvent;
 use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
+use rl_sim::weapons::WeaponId;
 use source_fs::MountOrigin;
 use thiserror::Error;
 
@@ -84,6 +85,58 @@ pub enum ServerError {
     Data(#[from] rl_data::DataError),
 }
 
+/// What training dummies do: a developer's aid for looking at how other
+/// players' models stand, aim, move and shoot. The default is to stand
+/// still, looking along +X, with the loadout's weapon.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DummyScript {
+    /// The weapon (by id) they hold, given with ammo to spare.
+    pub weapon: Option<String>,
+    /// Where they look: pitch (down is positive) and yaw, degrees.
+    pub look: (f32, f32),
+    /// Buttons they hold down.
+    pub buttons: Buttons,
+    /// How hard they push forward, `-1..=1`.
+    pub forward: f32,
+}
+
+impl DummyScript {
+    /// What a dummy does this tick.
+    fn command(&self, weapon: Option<WeaponId>) -> UserCmd {
+        UserCmd {
+            forward: self.forward,
+            pitch: self.look.0,
+            yaw: self.look.1,
+            buttons: self.buttons,
+            select: weapon,
+            ..UserCmd::default()
+        }
+    }
+}
+
+/// Adds `count` dummies to `sim`, and equips them as `script` says.
+fn add_dummies(sim: &mut Simulation, count: usize, script: &DummyScript) {
+    for _ in 0..count {
+        sim.join();
+    }
+    for index in 0..count {
+        equip_dummy(sim, PlayerId::from_index(index), script);
+    }
+}
+
+/// Gives dummy `id` the weapon `script` names, if it is not theirs yet, and
+/// returns it.
+fn equip_dummy(sim: &mut Simulation, id: PlayerId, script: &DummyScript) -> Option<WeaponId> {
+    let arsenal = sim.arsenal().clone();
+    let weapon = arsenal.find_weapon(script.weapon.as_deref()?)?;
+    let inventory = &mut sim.player_mut(id)?.inventory;
+    if !inventory.has(weapon) {
+        inventory.give_weapon(&arsenal, weapon);
+    }
+    inventory.stock(&arsenal);
+    Some(weapon)
+}
+
 /// How to run a server.
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -97,6 +150,8 @@ pub struct ServerOptions {
     pub listen: Option<SocketAddr>,
     /// Training dummies to add: players who stand still and respawn.
     pub dummies: usize,
+    /// What the dummies do instead of standing still.
+    pub dummy_script: DummyScript,
     /// The maps players vote between when a match ends, by name. With none
     /// (or one) the server replays its map.
     pub maps: Vec<String>,
@@ -215,6 +270,7 @@ pub struct Server {
     games: Vec<String>,
     map: MapInfo,
     dummies: usize,
+    dummy_script: DummyScript,
     maps: Vec<String>,
     loader: Option<MapLoader>,
     /// The vote for the next map, while the scoreboard is up.
@@ -245,9 +301,11 @@ impl Server {
         // The props fall into place before anyone arrives; clients are told
         // where they ended up, as the change from where the level put them.
         built.simulation.settle(SETTLE_SECONDS);
-        for _ in 0..options.dummies {
-            built.simulation.join();
-        }
+        add_dummies(
+            &mut built.simulation,
+            options.dummies,
+            &options.dummy_script,
+        );
         let data_files = options.data.to_files()?;
         let netcode = options
             .listen
@@ -261,6 +319,7 @@ impl Server {
             data_hash: rl_data::content_hash(&data_files),
             games: options.games,
             dummies: options.dummies,
+            dummy_script: options.dummy_script,
             maps: options.maps,
             loader: options.loader,
             vote: None,
@@ -485,9 +544,7 @@ impl Server {
         let mut built = level.simulation(&self.data);
         self.initial = snapshot::initial_props(&built.simulation);
         built.simulation.settle(SETTLE_SECONDS);
-        for _ in 0..self.dummies {
-            built.simulation.join();
-        }
+        add_dummies(&mut built.simulation, self.dummies, &self.dummy_script);
         self.sim = built.simulation;
         self.map = map_info(&level);
         let welcoming: Vec<ClientId> = self
@@ -686,7 +743,9 @@ impl Server {
         // their movement settles, their feet stay on the floor and their
         // idle animation plays.
         for index in 0..self.dummies {
-            commands.push((PlayerId::from_index(index), UserCmd::default()));
+            let id = PlayerId::from_index(index);
+            let weapon = equip_dummy(&mut self.sim, id, &self.dummy_script);
+            commands.push((id, self.dummy_script.command(weapon)));
         }
         let events = self.sim.tick(&commands);
         match events.match_event {

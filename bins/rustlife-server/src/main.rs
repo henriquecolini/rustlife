@@ -110,6 +110,7 @@ fn main() -> Result<()> {
             games: config.games.clone(),
             listen: Some(SocketAddr::from((config.bind, port))),
             dummies: cli.dummies,
+            dummy_script: rl_server::DummyScript::default(),
             maps,
             loader: Some(loader),
         },

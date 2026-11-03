@@ -7,10 +7,12 @@
 //! - **pickups** where the map put them, hidden while taken;
 //! - **projectiles** along their flight, turned to face where they fly,
 //!   appearing and vanishing with them;
-//! - **other players** at their feet, turned to their view's yaw, hidden
-//!   while dead; models come and go as players join and leave. Each plays
-//!   the sequence of what they are doing with the weapon in hand
-//!   (`animate_players`), and holds that weapon's world model: its
+//! - **other players** at their feet, turned as their feet are (not their
+//!   view), hidden while dead; models come and go as players join and
+//!   leave. Each is posed every frame (`animate_players`, deciding as
+//!   [`crate::player_anim`] describes) with the weapon in hand's stance,
+//!   aim, gestures and head, and holds that weapon's world model, which
+//!   changes as the player switches weapons: its
 //!   `ValveBiped.Weapon_bone` laid on the hand's bone of that name, as the
 //!   engine merges a weapon's bones with its holder's.
 //!

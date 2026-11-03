@@ -28,7 +28,7 @@
 //! decisions need to know of them, so the logic is tested on its own.
 
 use bevy::math::Vec3;
-use rl_assets::{PlayTrack, PoseRig};
+use rl_assets::{PlayTrack, PoseRig, RigSequence};
 use rl_data::PlayerAnimationConfig;
 
 /// The most `aim_pitch` is given, degrees either way.
@@ -101,7 +101,7 @@ impl Sequences for PoseRig {
     }
 
     fn duration(&self, sequence: usize) -> f32 {
-        self.sequence(sequence).map_or(0.0, |s| s.duration())
+        self.sequence(sequence).map_or(0.0, RigSequence::duration)
     }
 
     fn looping(&self, sequence: usize) -> bool {
@@ -246,22 +246,19 @@ impl Body {
             self.last_eye_yaw = eye_yaw;
             return 0.0;
         }
-        match self.last_turn {
-            None => {
-                // Just stopped: the feet stay as the view had them.
+        if self.last_turn.is_none() {
+            // Just stopped: the feet stay as the view had them.
+            self.last_turn = Some(input.now);
+            self.last_eye_yaw = eye_yaw;
+            self.goal_feet = eye_yaw;
+            self.feet = eye_yaw;
+        } else {
+            if (self.last_eye_yaw - eye_yaw).abs() > f32::EPSILON {
                 self.last_turn = Some(input.now);
                 self.last_eye_yaw = eye_yaw;
-                self.goal_feet = eye_yaw;
-                self.feet = eye_yaw;
             }
-            Some(_) => {
-                if (self.last_eye_yaw - eye_yaw).abs() > f32::EPSILON {
-                    self.last_turn = Some(input.now);
-                    self.last_eye_yaw = eye_yaw;
-                }
-                if (self.goal_feet - self.feet).abs() > f32::EPSILON {
-                    self.last_turn = Some(input.now);
-                }
+            if (self.goal_feet - self.feet).abs() > f32::EPSILON {
+                self.last_turn = Some(input.now);
             }
         }
         converge_yaw(
@@ -456,7 +453,7 @@ impl PlayerAnim {
         self.track_jump(config, input);
         let stance = self.stance(config, input);
         let speed = body_input.velocity.truncate().length();
-        if let Some(sequence) = self.stance_sequence(config, rig, input, stance) {
+        if let Some(sequence) = Self::stance_sequence(config, rig, input, stance) {
             self.play(config, sequence);
         }
         // The pace follows the ground, once the pose parameters are known.
@@ -557,7 +554,6 @@ impl PlayerAnim {
     /// The sequence for the stance with the weapon in hand, falling back to
     /// the default hold's.
     fn stance_sequence(
-        &self,
         config: &PlayerAnimationConfig,
         rig: &impl Sequences,
         input: &FrameInput,

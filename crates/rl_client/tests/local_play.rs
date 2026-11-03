@@ -103,6 +103,7 @@ fn client(spawn: usize, dummies: usize) -> Option<App> {
                 name: "tester".to_owned(),
                 conditions: NetConditions::NONE,
                 dummies,
+                dummy_script: rl_server::DummyScript::default(),
             },
         },
         PropsPlugin,

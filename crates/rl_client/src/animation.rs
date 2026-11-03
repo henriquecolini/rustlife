@@ -310,10 +310,13 @@ impl SequencePlayer {
     }
 }
 
+/// Animated models nothing plays yet, and that the game does not pose itself.
+type Unplayed = (Without<AnimationPlayer>, Without<Posed>);
+
 /// Gives each new animated model its player and graph.
 fn prepare(
     mut commands: Commands,
-    roots: Query<(Entity, &Animated), (Without<AnimationPlayer>, Without<Posed>)>,
+    roots: Query<(Entity, &Animated), Unplayed>,
     mut graphs: ResMut<Graphs>,
     mut assets: ResMut<Assets<AnimationGraph>>,
 ) {

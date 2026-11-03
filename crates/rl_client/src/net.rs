@@ -65,6 +65,8 @@ pub struct NetSettings {
     pub conditions: NetConditions,
     /// Training dummies a hosted game adds.
     pub dummies: usize,
+    /// What they do (a developer's aid).
+    pub dummy_script: rl_server::DummyScript,
 }
 
 /// The connection to the game's server.
@@ -294,6 +296,7 @@ fn host(
         loader: Some(loader),
         listen,
         dummies: settings.dummies,
+        dummy_script: settings.dummy_script.clone(),
     };
     let mut server = match Server::new(&level, options) {
         Ok(server) => server,

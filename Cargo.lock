@@ -5612,6 +5612,8 @@ dependencies = [
  "rl_config",
  "rl_data",
  "rl_net",
+ "rl_server",
+ "rl_sim",
  "source_fs",
 ]
 

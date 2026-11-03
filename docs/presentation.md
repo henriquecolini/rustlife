@@ -57,14 +57,44 @@ sequence, a value on its blend axis and a rate. The sequence player keeps
 time, weighs the clips of a blend and fades one sequence into the next over
 `player.ron`'s `fade` seconds.
 
-**Other players** play the sequence of their stance with the weapon in
-hand. The stance is idle, run, crouch, crouch-walk or jump, and the hold
-comes from the weapon's data (`hold: Some("shotgun")` gives `run_shotgun`,
-`cidle_shotgun`, ...). A run is blended by the direction of movement
-relative to the facing (`move_yaw`) and paced by speed against
-`run_speed`; walking is the run sequence played slower, as HL2DM's models
-have no separate walk. The held weapon's world model is joined to the
-player's skeleton at the first bone they share, so it moves with the hand.
+**Other players** are posed by the game itself, as HL2DM's client poses
+them (read from its `client.so`; the numbers are in `player.ron`), rather
+than by Bevy's animation graph: `rl_assets::pose` blends sequences the
+engine's way, with per-bone weights, delta sequences (added to the pose,
+before or after it) and *autolayers*. `rl_client::player_anim` decides what
+to blend:
+
+- **Stance and hold.** Idle, run, crouch, crouch-walk or jump, with the
+  weapon in hand's hold (`hold: Some("shotgun")` gives `run_shotgun`,
+  `cidle_shotgun`, ...). Everyone's replica knows what the others hold, so a
+  switch shows; the gravity gun's holds keep both hands on it in every
+  stance. A jump is leaving the ground upwards (falling off a ledge keeps the
+  stance, as in HL2DM) and lasts until landing.
+- **Aim.** Each stance's sequence names an aim matrix (a 3x3 of delta poses
+  on the upper body) that plays along with it, steered by pose parameters:
+  `aim_pitch` is the view's pitch, `aim_yaw` the view's turn from the feet
+  (at most 60 degrees). The torso, arms and weapon lean to where the player
+  looks, up or down, and the weapon points there.
+- **Feet.** While moving, the model faces the view. Standing, the body
+  twists up to 45 degrees before the feet turn (at up to 360 degrees a
+  second, easing out), or after `face_front_time` (3 s) of looking aside.
+  The model is drawn turned to its feet.
+- **Run.** `move_yaw` is the direction of travel relative to the view (it
+  comes round to the view once the player stops); a moving player's
+  sequences play at the speed over the ground divided by the ground speed
+  the animation covers (`Animation::movement`), so the legs keep up.
+- **Gestures.** A shot plays the weapon's `range_<hold>` and a reload its
+  `reload_<hold>` over the stance, on the bones the sequence weights.
+- **Head.** It turns at 130 degrees a second to look at another player
+  within 128 units and in front, else along the view (held to the head's
+  pose parameter range).
+
+The held weapon's world model is joined to the player's skeleton at the
+first bone they share, so it moves with the hand.
+
+`rustlife --dummies 1 --dummy-weapon smg --dummy-look=-40,0 --dummy-do
+fire,crouch` (hidden options) makes the training dummies hold a weapon, look
+somewhere and act, to see these from another player's side.
 
 When a player dies, their model becomes a ragdoll: the animation stops and
 the pelvis, spine, chest, neck, head and limb bones become rigid bodies with

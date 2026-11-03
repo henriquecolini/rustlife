@@ -30,9 +30,9 @@ impl Sequences for Stub {
     }
 
     fn parameter_range(&self, parameter: usize) -> Option<(f32, f32)> {
-        match PARAMETERS.get(parameter)? {
-            &"head_yaw" => Some((-45.0, 45.0)),
-            &"head_pitch" => Some((-20.0, 23.0)),
+        match *PARAMETERS.get(parameter)? {
+            "head_yaw" => Some((-45.0, 45.0)),
+            "head_pitch" => Some((-20.0, 23.0)),
             _ => Some((-180.0, 180.0)),
         }
     }
@@ -276,7 +276,7 @@ fn a_turning_body_carries_the_head_which_turns_back() {
     assert!((yaw - (-10.0 - step)).abs() < 1e-3, "{yaw}");
 }
 
-fn frame_input<'a>(hold: &'a str, velocity: Vec3, now: f32) -> FrameInput<'a> {
+fn frame_input(hold: &str, velocity: Vec3, now: f32) -> FrameInput<'_> {
     FrameInput {
         body: body((0.0, 0.0), velocity, now),
         on_ground: true,
