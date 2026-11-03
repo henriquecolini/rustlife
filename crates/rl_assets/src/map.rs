@@ -458,9 +458,13 @@ fn mesh_of(surface: &MapSurface) -> Mesh {
         .map(|&n| coords::direction(n).normalize_or_zero().to_array())
         .collect();
 
+    // The main world keeps its copy too: decals are cut from the map's
+    // triangles, the world's and brush entities' (glass, doors) alike, long
+    // after the mesh has been uploaded. A render-only mesh's data is gone by
+    // then.
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
@@ -534,6 +538,10 @@ mod tests {
         };
         let mesh = mesh_of(&surface);
         assert_eq!(mesh.count_vertices(), 3);
+        assert!(
+            mesh.asset_usage.contains(RenderAssetUsages::MAIN_WORLD),
+            "decals read map meshes after upload"
+        );
         assert!(mesh.attribute(Mesh::ATTRIBUTE_POSITION).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_NORMAL).is_some());
         assert!(mesh.attribute(Mesh::ATTRIBUTE_UV_0).is_some());

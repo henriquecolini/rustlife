@@ -340,23 +340,28 @@ fn build_world_index(
 }
 
 /// Appends every triangle of `mesh` to `out`, in the mesh's own frame.
+///
+/// A mesh whose data has gone to the render world (one made without
+/// `RenderAssetUsages::MAIN_WORLD`) has no triangles to give, and adds none:
+/// the decal is lost rather than the game.
 fn mesh_triangles(mesh: &Mesh, out: &mut Vec<WorldTriangle>) {
-    let Some(VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    let Ok(Some(VertexAttributeValues::Float32x3(positions))) =
+        mesh.try_attribute_option(Mesh::ATTRIBUTE_POSITION)
     else {
         return;
     };
     let positions: Vec<Vec3> = positions.iter().map(|p| Vec3::from_array(*p)).collect();
-    let lightmap: Option<Vec<Vec2>> = match mesh.attribute(Mesh::ATTRIBUTE_UV_1) {
-        Some(VertexAttributeValues::Float32x2(uvs)) => {
+    let lightmap: Option<Vec<Vec2>> = match mesh.try_attribute_option(Mesh::ATTRIBUTE_UV_1) {
+        Ok(Some(VertexAttributeValues::Float32x2(uvs))) => {
             Some(uvs.iter().map(|uv| Vec2::from_array(*uv)).collect())
         }
         _ => None,
     };
-    let indices: Vec<usize> = match mesh.indices() {
-        Some(Indices::U16(indices)) => indices.iter().map(|&i| usize::from(i)).collect(),
-        Some(Indices::U32(indices)) => indices.iter().map(|&i| i as usize).collect(),
-        None => (0..positions.len()).collect(),
+    let indices: Vec<usize> = match mesh.try_indices_option() {
+        Ok(Some(Indices::U16(indices))) => indices.iter().map(|&i| usize::from(i)).collect(),
+        Ok(Some(Indices::U32(indices))) => indices.iter().map(|&i| i as usize).collect(),
+        Ok(None) => (0..positions.len()).collect(),
+        Err(_) => return,
     };
     for triangle in indices.as_chunks::<3>().0 {
         let Some(a) = positions.get(triangle[0]).copied() else {
@@ -893,6 +898,33 @@ mod tests {
                 lightmap: Some([corners[a], corners[b], corners[c]].map(lightmap)),
             })
             .to_vec()
+    }
+
+    /// One triangle, as a mesh kept for the render world only.
+    fn render_only_triangle() -> Mesh {
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            vec![[0.0_f32, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]],
+        )
+    }
+
+    #[test]
+    fn a_mesh_gives_its_triangles_until_it_is_uploaded() {
+        let mut mesh = render_only_triangle();
+        let mut triangles = Vec::new();
+        mesh_triangles(&mesh, &mut triangles);
+        assert_eq!(triangles.len(), 1);
+
+        // What render-world extraction does to a mesh that is not kept in
+        // the main world (shooting glass crashed the game on this).
+        mesh.take_gpu_data().expect("first extraction");
+        let mut triangles = Vec::new();
+        mesh_triangles(&mesh, &mut triangles);
+        assert!(triangles.is_empty());
     }
 
     fn on_floor(size: Vec2) -> DecalBox {
