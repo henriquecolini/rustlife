@@ -148,9 +148,15 @@ mod tests {
         let out: Vec<[f32; 2]> = (0..SAMPLE_RATE as usize / 2)
             .map(|n| outside.process(if n == 0 { [1.0, 1.0] } else { [0.0; 2] }))
             .collect();
-        let echo = out.iter().position(|f| f[0].abs() > 0.05).expect("an echo");
-        assert!(echo > units::samples(290.0), "after the delay: {echo}");
-        assert_eq!(out[echo][0], out[echo][1], "both channels alike");
+        let delay = units::samples(290.0);
+        let early: f32 = out[..delay / 2].iter().map(|f| f[0].abs()).sum();
+        let echo: f32 = out[delay..].iter().map(|f| f[0].abs()).sum();
+        assert!(early > 0.5, "the sound passes: {early}");
+        assert!(echo > 0.1, "and echoes after the delay: {echo}");
+        assert!(
+            out.iter().all(|f| (f[0] - f[1]).abs() < 1e-9),
+            "both channels alike"
+        );
     }
 
     #[test]

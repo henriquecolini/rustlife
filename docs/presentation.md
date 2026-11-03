@@ -199,9 +199,10 @@ rustlife mixes sounds itself (`rl_audio`), as HL2DM's engine does in
 - **Walls.** A sound behind a wall is 2.7 dB quieter, sliding over a
   quarter of a second.
 - **The room.** A share of every sound goes to the room effect: from the
-  preset's `mix_min` beside the listener to its `mix_max` 1440 units off
-  (distant sounds are mostly echo), less for sounds quieter than its
-  `db_min`. `#` waves and the menus' sounds stay dry. A distance-variant
+  preset's `mix_min` beside the listener to its `mix_max` 1440 units off,
+  less for sounds quieter than its `db_min`. The effect passes the sound
+  through and adds the room to it, so distant sounds carry more
+  reverberation without losing their own sound. `#` waves and the menus' sounds stay dry. A distance-variant
   wave (`^`: a stereo wave of the sound near by on the left and far off on
   the right) cross-fades from near to far between 240 and 1320 units.
 
@@ -230,8 +231,11 @@ templates).
 
 Not HL2DM's own: the inside of each processor, built after the preset
 file's description of its parameters with standard comb, all-pass and
-biquad designs and each reverberator scaled to come out as loud as it goes
-in (as the file says the engine's are set); how cluttered a place is,
+biquad designs. rustlife tunes them towards reverberation rather than
+echo: a reverberator runs at least six delays, smears them through four
+all-passes, and keeps its tail 6 dB under the sound (so a sound beside the
+listener has its room about 16 dB under it, a distant one about 8 dB);
+a delay's echoes are a further 12 dB down; how cluttered a place is,
 estimated from the props the level traces hit before a wall; and the
 effects no room uses (pitch shifting, chorus, envelopes), which pass sound
 through. There is no Doppler, no surround output, and none of the engine's

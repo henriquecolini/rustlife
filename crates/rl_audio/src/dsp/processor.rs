@@ -13,6 +13,20 @@ use crate::SAMPLE_RATE;
 
 /// Diffusor delays, milliseconds, before scaling ("13 ms to 41 ms").
 const DIFFUSOR_MS: [f32; 5] = [13.0, 17.0, 23.0, 31.0, 41.0];
+/// Level of a reverberator's tail under the sound that sets it off, its
+/// energy in all (-6 dB). The sound itself passes through at full level,
+/// as Source's delays pass their input (`y(n) = w(n)`).
+const TAIL: f32 = 0.5;
+/// Fewest delays a reverberator runs.
+const MIN_COMBS: usize = 6;
+/// All-passes (ms) after a reverberator's delays, and their feedback:
+/// they turn its repeats into a smooth tail (rustlife's, for a reverb
+/// with little echo).
+const WASH_MS: [f32; 4] = [12.6, 10.0, 7.7, 5.1];
+const WASH_FEEDBACK: f32 = 0.5;
+/// Level of a delay's echoes under the sound that sets them off (-12 dB):
+/// rooms should reverberate, not echo.
+const ECHO: f32 = 0.25;
 /// Spread of the delays a reverb dimension makes when `ftaps` is 0.
 const TAP_SPREAD: f32 = 0.07;
 
@@ -164,8 +178,11 @@ impl Delay {
                     Some(filter) => filter.process(delayed),
                     None => delayed,
                 };
-                self.line.write(x + self.feedback * back);
-                delayed
+                // Source's `w(n) = x(n) + a·w(n - D)`, `y(n) = w(n)`: the
+                // sound, then its echoes.
+                let w = x + self.feedback * back;
+                self.line.write(w);
+                x + (w - x) * ECHO
             }
         };
         if !self.taps.is_empty() {
@@ -193,6 +210,8 @@ pub(crate) struct Reverb {
     paths: Vec<ReverbPath>,
     gain: f32,
     out_filter: Option<OnePole>,
+    /// All-passes that smear the combs' repeats into a wash.
+    diffusion: Vec<AllPass>,
 }
 
 #[derive(Debug, Clone)]
@@ -258,11 +277,12 @@ impl Reverb {
         } else {
             (None, cutoff)
         };
-        let count = (p[2].max(1.0) as usize).min(12);
+        // Never fewer than `MIN_COMBS`: a few long combs repeat audibly.
+        let count = (p[2].max(1.0) as usize).clamp(MIN_COMBS, 12);
         let dimensions = [(p[9], p[12]), (p[10], p[13]), (p[11], p[14])];
         let mut paths = Vec::new();
         if dimensions.iter().any(|&(size, _)| size > 0.0) {
-            let per = count.div_ceil(3).max(1);
+            let per = count.div_ceil(3).max(2);
             let spread = if p[15] > 0.0 { p[15] } else { TAP_SPREAD };
             for (size, feedback) in dimensions.into_iter().filter(|&(size, _)| size > 0.0) {
                 let predelay = (feedback < 0.0).then(|| samples(size));
@@ -299,12 +319,11 @@ impl Reverb {
                 ));
             }
         }
-        // As loud out as in, as the preset file says HL2DM's processors
-        // are set: the paths add in power. (The preset's own gain
-        // parameter is the engine's way to get there and is not needed.)
+        // The paths add in power: scaled together to unit energy, then
+        // to `TAIL` under the sound itself.
         let energy: f32 = paths.iter().map(|path| path.energy).sum();
         let gain = if energy > 0.0 {
-            energy.sqrt().recip()
+            TAIL * energy.sqrt().recip()
         } else {
             0.0
         };
@@ -316,6 +335,10 @@ impl Reverb {
             } else {
                 cutoff.map(OnePole::new)
             },
+            diffusion: WASH_MS
+                .iter()
+                .map(|&ms| AllPass::new(samples(ms), WASH_FEEDBACK))
+                .collect(),
         }
     }
 
@@ -332,11 +355,14 @@ impl Reverb {
             };
             sum += path.comb.process(input);
         }
-        let out = sum * self.gain;
-        match &mut self.out_filter {
-            Some(filter) => filter.process(out),
-            None => out,
+        let mut tail = sum * self.gain;
+        if let Some(filter) = &mut self.out_filter {
+            tail = filter.process(tail);
         }
+        x + self
+            .diffusion
+            .iter_mut()
+            .fold(tail, |signal, stage| stage.process(signal))
     }
 }
 
@@ -480,25 +506,22 @@ mod tests {
     }
 
     #[test]
-    fn an_outdoor_delay_echoes_after_its_delay() {
+    fn an_outdoor_delay_passes_the_sound_then_echoes_it() {
         // Preset 20: DLY LOWPASS 300 ms, feedback 0.5, gain 0.84.
         let mut delay = Processor::new(&def(
             ProcessorKind::Delay,
             &[2.0, 300.0, 0.5, 0.84, 0.0, 2000.0],
         ));
         let echo = samples(300.0);
-        let out: Vec<f32> = (0..echo * 2 + 10)
+        let out: Vec<f32> = (0..echo * 3)
             .map(|n| delay.process(if n == 0 { 1.0 } else { 0.0 }))
             .collect();
-        assert!(
-            out[..echo].iter().all(|&y| y == 0.0),
-            "silent until the echo"
-        );
-        assert!((out[echo] - 0.84).abs() < 1e-6);
-        assert!(
-            out[echo * 2..].iter().any(|&y| y > 0.0),
-            "and again, fainter"
-        );
+        assert!((out[0] - 0.84).abs() < 1e-6, "the sound itself");
+        assert!(out[1..echo].iter().all(|&y| y == 0.0), "then nothing");
+        let first: f32 = out[echo..echo * 2].iter().sum();
+        let second: f32 = out[echo * 2..].iter().sum();
+        assert!((first - 0.42 * ECHO).abs() < 0.01, "a faint echo: {first}");
+        assert!(second > 0.0 && second < first, "and fainter again");
     }
 
     #[test]
