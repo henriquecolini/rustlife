@@ -28,6 +28,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
 use rl_data::{FireConfig, Shot};
 use rl_sim::combat::hitscan::Struck;
+use rl_sim::simulation::{PlayerId, TickEvents};
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Arsenal, Inventory, Mode, Phase, ReloadStep, WeaponId};
 
@@ -354,14 +355,18 @@ fn prime_activity(mode: Mode) -> &'static str {
 }
 
 /// The activity a fire mode's shot plays. A grenade let go of crouching is
-/// rolled (`ducked`), standing it is lobbed.
+/// rolled (`ducked`), standing it is lobbed. A machine gun's primary fire
+/// plays its recoil sequences as the burst goes on (`burst`: the shots fired
+/// so far, this one included).
 fn fire_activity(
     fire: &FireConfig,
     mode: Mode,
     struck: Option<Struck>,
     ducked: bool,
+    burst: u8,
 ) -> &'static str {
     match (&fire.shot, mode) {
+        (_, Mode::Primary) if fire.burst_sequences => burst_activity(burst),
         (_, Mode::Primary) if fire.on_release => "ACT_VM_THROW",
         (_, Mode::Secondary) if fire.on_release && !ducked => "ACT_VM_HAULBACK",
         (Shot::Melee(_), _) => match struck {
@@ -370,6 +375,18 @@ fn fire_activity(
         },
         (_, Mode::Primary) => "ACT_VM_PRIMARYATTACK",
         (_, Mode::Secondary) => "ACT_VM_SECONDARYATTACK",
+    }
+}
+
+/// HL2's machine guns' `GetPrimaryAttackActivity`: the first shot of a burst
+/// plays `ACT_VM_PRIMARYATTACK`, the next `ACT_VM_RECOIL1` and `ACT_VM_RECOIL2`,
+/// and every one after `ACT_VM_RECOIL3`.
+fn burst_activity(burst: u8) -> &'static str {
+    match burst {
+        0 | 1 => "ACT_VM_PRIMARYATTACK",
+        2 => "ACT_VM_RECOIL1",
+        3 => "ACT_VM_RECOIL2",
+        _ => "ACT_VM_RECOIL3",
     }
 }
 
@@ -478,7 +495,7 @@ fn inventory_activity(
             if let Some(fire) = arsenal.fire(view.weapon, mode) {
                 view.thrown = fire.on_release;
                 wanted = Some(if fire.on_release {
-                    fire_activity(fire, mode, None, ducked)
+                    fire_activity(fire, mode, None, ducked, 0)
                 } else {
                     "ACT_VM_FIDGET"
                 });
@@ -527,6 +544,70 @@ fn follow_up(
     } else if let Some(sequence) = animated.activity(act("ACT_VM_IDLE")) {
         player.play(sequence, 0.0, 1.0);
     }
+}
+
+/// The local player, as far as the activities of their shots go.
+struct Shooter {
+    id: PlayerId,
+    /// Crouching (a grenade is rolled).
+    ducked: bool,
+    /// The shots of the burst so far (see [`Inventory::burst`]).
+    burst: u8,
+    /// A SLAM's mode and detonator, if one is in hand.
+    slam: Option<(bool, bool)>,
+}
+
+/// The activity the shooter's shots and Gravity Gun actions of one tick
+/// (`events`) call for, or what was `wanted` before them. A grenade thrown
+/// or a SLAM charge set is noted on `view`: the next comes up when it is
+/// over.
+fn event_activity(
+    view: &mut ViewModel,
+    events: &TickEvents,
+    arsenal: &Arsenal,
+    shooter: &Shooter,
+    mut wanted: Option<&'static str>,
+) -> Option<&'static str> {
+    let mine = |id| id == shooter.id;
+    for &(id, weapon, mode) in &events.fired {
+        if !mine(id) || weapon != view.weapon {
+            continue;
+        }
+        let Some(fire) = arsenal.fire(weapon, mode) else {
+            continue;
+        };
+        let struck = events
+            .shots
+            .iter()
+            .find(|shot| mine(shot.player))
+            .map(|shot| shot.trace.struck);
+        // A grenade's throw began when the button was let go.
+        if fire.on_release {
+            view.thrown = true;
+            continue;
+        }
+        wanted = Some(fire_activity(
+            fire,
+            mode,
+            struck,
+            shooter.ducked,
+            shooter.burst,
+        ));
+        // A SLAM brings up its next charge when it is done (a mine goes on
+        // in two parts first).
+        if let Some((sticking, _)) = shooter.slam {
+            view.thrown = true;
+            if sticking {
+                view.queue = vec!["ACT_SLAM_STICKWALL_ATTACH2"];
+            }
+        }
+    }
+    if wanted.is_none()
+        && let Some(&(_, event)) = events.tools.iter().rev().find(|&&(id, _)| mine(id))
+    {
+        wanted = Some(tool_activity(event));
+    }
+    wanted
 }
 
 /// Plays the view model's activities as the local player acts.
@@ -592,40 +673,14 @@ pub(crate) fn animate_view_model(
             wanted = Some(prime_activity(mode));
         }
     }
+    let shooter = Shooter {
+        id: local.id,
+        ducked,
+        burst: inventory.map_or(0, Inventory::burst),
+        slam,
+    };
     for Ticked(events) in ticks.read() {
-        let mine = |id| id == local.id;
-        for &(id, weapon, mode) in &events.fired {
-            if !mine(id) || weapon != view.weapon {
-                continue;
-            }
-            let Some(fire) = sim.arsenal().fire(weapon, mode) else {
-                continue;
-            };
-            let struck = events
-                .shots
-                .iter()
-                .find(|shot| mine(shot.player))
-                .map(|shot| shot.trace.struck);
-            // A grenade's throw began when the button was let go.
-            if fire.on_release {
-                view.thrown = true;
-                continue;
-            }
-            wanted = Some(fire_activity(fire, mode, struck, ducked));
-            // A SLAM brings up its next charge when it is done (a mine goes
-            // on in two parts first).
-            if let Some((sticking, _)) = slam {
-                view.thrown = true;
-                if sticking {
-                    view.queue = vec!["ACT_SLAM_STICKWALL_ATTACH2"];
-                }
-            }
-        }
-        if wanted.is_none()
-            && let Some(&(_, event)) = events.tools.iter().rev().find(|&&(id, _)| mine(id))
-        {
-            wanted = Some(tool_activity(event));
-        }
+        wanted = event_activity(&mut view, events, sim.arsenal(), &shooter, wanted);
     }
     if let Some(activity) = wanted
         && let Some(sequence) = animated.activity(act(activity))
@@ -697,7 +752,43 @@ mod tests {
             ammo: rl_data::FireAmmo::Unlimited,
             shot,
             on_release,
+            burst_sequences: false,
+            kick: None,
         }
+    }
+
+    #[test]
+    fn a_machine_guns_burst_moves_through_its_recoil_sequences() {
+        let data = rl_data::GameData::builtin().expect("data");
+        let rifle = data.weapons.get("rifle").expect("rifle");
+        let primary = rifle.primary.as_ref().expect("primary");
+        let played: Vec<_> = (1..=6)
+            .map(|burst| fire_activity(primary, Mode::Primary, None, false, burst))
+            .collect();
+        assert_eq!(
+            played,
+            [
+                "ACT_VM_PRIMARYATTACK",
+                "ACT_VM_RECOIL1",
+                "ACT_VM_RECOIL2",
+                "ACT_VM_RECOIL3",
+                "ACT_VM_RECOIL3",
+                "ACT_VM_RECOIL3"
+            ]
+        );
+        // The energy ball is no machine gun's.
+        let secondary = rifle.secondary.as_ref().expect("secondary");
+        assert_eq!(
+            fire_activity(secondary, Mode::Secondary, None, false, 3),
+            "ACT_VM_SECONDARYATTACK"
+        );
+        // Nor is the magnum.
+        let magnum = data.weapons.get("magnum").expect("magnum");
+        let shot = magnum.primary.as_ref().expect("primary");
+        assert_eq!(
+            fire_activity(shot, Mode::Primary, None, false, 3),
+            "ACT_VM_PRIMARYATTACK"
+        );
     }
 
     #[test]
@@ -712,11 +803,11 @@ mod tests {
             false,
         );
         assert_eq!(
-            fire_activity(&swing, Mode::Primary, Some(Struck::World), false),
+            fire_activity(&swing, Mode::Primary, Some(Struck::World), false, 0),
             "ACT_VM_HITCENTER"
         );
         assert_eq!(
-            fire_activity(&swing, Mode::Primary, Some(Struck::Nothing), false),
+            fire_activity(&swing, Mode::Primary, Some(Struck::Nothing), false, 0),
             "ACT_VM_MISSCENTER"
         );
     }
@@ -730,15 +821,15 @@ mod tests {
         assert_eq!(prime_activity(Mode::Primary), "ACT_VM_PULLBACK_HIGH");
         assert_eq!(prime_activity(Mode::Secondary), "ACT_VM_PULLBACK_LOW");
         assert_eq!(
-            fire_activity(overhand, Mode::Primary, None, false),
+            fire_activity(overhand, Mode::Primary, None, false, 0),
             "ACT_VM_THROW"
         );
         assert_eq!(
-            fire_activity(roll, Mode::Secondary, None, true),
+            fire_activity(roll, Mode::Secondary, None, true, 0),
             "ACT_VM_SECONDARYATTACK"
         );
         assert_eq!(
-            fire_activity(roll, Mode::Secondary, None, false),
+            fire_activity(roll, Mode::Secondary, None, false, 0),
             "ACT_VM_HAULBACK"
         );
     }

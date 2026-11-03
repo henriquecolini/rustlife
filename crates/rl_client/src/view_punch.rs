@@ -1,5 +1,9 @@
 //! The view punch: a kick of the view that springs back, as the engine's
-//! `CBasePlayer::ViewPunch` gives it.
+//! `CBasePlayer::ViewPunch` gives it, and the rest of what a shot with a
+//! [`ViewKick`] does to its shooter's view: the aim jolted (the engine's
+//! `SnapEyeAngles`, which turns the aim itself and leaves it turned) and a
+//! flash of the screen (see [`crate::screen_fade`]). The Pulse Rifle's energy
+//! ball does all three.
 //!
 //! A punch does not move the view by an angle at once: it gives the angle a
 //! velocity (twenty times the punch, in degrees per second), and a damped
@@ -13,10 +17,14 @@
 //! constant 65.
 
 use bevy::prelude::*;
+use rl_data::ViewKick;
 use rl_sim::rng::Rng;
 
 use crate::AppState;
+use crate::net::Game;
 use crate::physcannon_impact::PhyscannonImpact;
+use crate::player::{LocalPlayer, PITCH_LIMIT, Ticked, ViewAngles};
+use crate::screen_fade::ScreenFade;
 
 /// How hard a punch is thrown: degrees per second of velocity per degree
 /// punched.
@@ -74,17 +82,83 @@ impl ViewPunch {
     }
 }
 
-/// Kicks the view of the player who throws something with the Gravity Gun.
+/// Kicks the view of the player who throws something with the Gravity Gun,
+/// or fires a shot with a kick.
 pub(crate) struct ViewPunchPlugin;
 
 impl Plugin for ViewPunchPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ViewPunch>().add_systems(
             Update,
-            (kick_on_launch, settle)
+            (kick_on_launch, kick_on_fire, settle)
                 .chain()
                 .run_if(in_state(AppState::InGame)),
         );
+    }
+}
+
+/// What one shot's kick comes to: the punch (pitch, yaw, roll, degrees),
+/// the turn of the aim (pitch, yaw, degrees) and the flash, if any.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Kicked {
+    punch: Vec3,
+    jolt: (f32, f32),
+    flash: Option<ScreenFade>,
+}
+
+/// Picks the numbers of one shot's `kick`.
+fn roll_kick(kick: &ViewKick, rng: &mut Rng) -> Kicked {
+    let mut pick = |(low, high): (i32, i32)| {
+        let span = usize::try_from(high - low).unwrap_or(0);
+        // A whole number of degrees, a few dozen at most: exact as a float.
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+        let picked = (low + rng.below(span + 1) as i32) as f32;
+        picked
+    };
+    let punch = Vec3::new(pick(kick.pitch), pick(kick.yaw), 0.0);
+    let jolt = (pick((-kick.jolt, kick.jolt)), pick((-kick.jolt, kick.jolt)));
+    let flash = kick.flash.map(|flash| ScreenFade {
+        color: [1.0; 3],
+        alpha: flash.alpha,
+        seconds: flash.seconds,
+    });
+    Kicked { punch, jolt, flash }
+}
+
+/// Kicks the local player's view for each of their shots whose fire mode
+/// has a [`ViewKick`]. The jolt turns the aim the player sends the server,
+/// as the engine's does.
+fn kick_on_fire(
+    mut ticks: MessageReader<Ticked>,
+    game: Game,
+    local: Option<Res<LocalPlayer>>,
+    mut punch: ResMut<ViewPunch>,
+    mut angles: ResMut<ViewAngles>,
+    mut fades: MessageWriter<ScreenFade>,
+    mut rng: Local<Option<Rng>>,
+) {
+    let (Some(sim), Some(local)) = (game.sim(), local) else {
+        ticks.clear();
+        return;
+    };
+    let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x6b69_636b]));
+    for Ticked(events) in ticks.read() {
+        for &(who, weapon, mode) in &events.fired {
+            let kick = sim
+                .arsenal()
+                .fire(weapon, mode)
+                .and_then(|fire| fire.kick.as_ref());
+            let Some(kick) = kick.filter(|_| who == local.id) else {
+                continue;
+            };
+            let kicked = roll_kick(kick, rng);
+            punch.punch(kicked.punch);
+            angles.pitch = (angles.pitch + kicked.jolt.0).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+            angles.yaw = (angles.yaw + kicked.jolt.1).rem_euclid(360.0);
+            if let Some(flash) = kicked.flash {
+                fades.write(flash);
+            }
+        }
     }
 }
 
@@ -177,6 +251,39 @@ mod tests {
             (a.0 - b.0).abs() < 0.05 && (a.1 - b.1).abs() < 0.05,
             "{a:?} {b:?}"
         );
+    }
+
+    #[test]
+    fn the_energy_balls_kick_is_the_games() {
+        let data = rl_data::GameData::builtin().expect("data");
+        let rifle = data.weapons.get("rifle").expect("rifle");
+        let kick = rifle
+            .secondary
+            .as_ref()
+            .and_then(|fire| fire.kick)
+            .expect("the energy ball kicks");
+        let mut rng = Rng::seeded(&[1]);
+        let rolls: Vec<Kicked> = (0..400).map(|_| roll_kick(&kick, &mut rng)).collect();
+        let pitches: Vec<f32> = rolls.iter().map(|kicked| kicked.punch.x).collect();
+        let yaws: Vec<f32> = rolls.iter().map(|kicked| kicked.punch.y).collect();
+        let jolts: Vec<f32> = rolls
+            .iter()
+            .flat_map(|kicked| [kicked.jolt.0, kicked.jolt.1])
+            .collect();
+        let every = |values: &[f32], wanted: std::ops::RangeInclusive<i32>| {
+            let mut seen: Vec<i32> = values.iter().map(|&value| value as i32).collect();
+            seen.sort_unstable();
+            seen.dedup();
+            seen == wanted.collect::<Vec<_>>()
+        };
+        // Up by 8 to 12 degrees, 1 or 2 to the side, the aim off by up to 4.
+        assert!(every(&pitches, -12..=-8), "{pitches:?}");
+        assert!(every(&yaws, 1..=2), "{yaws:?}");
+        assert!(every(&jolts, -4..=4), "{jolts:?}");
+        let flash = rolls[0].flash.expect("a flash");
+        assert_eq!(flash.color, [1.0; 3]);
+        assert!((flash.alpha - 64.0 / 255.0).abs() < 1e-3);
+        assert!((flash.seconds - 0.1).abs() < 1e-6);
     }
 
     #[test]

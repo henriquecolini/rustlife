@@ -43,7 +43,7 @@ use crate::world::StartSpawn;
 use crate::zoom::Zoom;
 
 /// Look-up/down limit, degrees (Source's default `cl_pitchup`/`down`).
-const PITCH_LIMIT: f32 = 89.0;
+pub(crate) const PITCH_LIMIT: f32 = 89.0;
 /// Height of the camera above a dead player's feet, units.
 const DEAD_EYE_HEIGHT: f32 = 12.0;
 

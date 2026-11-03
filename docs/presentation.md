@@ -125,9 +125,22 @@ a second camera with a narrower field of view (Source's 54° across 4:3)
 and a depth buffer of its own, so it never sinks into walls. It plays
 `ACT_VM_DRAW` when the weapon comes up, `ACT_VM_PRIMARYATTACK` /
 `SECONDARYATTACK` (a swing plays `HITCENTER` or `MISSCENTER`) on firing,
-`ACT_VM_RELOAD` on reloading, and `ACT_VM_IDLE` in between. These events
-come from the local player's prediction, so they play without waiting for
-the server.
+`ACT_VM_FIDGET` while a shot charges (the Pulse Rifle's shake before the
+energy ball), `ACT_VM_RELOAD` on reloading, and `ACT_VM_IDLE` in between. A
+fire mode with `burst_sequences` (the SMG's and Pulse Rifle's primary)
+plays `ACT_VM_RECOIL1`, `2` and `3` for the second, third and later shots
+of a held burst, as HL2DM's machine guns do. These events come from the
+local player's prediction, so they play without waiting for the server.
+The sounds the view model's sequences name themselves (`AE_CL_PLAYSOUND`:
+the Pulse Rifle's reload clicks, the magnum's loader and cylinder) play as
+the sequence passes them.
+
+A fire mode's `kick` acts on its shooter's view: a punch that springs back
+(`pitch` and `yaw` ranges, whole degrees), a `jolt` that turns the aim
+itself by up to that many degrees each way, and a white `flash` of the
+screen. The energy ball's is HL2DM's `DelayedAttack`: up 8 to 12 degrees,
+1 or 2 to the side, the aim off by up to 4, and a flash of alpha 64/255
+over a tenth of a second.
 
 ## Sound
 

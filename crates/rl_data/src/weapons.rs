@@ -260,6 +260,51 @@ pub struct FireConfig {
     /// drawn back) and nothing is used up until it is released.
     #[serde(default)]
     pub on_release: bool,
+    /// The view model's firing sequence follows how many shots the burst
+    /// has fired (the button held since the first): `ACT_VM_PRIMARYATTACK`
+    /// for the first, then `ACT_VM_RECOIL1`, `ACT_VM_RECOIL2` and
+    /// `ACT_VM_RECOIL3` from the fourth on, as HL2's machine guns pick
+    /// them (`GetPrimaryAttackActivity`). Otherwise every shot plays the
+    /// first.
+    #[serde(default)]
+    pub burst_sequences: bool,
+    /// What a shot does to its shooter's view, if anything.
+    #[serde(default)]
+    pub kick: Option<ViewKick>,
+}
+
+/// What a shot does to the view of whoever fired it, as HL2's weapons do it
+/// (the Pulse Rifle's energy ball, `CWeaponAR2::DelayedAttack`): a punch,
+/// which kicks the view and lets it spring back (`ViewPunch`); a jolt, which
+/// turns the aim itself and leaves it turned (`SnapEyeAngles`); and a flash
+/// of the screen (`UTIL_ScreenFade`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewKick {
+    /// The punch's pitch, degrees, negative kicking the view up: a whole
+    /// number between the two, both included, picked anew for every shot.
+    #[serde(default)]
+    pub pitch: (i32, i32),
+    /// The punch's yaw, degrees, picked the same way.
+    #[serde(default)]
+    pub yaw: (i32, i32),
+    /// The aim turns by up to this many whole degrees of pitch and of yaw,
+    /// either way, picked for every shot.
+    #[serde(default)]
+    pub jolt: i32,
+    /// A white sheet over the screen that fades away.
+    #[serde(default)]
+    pub flash: Option<ScreenFlash>,
+}
+
+/// A white flash of the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenFlash {
+    /// How opaque it starts, `0..=1`.
+    pub alpha: f32,
+    /// Seconds it takes to fade to nothing.
+    pub seconds: f32,
 }
 
 /// What a shot uses up.
@@ -854,6 +899,9 @@ impl WeaponConfig {
         if let Some(click) = fire.click_interval {
             check.positive(&format!("{field}.click_interval"), click);
         }
+        if let Some(kick) = &fire.kick {
+            validate_kick(check, &format!("{field}.kick"), kick);
+        }
         match &fire.ammo {
             FireAmmo::Unlimited => {}
             FireAmmo::Clip(count) => {
@@ -891,6 +939,27 @@ impl WeaponConfig {
             Shot::Projectile(projectile) => validate_projectile(check, &shot, projectile),
             Shot::Manipulator => {}
         }
+    }
+}
+
+fn validate_kick(check: &mut Validator, field: &str, kick: &ViewKick) {
+    for (name, (low, high)) in [("pitch", kick.pitch), ("yaw", kick.yaw)] {
+        if low > high {
+            check.fail(
+                &format!("{field}.{name}"),
+                &format!("the first must not exceed the second, got ({low}, {high})"),
+            );
+        }
+    }
+    if kick.jolt < 0 {
+        check.fail(
+            &format!("{field}.jolt"),
+            &format!("must not be negative, got {}", kick.jolt),
+        );
+    }
+    if let Some(flash) = &kick.flash {
+        check.range(&format!("{field}.flash.alpha"), flash.alpha, 0.0, 1.0);
+        check.positive(&format!("{field}.flash.seconds"), flash.seconds);
     }
 }
 
@@ -1005,6 +1074,8 @@ mod tests {
                 click_interval: None,
                 charge: 0.0,
                 on_release: false,
+                burst_sequences: false,
+                kick: None,
             }),
             secondary: None,
             deploy_time: 0.5,
@@ -1062,6 +1133,31 @@ mod tests {
         assert_eq!(
             problems(&weapon),
             ["slot", "primary.shot.pellets", "primary.shot.cone"]
+        );
+    }
+
+    #[test]
+    fn a_kick_needs_ordered_ranges_and_a_real_flash() {
+        let mut weapon = pistol();
+        if let Some(fire) = weapon.primary.as_mut() {
+            fire.kick = Some(ViewKick {
+                pitch: (-8, -12),
+                yaw: (1, 2),
+                jolt: -1,
+                flash: Some(ScreenFlash {
+                    alpha: 1.5,
+                    seconds: 0.0,
+                }),
+            });
+        }
+        assert_eq!(
+            problems(&weapon),
+            [
+                "primary.kick.pitch",
+                "primary.kick.jolt",
+                "primary.kick.flash.alpha",
+                "primary.kick.flash.seconds"
+            ]
         );
     }
 

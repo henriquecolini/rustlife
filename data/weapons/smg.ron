@@ -17,6 +17,8 @@ Weapon(
     primary: Some((
         interval: 0.075,
         automatic: true,
+        // HL2DM's machine guns pick fire01..fire04 by the burst's shots.
+        burst_sequences: true,
         ammo: Clip(1),
         shot: Hitscan((
             pellets: 1,

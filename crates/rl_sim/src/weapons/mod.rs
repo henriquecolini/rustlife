@@ -324,6 +324,10 @@ pub struct Inventory {
     next: [f32; 2],
     /// Seconds since the weapon in hand last fired.
     since_shot: f32,
+    /// Primary shots fired since the primary button went down (HL2's
+    /// machine guns' `m_nShotsFired`): it starts again from nothing once
+    /// the button is up. Saturates.
+    burst: u8,
     /// Buttons held last tick, for semi-automatic fire and reload presses.
     old_buttons: Buttons,
     /// The step of the reload in progress.
@@ -360,6 +364,7 @@ impl Inventory {
             phase: Phase::Ready,
             next: [0.0; 2],
             since_shot: f32::MAX,
+            burst: 0,
             old_buttons: Buttons::NONE,
             reload: ReloadStep::Whole,
             penalty: 0.0,
@@ -407,6 +412,13 @@ impl Inventory {
     /// it drawn. Their own inventory never needs this.
     pub fn set_held(&mut self, weapon: Option<WeaponId>) {
         self.active = weapon;
+    }
+
+    /// Primary shots fired since the primary button went down, this tick's
+    /// included: 1 for the first shot of a burst.
+    #[must_use]
+    pub fn burst(&self) -> u8 {
+        self.burst
     }
 
     /// What the weapon in hand is doing.
@@ -673,6 +685,7 @@ impl Inventory {
     /// Forgets what the weapon in hand was in the middle of.
     fn put_away(&mut self) {
         self.since_shot = f32::MAX;
+        self.burst = 0;
         self.reload = ReloadStep::Whole;
         self.penalty = 0.0;
         self.latch.pump_due = false;
@@ -823,6 +836,9 @@ impl Inventory {
         let pressed = Buttons::from_bits(cmd.buttons.bits() & !self.old_buttons.bits());
         let held = cmd.buttons;
         self.old_buttons = held;
+        if !held.contains(Buttons::ATTACK) {
+            self.burst = 0;
+        }
         for next in &mut self.next {
             *next = (*next - dt).max(-dt);
         }
@@ -1060,6 +1076,9 @@ impl Inventory {
             self.next[1 - mode as usize] = carried + fire.other_interval;
         }
         self.since_shot = 0.0;
+        if mode == Mode::Primary {
+            self.burst = self.burst.saturating_add(1);
+        }
         if let Shot::Hitscan(bullets) = &fire.shot
             && let Some(accuracy) = &bullets.accuracy
         {

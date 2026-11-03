@@ -142,6 +142,8 @@ an entity class to it so maps place it (`entity_map.ron`):
 | `weight`, `auto_switch_to` | HL2's weight, which picks the weapon brought up when the one in hand runs dry (the heaviest with ammo); `false` keeps a weapon from ever being chosen |
 | fire mode `ammo` | `Unlimited`, `Clip(n)` (rounds from the clip), `Reserve(ammo, count)` (rounds from carried ammo) |
 | fire mode `on_release` | `true`: the shot goes off when the button is let go, the weapon primed while it is held (a grenade) |
+| fire mode `burst_sequences` | `true`: the view model plays `ACT_VM_RECOIL1..3` for the later shots of a held burst (HL2DM's machine guns) |
+| fire mode `kick` | `None`, or `(pitch, yaw, jolt, flash)`: a view punch of whole degrees picked in the `pitch` and `yaw` ranges, the aim turned by up to `jolt` degrees each way, and `flash` `None` or `(alpha, seconds)`, a white flash of the screen (the energy ball) |
 | `consumable` | `true`: the weapon is its own ammo, carried only while it has rounds and put away with the last |
 | `icon` | The letter of the weapon's icon in the HUD's icon font (`weapon_icon_font` in `hud.ron`, by default the game's `resource/halflife2.ttf`); the weapon list shows its name alone without one |
 | fire mode `shot` | `Hitscan((pellets, damage, cone, accuracy, range, force))`, `Melee((range, size, damage, force))`, `Projectile((...))`, `Manipulator` |

@@ -91,8 +91,8 @@ pub use validate::Problem;
 pub use weapons::{
     AccuracyConfig, BeamConfig, BlipConfig, ClipConfig, ExplosionConfig, FireAmmo, FireConfig,
     GlowConfig, HitscanConfig, LoadedSkinConfig, MeleeConfig, MissileConfig, ProjectileBodyConfig,
-    ProjectileConfig, ProjectileEffect, Reload, Scorch, Shot, SlamSwitchConfig, WEAPON_SOUNDS,
-    WeaponConfig, WeaponPickupConfig, ZoomConfig,
+    ProjectileConfig, ProjectileEffect, Reload, Scorch, ScreenFlash, Shot, SlamSwitchConfig,
+    ViewKick, WEAPON_SOUNDS, WeaponConfig, WeaponPickupConfig, ZoomConfig,
 };
 
 /// File name of the movement data.

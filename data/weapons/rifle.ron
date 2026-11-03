@@ -1,9 +1,13 @@
 // The Pulse Rifle (HL2's AR2). HL2DM's numbers: 30 rounds of 11 damage every
 // 0.1 s in a 3-degree cone, reloaded in the view model's 1.567 s, drawn in
-// 0.833 s. The alternate fire charges for half a second and launches an
-// energy ball at 1000 units/s that bounces about without losing speed for
-// four seconds, kills whoever it touches outright, and then bursts; the
-// rifle is then busy for a second.
+// 0.833 s. The alternate fire charges for half a second (the view model
+// shakes, `ACT_VM_FIDGET`, to the Combine Guard's charging whine) and launches
+// an energy ball at 1000 units/s that bounces about without losing speed for
+// four seconds, kills whoever it touches outright, and then bursts. The
+// launch flashes the screen white, punches the view up and jolts the aim; the
+// rifle fires again once the launch's 0.7 s sequence is over, and the next
+// ball waits a second (client.so's `CWeaponAR2::SecondaryAttack` and
+// `DelayedAttack`).
 Weapon(
     name: "Pulse Rifle",
     slot: 3,
@@ -18,6 +22,8 @@ Weapon(
         interval: 0.1,
         automatic: true,
         ammo: Clip(1),
+        // IR_fire, then fire2, fire3 and fire4 as the burst goes on.
+        burst_sequences: true,
         shot: Hitscan((
             pellets: 1,
             damage: 11.0,
@@ -28,7 +34,8 @@ Weapon(
     )),
     secondary: Some((
         interval: 1.0,
-        other_interval: 1.0,
+        // The player's next attack waits out IR_fire2.
+        other_interval: 0.7,
         charge: 0.5,
         automatic: true,
         ammo: Reserve(ammo: "rifle_charge", count: 1),
@@ -59,15 +66,27 @@ Weapon(
             // (`effects.ron`'s `combine_ball`).
             effect: Some(CombineBall),
         )),
+        // `ViewPunch(SharedRandomInt(-8, -12), SharedRandomInt(1, 2), 0)`,
+        // `SnapEyeAngles` by `RandomInt(-4, 4)` each way, and a white
+        // `UTIL_ScreenFade` of alpha 64 over a tenth of a second.
+        kick: Some((
+            pitch: (-12, -8),
+            yaw: (1, 2),
+            jolt: 4,
+            flash: Some((alpha: 0.251, seconds: 0.1)),
+        )),
     )),
     deploy_time: 0.833,
     pickup: Some((ammo: 30, owned_ammo: 60, respawn: 20.0, radius: 24.0)),
     sounds: {
         "fire": "Weapon_AR2.Single",
         "fire2": "Weapon_IRifle.Single",
+        // The script's `reload`; the model's reload sequence adds the
+        // `Reload_Rotate` and `Reload_Push` clicks itself.
         "reload": "Weapon_AR2.Reload",
-        "empty": "Weapon_AR2.Empty",
-        "charge": "Weapon_AR2.Special1",
+        "empty": "Weapon_IRifle.Empty",
+        // The script's `special1` (`weapons/cguard/charging.wav`).
+        "charge": "Weapon_CombineGuard.Special1",
         "bounce": "NPC_CombineBall.Impact",
         "burst": "NPC_CombineBall.Explosion",
     },

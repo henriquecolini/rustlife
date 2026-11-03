@@ -549,7 +549,10 @@ fn firing_during_a_shell_lets_it_go_in_then_fires() {
     assert_eq!(inventory.clip(scattergun), Some(5));
     let reloads = inventory.reload_count();
     let fired_at = ticks_until_fired(&mut inventory, &arsenal);
-    assert!((18..=21).contains(&fired_at), "the shell's 0.3 s left: {fired_at}");
+    assert!(
+        (18..=21).contains(&fired_at),
+        "the shell's 0.3 s left: {fired_at}"
+    );
     assert_eq!(inventory.clip(scattergun), Some(5), "six in, one fired");
     assert_eq!(inventory.reload_step(), ReloadStep::Whole);
     assert_eq!(inventory.reload_count(), reloads, "no closing step");
@@ -691,12 +694,52 @@ fn the_energy_ball_charges_then_spends_its_charge_and_busies_the_rifle() {
     let fired_at = fired_at.expect("the ball is launched");
     assert!((32..=34).contains(&fired_at), "half a second: {fired_at}");
     assert_eq!(inventory.ammo(charges), 1);
-    // The rifle is busy for a second after the launch.
+    // The rifle fires again once the launch's 0.7 s sequence is over (the
+    // player's next attack, `DelayedAttack`)...
     assert_eq!(
-        run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 60),
+        run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 45),
         0
     );
-    assert!(run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 10) >= 1);
+    assert!(run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 3) >= 1);
+}
+
+#[test]
+fn the_next_energy_ball_waits_a_second() {
+    let arsenal = arsenal();
+    let charges = ammo(&arsenal, "rifle_charge");
+    let mut inventory = with_weapon(&arsenal, "rifle", 0);
+    inventory.give_ammo(&arsenal, charges, 2);
+    let alt = holding(Buttons::ATTACK2);
+    // The press and the half second of charge (33 to 35 ticks), then a
+    // second's wait (66 ticks) before the next charge begins.
+    assert_eq!(run(&mut inventory, &arsenal, &alt, 36), 1);
+    assert_eq!(run(&mut inventory, &arsenal, &alt, 60), 0);
+    assert_eq!(
+        inventory.phase(),
+        Phase::Ready,
+        "not charging the next one yet"
+    );
+    run(&mut inventory, &arsenal, &alt, 10);
+    assert!(matches!(inventory.phase(), Phase::Charging(..)));
+}
+
+#[test]
+fn a_burst_counts_the_shots_while_the_trigger_is_held() {
+    let arsenal = arsenal();
+    let mut inventory = with_weapon(&arsenal, "rifle", 0);
+    let fire = holding(Buttons::ATTACK);
+    let mut bursts = Vec::new();
+    for _ in 0..30 {
+        if inventory.tick(&arsenal, &fire, DT).fired.is_some() {
+            bursts.push(inventory.burst());
+        }
+    }
+    assert_eq!(bursts, [1, 2, 3, 4, 5], "a shot every 0.1 s");
+    inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+    assert_eq!(inventory.burst(), 0, "let go, it starts over");
+    run(&mut inventory, &arsenal, &holding(Buttons::NONE), 10);
+    inventory.tick(&arsenal, &fire, DT);
+    assert_eq!(inventory.burst(), 1);
 }
 
 #[test]
