@@ -111,8 +111,10 @@ impl PhysicsWorld {
 
     /// Sweeps `hull` from `start` to `end` against every prop players
     /// collide with (all but debris), skipping `ignore` — the prop the
-    /// player holds. Props are solid: only a `mask` including
-    /// [`SOLID`] sees them.
+    /// player holds. Only props whose contents share a flag with `mask` are
+    /// seen: most are [`SOLID`], and a
+    /// [`GRATE`](crate::collision::contents::GRATE) fence stops players but
+    /// not a `MASK_SHOT` bullet.
     #[must_use]
     pub fn trace_hull(
         &self,
@@ -154,33 +156,41 @@ impl PhysicsWorld {
         let sweep = Sweep::new(start + offset, end + offset, hull.extents(), mask);
         let mut best = Hit::default();
         let mut best_body = None;
-        if mask & SOLID != 0 {
-            let (mins, maxs) = sweep.bounds(CULL_MARGIN);
-            for id in self.candidates(mins, maxs, groups) {
-                if Some(id) == ignore {
+        let (mins, maxs) = sweep.bounds(CULL_MARGIN);
+        for id in self.candidates(mins, maxs, groups) {
+            if Some(id) == ignore {
+                continue;
+            }
+            let Some(BodyKind::Prop(prop)) = self.bodies.get(id.index()).map(|body| &body.kind)
+            else {
+                continue;
+            };
+            // A grate fence is not there for a shot, nor a solid prop for a
+            // water test.
+            if prop.contents & mask == 0 {
+                continue;
+            }
+            for piece in &prop.pieces {
+                if !(mins.cmple(piece.maxs).all() && piece.mins.cmple(maxs).all()) {
                     continue;
                 }
-                let Some(BodyKind::Prop(prop)) = self.bodies.get(id.index()).map(|body| &body.kind)
-                else {
+                let mut hit = Hit::default();
+                clip_convex(
+                    &sweep,
+                    piece.planes.iter().copied(),
+                    prop.contents,
+                    &mut hit,
+                );
+                if hit.start_solid && overhead(piece.mins.z, sweep.start.z) {
                     continue;
-                };
-                for piece in &prop.pieces {
-                    if !(mins.cmple(piece.maxs).all() && piece.mins.cmple(maxs).all()) {
-                        continue;
-                    }
-                    let mut hit = Hit::default();
-                    clip_convex(&sweep, piece.planes.iter().copied(), SOLID, &mut hit);
-                    if hit.start_solid && overhead(piece.mins.z, sweep.start.z) {
-                        continue;
-                    }
-                    best.start_solid |= hit.start_solid;
-                    best.all_solid |= hit.all_solid;
-                    if hit.fraction < best.fraction {
-                        best.fraction = hit.fraction;
-                        best.normal = hit.normal;
-                        best.contents = hit.contents;
-                        best_body = Some(id);
-                    }
+                }
+                best.start_solid |= hit.start_solid;
+                best.all_solid |= hit.all_solid;
+                if hit.fraction < best.fraction {
+                    best.fraction = hit.fraction;
+                    best.normal = hit.normal;
+                    best.contents = hit.contents;
+                    best_body = Some(id);
                 }
             }
         }

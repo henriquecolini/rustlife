@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec3};
 use rl_data::GameData;
-use rl_sim::collision::contents::MASK_PLAYER_SOLID;
+use rl_sim::collision::contents::{MASK_PLAYER_SOLID, SOLID};
 use rl_sim::collision::{CollisionQuery, ConvexHull, Hull, WorldBuilder};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::{Buttons, UserCmd};
@@ -58,6 +58,7 @@ fn crate_desc(data: &GameData, origin: Vec3) -> PropDesc {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: SOLID,
     }
 }
 

@@ -20,6 +20,7 @@ use rl_data::{MaterialConfig, PhysicsConfig};
 use source_formats::phy::PhysicsModel;
 use source_formats::props::{PropKind, PropPlacement, PropSolid, spawnflags};
 
+use crate::collision::contents::SOLID;
 use crate::collision::{ConvexHull, rotation_from_angles};
 
 /// Cubic metres per cubic Source unit (inch).
@@ -72,6 +73,11 @@ pub struct PropDesc {
     /// The surface property of what it is made of, lower case: it names the
     /// sounds it makes. Empty if unknown.
     pub surface: String,
+    /// Its `CONTENTS_*` flags, which decide the traces that see it: a
+    /// [`GRATE`](crate::collision::contents::GRATE) prop (a chain-link fence)
+    /// blocks players and props but not bullets, as `MASK_SHOT` leaves grates
+    /// out. Normally [`SOLID`](crate::collision::contents::SOLID).
+    pub contents: u32,
 }
 
 /// How a prop breaks: the damage it takes, what it does when it goes.
@@ -199,6 +205,7 @@ pub fn prop_desc(
             && flags & spawnflags::ENABLE_MOTION_ON_GRAB != 0,
         breakable: None,
         surface: surface_prop.to_ascii_lowercase(),
+        contents: SOLID,
     })
 }
 

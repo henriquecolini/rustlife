@@ -59,6 +59,7 @@ fn crate_at(origin: Vec3, half: f32, mass: f32, motion: Motion) -> PropDesc {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: contents::SOLID,
     }
 }
 
@@ -603,6 +604,39 @@ fn debris_does_not_block_players() {
     );
     assert!(blocked.hit());
     assert_eq!(blocked.body, Some(BodyId::from_index(1)));
+}
+
+#[test]
+fn a_grate_prop_stops_players_but_not_shots() {
+    let world = floor().build();
+    let mut physics = PhysicsWorld::new(&world, &physics_config(), DT);
+    let mut fence = crate_at(Vec3::new(64.0, 0.0, 0.0), 16.0, 50.0, Motion::Fixed);
+    fence.contents = contents::GRATE;
+    let fence = physics.add_prop(&fence);
+    physics.step();
+    let (start, end) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(128.0, 0.0, 1.0));
+    let hull = Hull::from(&movement_config().hulls.standing);
+    let walk = physics.trace_hull(start, end, &hull, contents::MASK_PLAYER_SOLID, None);
+    assert!(walk.hit(), "players walk into it: {walk:?}");
+    assert_eq!(walk.body, Some(fence));
+    assert_eq!(walk.contents, contents::GRATE);
+    let eye = Vec3::Z * 16.0;
+    let shot = physics.trace_hull(
+        start + eye,
+        end + eye,
+        &Hull::POINT,
+        contents::MASK_SHOT,
+        None,
+    );
+    assert!(!shot.hit(), "bullets fly through: {shot:?}");
+    let bolt = physics.trace_hull(
+        start + eye,
+        end + eye,
+        &Hull::POINT,
+        contents::MASK_PROJECTILE,
+        None,
+    );
+    assert!(bolt.hit(), "thrown and fired objects do not: {bolt:?}");
 }
 
 #[test]

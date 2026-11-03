@@ -150,7 +150,12 @@ can break, whatever its health: a vent's grate, a window, a `func_breakable`.
 | `Projectile` | A box of half-width `size` launched from the eyes at `speed` along the view plus `lift` upwards (see below). |
 
 Bullets and swings stop at what Source's `MASK_SHOT` stops at: solids,
-windows, props and players, not grates or clip brushes. Players are hit as
+windows, props and players, not grates or clip brushes. A grate is a brush
+whose material compiles as one (`%compileGrate`: metal grids, fences,
+railings) or a prop whose model does (`$contents "grate"` in the `.mdl`
+header: the chain-link fences `props_c17/fence01a` and
+`props_wasteland/*_fence*`). Grates still stop players, props and
+projectiles. Players are hit as
 their movement box, plus a head: a ray that also passes through a sphere
 (6.5 units across) at the top of the box is a headshot and does
 `player.ron`'s `head_scale` (3, HL2's `sk_player_head`) times the damage.

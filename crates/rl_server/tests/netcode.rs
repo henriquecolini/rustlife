@@ -17,6 +17,7 @@ use rl_level::{Level, LevelProp};
 use rl_net::client::{ClientConfig, ClientEvent, NetClient};
 use rl_net::conditioner::NetConditions;
 use rl_server::{MapLoader, Server, ServerOptions};
+use rl_sim::collision::contents::SOLID;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::{Buttons, UserCmd};
@@ -84,6 +85,7 @@ fn named_level(data: &GameData, name: &str, checksum: u32) -> Level {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: SOLID,
     };
     Level {
         name: name.to_owned(),

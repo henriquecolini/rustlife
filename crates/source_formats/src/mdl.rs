@@ -115,9 +115,13 @@ pub struct ModelHeader {
     /// The model's `$keyvalues` text (`prop_data { ... }` and the like), if
     /// it has any; see [`crate::propdata`].
     pub key_values: Option<String>,
+    /// The `CONTENTS_*` flags the model was compiled with (`$contents`):
+    /// `CONTENTS_SOLID` (`0x1`) for most, `CONTENTS_GRATE` (`0x8`) for
+    /// fences and grids that block players but let bullets through.
+    pub contents: u32,
 }
 
-/// Reads a model's bounds and surface property from its `.mdl` alone,
+/// Reads a model's bounds, surface property and contents from its `.mdl` alone,
 /// without the `.vvd` and `.vtx` that [`load_model`] needs: what a
 /// dedicated server builds prop collision from.
 ///
@@ -132,6 +136,7 @@ pub fn read_header(mdl: &[u8]) -> Result<ModelHeader, ModelError> {
             bounds: ([min.x, min.y, min.z], [max.x, max.y, max.z]),
             surface_prop: mdl.surface_prop,
             key_values: mdl.key_values,
+            contents: mdl.header.contents.bits(),
         })
     }))
     .unwrap_or_else(|_| {

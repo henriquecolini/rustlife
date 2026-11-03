@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec3};
 use rl_data::GameData;
+use rl_sim::collision::contents::SOLID;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, Motion, PropDesc};
@@ -61,6 +62,7 @@ fn pickup_desc(origin: Vec3) -> PropDesc {
         free_on_grab: false,
         breakable: None,
         surface: "metal".to_owned(),
+        contents: SOLID,
     }
 }
 

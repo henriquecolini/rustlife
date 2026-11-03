@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec3};
 use rl_data::GameData;
+use rl_sim::collision::contents::SOLID;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{Motion, PropDesc};
@@ -40,6 +41,7 @@ fn crate_at(origin: Vec3, motion: Motion) -> PropDesc {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: SOLID,
     }
 }
 

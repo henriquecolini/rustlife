@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use glam::Vec3;
 use rl_data::{GameData, PhysicsConfig};
-use rl_sim::collision::CollisionWorld;
+use rl_sim::collision::{CollisionWorld, contents};
 use rl_sim::physics::{BodyId, Breakable, GibPiece, PropDesc, map_joints, prop_desc};
 use rl_sim::pickups;
 use rl_sim::simulation::{Simulation, Spawn};
@@ -283,6 +283,7 @@ fn pickup_body(
     )?;
     desc.debris = true;
     desc.grabbable = true;
+    desc.contents = model.contents;
     Some(desc)
 }
 
@@ -307,6 +308,9 @@ pub struct PropModel {
     pub physics: Option<PhysicsModel>,
     /// The model's `$keyvalues` text, which may say how it breaks.
     pub key_values: Option<String>,
+    /// The model's `CONTENTS_*` flags: [`contents::GRATE`] for fences and
+    /// grids bullets fly through, otherwise [`contents::SOLID`].
+    pub contents: u32,
 }
 
 impl PropModel {
@@ -326,6 +330,7 @@ impl PropModel {
             &self.surface_prop,
             physics,
         )?;
+        desc.contents = self.contents;
         desc.breakable = self.breakable(placement, propdata).map(|mut breakable| {
             // Weapons do less, rather than there being more health: impacts
             // are made for the health as `prop_data` has it. Explosive props
@@ -412,6 +417,18 @@ impl PropModel {
     }
 }
 
+/// The contents a prop of a model compiled with `contents` has. Studiomdl
+/// writes `CONTENTS_SOLID` unless told otherwise, so a model claiming
+/// nothing at all (a hand-made or damaged file) is taken as solid rather
+/// than left for every trace to pass through.
+fn prop_contents(contents: u32) -> u32 {
+    if contents == contents::EMPTY {
+        contents::SOLID
+    } else {
+        contents
+    }
+}
+
 /// The content a level's files come from: the map's pakfile, then the
 /// mounted game.
 struct Files<'a> {
@@ -454,6 +471,7 @@ impl Files<'_> {
             surface_prop: header.surface_prop.to_ascii_lowercase(),
             physics,
             key_values: header.key_values,
+            contents: prop_contents(header.contents),
         })
     }
 }

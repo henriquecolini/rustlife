@@ -159,6 +159,7 @@ fn crates_dropped_at_spawns_land_on_the_floor() {
                 free_on_grab: false,
                 breakable: None,
                 surface: String::new(),
+                contents: SOLID,
             })
         })
         .collect();

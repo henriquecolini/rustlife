@@ -527,6 +527,7 @@ mod tests {
     use std::sync::Arc;
 
     use glam::{Quat, Vec3};
+    use rl_sim::collision::contents::SOLID;
     use rl_sim::collision::{ConvexHull, WorldBuilder};
     use rl_sim::movement::UserCmd;
     use rl_sim::physics::{Motion as BodyMotion, PropDesc};
@@ -561,6 +562,7 @@ mod tests {
                 free_on_grab: false,
                 breakable: None,
                 surface: String::new(),
+                contents: SOLID,
             });
         }
         let a = sim.spawn_player(Vec3::new(0.0, 0.0, 1.0));
@@ -615,6 +617,7 @@ mod tests {
                 damage_table: None,
             }),
             surface: String::new(),
+            contents: SOLID,
         };
         let mut replica = Simulation::new(Arc::new(world), &data);
         let body = replica.add_prop(&barrel);
@@ -677,6 +680,7 @@ mod tests {
                 damage_table: None,
             }),
             surface: String::new(),
+            contents: SOLID,
         };
         let mut server = Simulation::new(Arc::new(world.clone()), &data);
         let body = server.add_prop(&crate_desc);
@@ -734,6 +738,7 @@ mod tests {
             free_on_grab: false,
             breakable: None,
             surface: "metal".to_owned(),
+            contents: SOLID,
         };
         let make = || {
             let mut sim = Simulation::new(Arc::new(world.clone()), &data);

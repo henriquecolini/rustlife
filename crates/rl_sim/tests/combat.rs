@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use glam::{Quat, Vec3};
 use rl_data::GameData;
+use rl_sim::collision::contents::{GRATE, SOLID};
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::Cause;
 use rl_sim::hazards::Hazard;
@@ -1022,6 +1023,7 @@ fn a_thrown_prop_kill_is_the_throwers_frag() {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: SOLID,
     });
     arena.arm("manipulator");
     arena
@@ -1095,11 +1097,71 @@ fn bullets_shove_props() {
         free_on_grab: false,
         breakable: None,
         surface: String::new(),
+        contents: SOLID,
     });
     arena.arm("magnum");
     arena.hold(Buttons::ATTACK, 0.0, 1);
     let (velocity, _) = arena.sim.physics().velocity(crate_).expect("crate");
     assert!(velocity.x > 100.0, "{velocity}");
+}
+
+/// A fixed sheet standing across the line of fire halfway to a target 300
+/// units off, with `contents`.
+fn fence(data: &GameData, contents: u32) -> PropDesc {
+    PropDesc {
+        pieces: vec![ConvexHull::from_box(
+            Vec3::new(-1.0, -64.0, 0.0),
+            Vec3::new(1.0, 64.0, 128.0),
+        )],
+        origin: Vec3::new(150.0, 0.0, 0.0),
+        rotation: Quat::IDENTITY,
+        motion: Motion::Fixed,
+        mass: 200.0,
+        material: *data.physics.materials.get("metal"),
+        linear_damping: 0.0,
+        angular_damping: 0.0,
+        debris: false,
+        start_asleep: false,
+        grabbable: false,
+        free_on_grab: false,
+        breakable: None,
+        surface: "chainlink".to_owned(),
+        contents,
+    }
+}
+
+/// The target's health after the shooter fires the magnum once at it with
+/// `arena`'s obstacles in between.
+fn health_after_a_shot(mut arena: Arena) -> f32 {
+    arena.arm("magnum");
+    arena.hold(Buttons::ATTACK, 0.0, 1);
+    arena.health(arena.target)
+}
+
+#[test]
+fn bullets_fly_through_a_grate_prop_but_not_a_solid_one() {
+    let data = data();
+    let mut chainlink = Arena::new(&data, 300.0);
+    let full = chainlink.health(chainlink.target);
+    chainlink.sim.add_prop(&fence(&data, GRATE));
+    assert!(
+        health_after_a_shot(chainlink) < full,
+        "the shot gets through"
+    );
+    let mut sheet = Arena::new(&data, 300.0);
+    sheet.sim.add_prop(&fence(&data, SOLID));
+    assert_eq!(health_after_a_shot(sheet), full, "the sheet stops it");
+}
+
+#[test]
+fn bullets_fly_through_a_grate_brush_but_not_a_wall() {
+    let data = data();
+    let (mins, maxs) = (Vec3::new(149.0, -64.0, 0.0), Vec3::new(151.0, 64.0, 128.0));
+    let grate = Arena::with_world(&data, 300.0, WorldBuilder::new().box_of(GRATE, mins, maxs));
+    let full = grate.health(grate.target);
+    assert!(health_after_a_shot(grate) < full, "the shot gets through");
+    let wall = Arena::with_world(&data, 300.0, WorldBuilder::new().solid_box(mins, maxs));
+    assert_eq!(health_after_a_shot(wall), full, "the wall stops it");
 }
 
 #[test]
@@ -1166,6 +1228,7 @@ fn breakable_box(
             damage_table: None,
         }),
         surface: "metal".to_owned(),
+        contents: SOLID,
     }
 }
 

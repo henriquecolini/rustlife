@@ -8,7 +8,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use glam::Vec3;
-use rl_sim::collision::contents::MASK_PLAYER_SOLID;
+use rl_sim::collision::contents::{MASK_PLAYER_SOLID, SOLID};
 use rl_sim::collision::{CollisionWorld, Hull, WorldBuilder};
 
 fn player() -> Hull {
@@ -178,6 +178,7 @@ fn bench_simulation(c: &mut Criterion) {
                 free_on_grab: false,
                 breakable: None,
                 surface: String::new(),
+                contents: SOLID,
             });
         }
         (sim, player)

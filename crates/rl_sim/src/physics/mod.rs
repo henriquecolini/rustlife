@@ -152,6 +152,8 @@ struct PropBody {
     broken: bool,
     /// What it is made of.
     surface: String,
+    /// Its `CONTENTS_*` flags: the traces whose mask shares one see it.
+    contents: u32,
     /// Where it was added, for bringing it back.
     home: BodyPose,
 }
@@ -366,6 +368,7 @@ impl PhysicsWorld {
                 planes_pose: pose,
                 broken: false,
                 surface: desc.surface.clone(),
+                contents: desc.contents,
                 home: pose,
             }),
         });

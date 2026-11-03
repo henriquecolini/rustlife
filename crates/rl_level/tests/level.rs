@@ -11,7 +11,7 @@ use std::sync::Arc;
 use glam::Vec3;
 use rl_data::GameData;
 use rl_level::{Level, LevelError, LevelProp, PropModel};
-use rl_sim::collision::WorldBuilder;
+use rl_sim::collision::{WorldBuilder, contents};
 use rl_sim::physics::Motion;
 use rl_sim::simulation::Spawn;
 use source_formats::entities::MapEntity;
@@ -32,6 +32,7 @@ fn crate_model() -> PropModel {
         surface_prop: "wood".to_owned(),
         physics: Some(phy::decode(&bytes).expect("phy")),
         key_values: None,
+        contents: contents::SOLID,
     }
 }
 
@@ -174,6 +175,24 @@ fn models_without_a_physics_model_collide_as_their_box() {
         .expect("a box");
     assert_eq!(desc.pieces.len(), 1);
     assert!(desc.mass > 0.0);
+}
+
+#[test]
+fn a_prop_takes_its_contents_from_its_model() {
+    let data = data();
+    let placement = PropPlacement::new("models/fence.mdl", [0.0; 3], [0.0; 3], PropKind::Static);
+    let fence = PropModel {
+        contents: contents::GRATE,
+        ..crate_model()
+    };
+    let desc = fence
+        .desc(&placement, &data.physics, &PropDataTable::default())
+        .expect("a body");
+    assert_eq!(desc.contents, contents::GRATE, "bullets fly through it");
+    let desc = crate_model()
+        .desc(&placement, &data.physics, &PropDataTable::default())
+        .expect("a body");
+    assert_eq!(desc.contents, contents::SOLID);
 }
 
 /// `propdata.txt` in miniature, and a barrel model that explodes.
@@ -405,6 +424,17 @@ fn every_stock_map_loads_as_a_level() {
         assert!(pieces > 0, "{map}: breakables break into model pieces");
         if map == "dm_lockdown" {
             assert!(explosive > 0, "dm_lockdown has explosive barrels");
+        }
+
+        let grates = level
+            .props
+            .iter()
+            .filter_map(|prop| prop.desc.as_ref())
+            .filter(|desc| desc.contents == contents::GRATE)
+            .count();
+        eprintln!("{map}: {grates} grate props (chain-link fences)");
+        if matches!(map, "dm_steamlab" | "dm_underpass") {
+            assert!(grates > 0, "{map}'s fences let bullets through");
         }
     }
 }

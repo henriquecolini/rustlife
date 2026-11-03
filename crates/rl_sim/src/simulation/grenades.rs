@@ -15,6 +15,7 @@ use rl_data::{ProjectileBodyConfig, ProjectileConfig};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
+use crate::collision::contents::SOLID;
 use crate::collision::{ConvexHull, Hull};
 use crate::combat::hitscan::{self, Struck};
 use crate::movement::view_direction;
@@ -169,6 +170,7 @@ impl Simulation {
             free_on_grab: false,
             breakable: None,
             surface: body.surface.to_ascii_lowercase(),
+            contents: SOLID,
         };
         let handle = self.physics.add_prop(&desc);
         // It leaves the thrower's hand without bumping them.
@@ -291,6 +293,7 @@ impl Simulation {
             free_on_grab: false,
             breakable: None,
             surface: body.surface.to_ascii_lowercase(),
+            contents: SOLID,
         };
         self.physics.add_prop(&desc)
     }
