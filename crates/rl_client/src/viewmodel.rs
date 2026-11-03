@@ -444,7 +444,7 @@ fn tool_activity(event: ToolEvent) -> &'static str {
 /// The activity a reload step plays.
 fn reload_activity(step: ReloadStep) -> &'static str {
     match step {
-        ReloadStep::Whole | ReloadStep::Round => "ACT_VM_RELOAD",
+        ReloadStep::Whole | ReloadStep::Round | ReloadStep::LastRound => "ACT_VM_RELOAD",
         ReloadStep::Start => "ACT_SHOTGUN_RELOAD_START",
         ReloadStep::Finish => "ACT_SHOTGUN_RELOAD_FINISH",
     }

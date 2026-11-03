@@ -224,8 +224,12 @@ pub enum ReloadStep {
     Whole,
     /// A round-by-round reload getting started.
     Start,
-    /// One round going in.
+    /// One round going in: it is in the clip once the step is over, so the
+    /// clip counts up as each round's animation ends.
     Round,
+    /// The round going in when the trigger cut the reload short: once it is
+    /// in, the reload stops (no closing step) and the shot goes off.
+    LastRound,
     /// A round-by-round reload closing.
     Finish,
 }
@@ -1108,13 +1112,17 @@ impl Inventory {
     }
 
     /// A round-by-round reload gives way to a shot: if the trigger is held
-    /// and enough rounds are in, the reload ends here (its current step
-    /// still has to finish before anything fires).
+    /// and enough rounds are in (counting one going in), the reload ends
+    /// here. Its current step still has to finish before anything fires: a
+    /// round going in goes in first.
     fn interrupt_reload(&mut self, arsenal: &Arsenal, weapon: WeaponId, held: Buttons) {
-        if !matches!(self.phase, Phase::Reloading(_)) || self.reload == ReloadStep::Whole {
+        if !matches!(self.phase, Phase::Reloading(_))
+            || matches!(self.reload, ReloadStep::Whole | ReloadStep::LastRound)
+        {
             return;
         }
-        let clip = self.clip(weapon).unwrap_or(0);
+        let going_in = self.reload == ReloadStep::Round;
+        let clip = self.clip(weapon).unwrap_or(0) + u32::from(going_in);
         let wants = |mode: Mode, button: Buttons| {
             held.contains(button)
                 && arsenal
@@ -1125,8 +1133,12 @@ impl Inventory {
                     })
         };
         if wants(Mode::Primary, Buttons::ATTACK) || wants(Mode::Secondary, Buttons::ATTACK2) {
-            self.phase = Phase::Ready;
-            self.reload = ReloadStep::Whole;
+            if going_in {
+                self.reload = ReloadStep::LastRound;
+            } else {
+                self.phase = Phase::Ready;
+                self.reload = ReloadStep::Whole;
+            }
         }
     }
 
@@ -1331,16 +1343,30 @@ impl Inventory {
                 self.reload = ReloadStep::Whole;
             }
             Reload::PerRound { each, finish, .. } => {
-                if step == ReloadStep::Finish {
-                    self.reload = ReloadStep::Whole;
-                } else if room > 0 && reserve > 0 {
+                // The round of a step that put one in goes in as it ends.
+                let mut reserve = reserve;
+                let mut room = room;
+                if matches!(step, ReloadStep::Round | ReloadStep::LastRound)
+                    && room > 0
+                    && reserve > 0
+                {
                     carried.clip += 1;
                     if let Some(carried) = self.ammo.get_mut(ammo.index()) {
                         *carried -= 1;
                     }
-                    self.begin_reload_step(ReloadStep::Round, (each + overshoot).max(0.0));
-                } else {
-                    self.begin_reload_step(ReloadStep::Finish, (finish + overshoot).max(0.0));
+                    reserve -= 1;
+                    room -= 1;
+                }
+                match step {
+                    ReloadStep::Finish | ReloadStep::LastRound => {
+                        self.reload = ReloadStep::Whole;
+                    }
+                    _ if room > 0 && reserve > 0 => {
+                        self.begin_reload_step(ReloadStep::Round, (each + overshoot).max(0.0));
+                    }
+                    _ => {
+                        self.begin_reload_step(ReloadStep::Finish, (finish + overshoot).max(0.0));
+                    }
                 }
             }
         }

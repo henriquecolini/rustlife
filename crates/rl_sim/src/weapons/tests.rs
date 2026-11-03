@@ -412,42 +412,130 @@ fn shotguns_are_pumped_after_every_shot() {
     assert_eq!(inventory.clip(scattergun), Some(4));
 }
 
+/// A shotgun with `fired` shells shot out of its six (and the pumps over),
+/// then twelve to reload with: given only now, so an emptied one has not
+/// begun to reload of its own accord.
+fn shotgun_short_of(arsenal: &Arsenal, fired: usize) -> Inventory {
+    let mut inventory = with_weapon(arsenal, "scattergun", 0);
+    for _ in 0..fired {
+        click(&mut inventory, arsenal, Buttons::ATTACK);
+        wait(&mut inventory, arsenal, 1.0);
+    }
+    inventory.give_ammo(arsenal, ammo(arsenal, "buckshot"), 12);
+    inventory
+}
+
+/// Fires with the trigger held from now: the ticks until the shot goes off.
+fn ticks_until_fired(inventory: &mut Inventory, arsenal: &Arsenal) -> usize {
+    (0..120)
+        .find(|_| {
+            inventory
+                .tick(arsenal, &holding(Buttons::ATTACK), DT)
+                .fired
+                .is_some()
+        })
+        .expect("fired")
+}
+
 #[test]
-fn shells_load_one_at_a_time_and_firing_interrupts() {
+fn each_shell_is_in_once_its_insert_is_over() {
     let arsenal = arsenal();
     let scattergun = id(&arsenal, "scattergun");
-    let mut inventory = with_weapon(&arsenal, "scattergun", 12);
-    for _ in 0..2 {
-        click(&mut inventory, &arsenal, Buttons::ATTACK);
-        wait(&mut inventory, &arsenal, 1.0);
-    }
+    let mut inventory = shotgun_short_of(&arsenal, 2);
     assert_eq!(inventory.clip(scattergun), Some(4));
     let started = inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
     assert!(started.reloading);
     assert_eq!(inventory.reload_step(), ReloadStep::Start);
-    // The reload takes 0.5 s to begin; the first shell goes in then.
-    wait(&mut inventory, &arsenal, 0.45);
-    assert_eq!(inventory.clip(scattergun), Some(4));
-    wait(&mut inventory, &arsenal, 0.1);
+    // 0.5 s to begin, then the first shell's 0.4 s: it is in at 0.9 s.
+    wait(&mut inventory, &arsenal, 0.55);
+    assert_eq!(inventory.reload_step(), ReloadStep::Round);
+    assert_eq!(inventory.clip(scattergun), Some(4), "still going in");
+    wait(&mut inventory, &arsenal, 0.4);
     assert_eq!(inventory.clip(scattergun), Some(5), "one shell in");
     assert_eq!(inventory.reload_step(), ReloadStep::Round);
     assert!(matches!(inventory.phase(), Phase::Reloading(_)));
-    // Firing during a shell's 0.4 s ends the reload, but the shot waits for
-    // the shell to be in.
-    let mut fired_at = None;
-    for tick in 0..60 {
-        if inventory
-            .tick(&arsenal, &holding(Buttons::ATTACK), DT)
-            .fired
-            .is_some()
-        {
-            fired_at = Some(tick);
-            break;
+}
+
+#[test]
+fn a_shotgun_reload_plays_one_insert_per_shell_and_counts_each_as_it_ends() {
+    let arsenal = arsenal();
+    let scattergun = id(&arsenal, "scattergun");
+    for fired in 1..=6 {
+        let mut inventory = shotgun_short_of(&arsenal, fired);
+        let mut seen = inventory.reload_count();
+        // Each step as it begins, with the shells in the clip then.
+        let mut steps = Vec::new();
+        for _ in 0..(4.0 / DT) as usize {
+            inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+            if inventory.reload_count() != seen {
+                seen = inventory.reload_count();
+                steps.push((inventory.reload_step(), inventory.clip(scattergun)));
+            }
         }
+        let start = 6 - fired as u32;
+        let mut expected = vec![(ReloadStep::Start, Some(start))];
+        expected.extend((start..6).map(|clip| (ReloadStep::Round, Some(clip))));
+        expected.push((ReloadStep::Finish, Some(6)));
+        assert_eq!(steps, expected, "{fired} shells short");
     }
-    let fired_at = fired_at.expect("interrupted");
-    assert!(fired_at < 27, "within the shell's time: {fired_at}");
+}
+
+#[test]
+fn the_reload_stops_at_the_last_shell_carried() {
+    let arsenal = arsenal();
+    let scattergun = id(&arsenal, "scattergun");
+    let buckshot = ammo(&arsenal, "buckshot");
+    let mut inventory = with_weapon(&arsenal, "scattergun", 1);
+    for _ in 0..3 {
+        click(&mut inventory, &arsenal, Buttons::ATTACK);
+        wait(&mut inventory, &arsenal, 1.0);
+    }
+    let reloads = inventory.reload_count();
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    wait(&mut inventory, &arsenal, 0.95);
     assert_eq!(inventory.clip(scattergun), Some(4));
+    assert_eq!(inventory.ammo(buckshot), 0);
+    assert_eq!(inventory.reload_step(), ReloadStep::Finish);
+    // Start, the one shell, finish.
+    assert_eq!(inventory.reload_count(), reloads.wrapping_add(3));
+}
+
+#[test]
+fn firing_during_a_shell_lets_it_go_in_then_fires() {
+    let arsenal = arsenal();
+    let scattergun = id(&arsenal, "scattergun");
+    let mut inventory = shotgun_short_of(&arsenal, 2);
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    // 0.1 s into the second shell (in at 1.3 s).
+    wait(&mut inventory, &arsenal, 1.0);
+    assert_eq!(inventory.clip(scattergun), Some(5));
+    let reloads = inventory.reload_count();
+    let fired_at = ticks_until_fired(&mut inventory, &arsenal);
+    assert!((18..=21).contains(&fired_at), "the shell's 0.3 s left: {fired_at}");
+    assert_eq!(inventory.clip(scattergun), Some(5), "six in, one fired");
+    assert_eq!(inventory.reload_step(), ReloadStep::Whole);
+    assert_eq!(inventory.reload_count(), reloads, "no closing step");
+}
+
+#[test]
+fn firing_an_empty_shotgun_waits_for_its_first_shell() {
+    let arsenal = arsenal();
+    let scattergun = id(&arsenal, "scattergun");
+    let mut inventory = shotgun_short_of(&arsenal, 6);
+    assert_eq!(inventory.clip(scattergun), Some(0));
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    // Nothing to fire during the start: the trigger only clicks.
+    assert_eq!(
+        run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 30),
+        0
+    );
+    wait(&mut inventory, &arsenal, 0.1);
+    assert_eq!(inventory.reload_step(), ReloadStep::Round);
+    // The first shell is on its way, so the trigger stops the reload and
+    // fires it once it is in (0.9 s after the reload began).
+    let fired_at = ticks_until_fired(&mut inventory, &arsenal);
+    assert!((20..=24).contains(&fired_at), "{fired_at}");
+    assert_eq!(inventory.clip(scattergun), Some(0));
     assert_eq!(inventory.reload_step(), ReloadStep::Whole);
 }
 
@@ -455,18 +543,14 @@ fn shells_load_one_at_a_time_and_firing_interrupts() {
 fn a_full_shotgun_reload_takes_its_start_its_shells_and_its_finish() {
     let arsenal = arsenal();
     let scattergun = id(&arsenal, "scattergun");
-    let mut inventory = with_weapon(&arsenal, "scattergun", 12);
-    for _ in 0..2 {
-        click(&mut inventory, &arsenal, Buttons::ATTACK);
-        wait(&mut inventory, &arsenal, 1.0);
-    }
+    let mut inventory = shotgun_short_of(&arsenal, 2);
     inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
-    // Two shells: in at 0.5 s and 0.9 s, then (the last one's 0.4 s over)
-    // 0.433 s to close.
+    // Two shells: in at 0.9 s and 1.3 s, then 0.433 s to close.
     wait(&mut inventory, &arsenal, 0.95);
-    assert_eq!(inventory.clip(scattergun), Some(6));
+    assert_eq!(inventory.clip(scattergun), Some(5));
     assert_eq!(inventory.reload_step(), ReloadStep::Round);
     wait(&mut inventory, &arsenal, 0.4);
+    assert_eq!(inventory.clip(scattergun), Some(6));
     assert_eq!(inventory.reload_step(), ReloadStep::Finish);
     assert_eq!(inventory.phase(), Phase::Ready);
     assert!(inventory.until_ready(Mode::Primary) > 0.3, "still closing");

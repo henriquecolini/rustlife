@@ -70,9 +70,11 @@ Shot by shot:
   Gravity Gun.
 - **Reloading.** A whole-clip reload loads what it can when the view model's
   reload animation is over. A round-by-round one (the shotgun) takes its
-  start animation, then puts a shell in at the beginning of each 0.4 s step,
-  then plays its finish animation; firing ends it as soon as the step in
-  progress is over and a shell is in, skipping the finish. The crossbow
+  start animation, then puts a shell in at the end of each 0.4 s step (one
+  insert animation per shell, so the clip counts up as each one ends; HL2
+  counts the shell as the animation begins), then plays its finish
+  animation. Firing ends it as soon as the step in progress is over (a shell
+  on its way goes in first), skipping the finish. The crossbow
   reloads 0.667 s after a shot whatever the buttons do (`auto_reload`).
 - **Pump.** After a shot's own interval, a weapon with a `pump` is held for
   that long again (the shotgun: 0.333 s + 0.533 s per shot).

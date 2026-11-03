@@ -3,9 +3,10 @@
 // on twelve pellets (with one shell left it fires the single shot instead).
 // A shot holds the gun for the view model's firing animation (0.333 s, the
 // double barrel's 0.5 s), then it is pumped for 0.533 s. Reloading takes
-// 0.5 s to start and 0.4 s a shell, loaded as each step begins, then 0.433 s
-// to close; firing interrupts it once the shell in progress is in. Drawing
-// takes 0.733 s.
+// 0.5 s to start and 0.4 s a shell, then 0.433 s to close. Each shell is in
+// once its 0.4 s (one insert animation) is over, so the clip counts up with
+// the animations (HL2 counts it as the animation begins). Firing interrupts
+// the reload once the shell in progress is in. Drawing takes 0.733 s.
 Weapon(
     name: "Shotgun",
     slot: 4,
