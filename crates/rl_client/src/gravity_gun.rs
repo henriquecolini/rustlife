@@ -285,10 +285,14 @@ fn gun_state(
     angles: ViewAngles,
     pulling_wanted: bool,
 ) -> Look {
-    if sim
-        .player(player)
-        .is_some_and(|p| p.manipulator.held().is_some())
-    {
+    let Some(holder) = sim.player(player) else {
+        return Look::Shut;
+    };
+    // Put away while the hands carry a prop, the gun shows nothing.
+    if holder.inventory.holstered() {
+        return Look::Shut;
+    }
+    if holder.manipulator.held().is_some() {
         return Look::Working;
     }
     let Some(eye) = sim.eye_position(player) else {

@@ -97,7 +97,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Space | Jump (swim up in water) |
 | Left Ctrl | Crouch |
 | Left Shift | Walk |
-| E | Use: press a button, open a door, draw from a wall charger; grab or let go of a ladder |
+| E | Use: press a button, open a door, draw from a wall charger; grab or let go of a ladder; pick up a light prop, putting the weapon away, or set it down |
 | Left / right mouse | Primary / secondary fire |
 | R | Reload |
 | 1 – 9 | Choose a weapon by slot |
@@ -107,6 +107,7 @@ and throws the map's physics props ([docs/physics.md](docs/physics.md)):
 | Tab | Scoreboard |
 | Right mouse (Gravity Gun) | Grab a prop (hold to pull a distant one in); press again to drop it |
 | Left mouse (Gravity Gun) | Throw the held prop, or punt the one under the crosshair |
+| Left / right mouse (carrying by hand) | Toss the prop / set it down |
 | V | Toggle noclip (fly freely; Space / Left Ctrl rise and sink, Shift is faster) |
 | Esc | Pause menu: resume, settings, leave the match |
 | F11 | Switch between a window and fullscreen (anywhere, menus included) |

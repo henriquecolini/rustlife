@@ -43,7 +43,7 @@ use thiserror::Error;
 pub const PROTOCOL_ID: u64 = u64::from_be_bytes(*b"rustlife");
 
 /// Bumped whenever a message changes shape: client and server must agree.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Longest player name kept, in characters.
 pub const MAX_NAME_CHARS: usize = 32;

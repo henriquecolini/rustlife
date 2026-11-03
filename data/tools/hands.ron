@@ -1,0 +1,48 @@
+// Carrying a light prop in the hands: use picks it up and puts the weapon
+// away, primary fire tosses it, secondary fire or use again sets it down.
+// Read by `rl_sim::tools::hands`. Every number is HL2DM's, from its server.so
+// (`CPlayerPickupController`, `CGrabController`, `CBasePlayer::CanPickupObject`).
+//
+// Lengths are Source units (1 unit = 1 inch), masses kilograms, times
+// seconds. See docs/physics.md.
+Hands(
+    // `CHL2_Player::PickupObject` passes these limits to `CanPickupObject`.
+    pickup: (
+        // A wooden crate, a drum or a paint can; not a filing cabinet.
+        max_mass: 35.0,
+        // No side of the prop's own box may be longer than this.
+        max_size: 128.0,
+    ),
+    hold: (
+        // `UpdateObject`: the prop is held this far plus its own depth plus
+        // half the player's width ahead of the eyes.
+        gap: 24.0,
+        // Placing the prop, the view's pitch is clamped to this, degrees.
+        max_pitch: 75.0,
+        // The grab controller arrives in one frame (`m_timeToArrive` is the
+        // frame time) at no more than its `maxSpeed` of 1000, turning as fast.
+        follow_time: 0.015,
+        max_speed: 1000.0,
+        max_angular_speed: 1000.0,
+        // `Use` lets go once `ComputeError()` exceeds 12; `AttachEntity`
+        // starts `m_errorTime` at -1, a second's grace.
+        drop_error: 12.0,
+        error_grace: 1.0,
+    ),
+    // `DetachEntity` clamps what it lets go of to hl2_normspeed (190) x 1.5
+    // and 720 degrees/s, unless it was set down touching something: then it
+    // stops.
+    release: (
+        max_speed: 285.0,
+        max_angular_speed: 720.0,
+    ),
+    // `Use` on +attack: impulse = player_throwforce x the mass clamped to
+    // 0.5..15 kg and remapped to 0.5..4, plus a random spin of up to 10 times
+    // that factor about each axis.
+    toss: (
+        force: 1000.0,
+        masses: (0.5, 15.0),
+        factors: (0.5, 4.0),
+        spin: 10.0,
+    ),
+)

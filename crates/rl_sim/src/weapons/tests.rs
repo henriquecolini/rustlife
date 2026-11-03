@@ -1102,3 +1102,48 @@ fn a_heavier_weapon_picked_up_is_brought_up_unless_the_gravity_gun_is_in_hand() 
         "the tool stays"
     );
 }
+
+#[test]
+fn a_launcher_cannot_be_put_away_while_its_rocket_flies() {
+    let arsenal = arsenal();
+    let launcher = id(&arsenal, "launcher");
+    let mut inventory = with_weapon(&arsenal, "launcher", 3);
+    assert!(inventory.can_holster(&arsenal));
+    inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    assert!(!inventory.can_holster(&arsenal), "the rocket is in the air");
+    inventory.projectile_ended(&arsenal, launcher);
+    assert!(inventory.can_holster(&arsenal));
+}
+
+#[test]
+fn a_weapon_put_away_does_nothing_and_deploys_when_brought_out() {
+    let arsenal = arsenal();
+    let smg = id(&arsenal, "smg");
+    let mut inventory = with_weapon(&arsenal, "smg", 45);
+    let pistol = id(&arsenal, "sidearm");
+    inventory.give_weapon(&arsenal, pistol);
+    // A reload under way is called off.
+    run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 3);
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    assert!(matches!(inventory.phase(), Phase::Reloading(_)));
+    inventory.holster();
+    assert!(inventory.holstered());
+    assert_eq!(inventory.phase(), Phase::Ready);
+    assert_eq!(
+        run(&mut inventory, &arsenal, &holding(Buttons::ATTACK), 60),
+        0
+    );
+    let switch = UserCmd {
+        select: Some(pistol),
+        ..UserCmd::default()
+    };
+    assert!(
+        !inventory.tick(&arsenal, &switch, DT).switched,
+        "no switching"
+    );
+
+    assert_eq!(inventory.unholster(&arsenal), Some(smg));
+    assert!(!inventory.holstered());
+    assert!(matches!(inventory.phase(), Phase::Deploying(_)));
+    assert_eq!(inventory.unholster(&arsenal), None, "already out");
+}

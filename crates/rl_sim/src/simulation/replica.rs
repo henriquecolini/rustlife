@@ -150,10 +150,17 @@ impl Simulation {
         let scene = Scene {
             world: &self.world,
             physics: &self.physics,
-            ignore: player.manipulator.held(),
+            ignore: player.held_prop(),
             others: &others,
         };
-        let (state, moved) = simulate(&player.state, cmd, &self.data.movement, self.dt, &scene);
+        let movement_cmd = player.movement_cmd(cmd);
+        let (state, moved) = simulate(
+            &player.state,
+            &movement_cmd,
+            &self.data.movement,
+            self.dt,
+            &scene,
+        );
         player.state = state;
         player.look = (cmd.pitch, cmd.yaw);
         prediction.moved = moved;

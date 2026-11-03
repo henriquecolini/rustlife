@@ -660,6 +660,11 @@ impl Simulation {
             if player.manipulator.held() == Some(body) {
                 player.manipulator.drop_held(&mut self.physics);
             }
+            if player.hands.held() == Some(body) {
+                player
+                    .hands
+                    .drop_held(&mut self.physics, &self.data.hands.release);
+            }
         }
         events.prop_breaks.push(PropBreak {
             body,

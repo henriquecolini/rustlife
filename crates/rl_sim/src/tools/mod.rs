@@ -1,4 +1,5 @@
-//! Tools players carry. As of M4 that is the [`manipulator`]; weapons
-//! arrive with the data-driven combat of M5.
+//! What players pick props up with: the [`manipulator`] (the Gravity Gun) and
+//! their bare [`hands`].
 
+pub mod hands;
 pub mod manipulator;

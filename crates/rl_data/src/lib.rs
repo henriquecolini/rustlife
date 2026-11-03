@@ -25,6 +25,7 @@
 //! | `simulation.ron` | [`SimulationConfig`] | Tick rate. |
 //! | `physics.ron` | [`PhysicsConfig`] | Prop physics, materials, pushing, impact damage. |
 //! | `tools/manipulator.ron` | [`ManipulatorConfig`] | The grab-and-launch tool. |
+//! | `tools/hands.ron` | [`HandsConfig`] | Carrying light props with the use key. |
 //! | `ammo.ron` | [`AmmoConfig`] | Ammo types and how much of each a player carries. |
 //! | `weapons/<id>.ron` | [`WeaponConfig`] | One weapon each. |
 //! | `items/<id>.ron` | [`ItemConfig`] | One health, armor or ammo pickup each. |
@@ -48,6 +49,7 @@ use serde::de::DeserializeOwned;
 pub mod ammo;
 pub mod effects;
 pub mod entity_map;
+pub mod hands;
 pub mod hud;
 pub mod items;
 pub mod manipulator;
@@ -70,6 +72,7 @@ pub use effects::{
     SurfaceImpactConfig, TracerConfig, Vertical,
 };
 pub use entity_map::{EntityMapConfig, MappedEntity};
+pub use hands::{CarryHold, HandsConfig, PickupLimits, ReleaseLimits, Toss};
 pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};
 pub use items::{ITEM_SOUNDS, ItemConfig, ItemEffect, StationConfig};
 pub use manipulator::{GrabConfig, HoldConfig, LaunchConfig, ManipulatorConfig};
@@ -103,6 +106,9 @@ pub const SIMULATION_FILE: &str = "simulation.ron";
 pub const PHYSICS_FILE: &str = "physics.ron";
 /// Path of the Manipulator's data, relative to the data directory.
 pub const MANIPULATOR_FILE: &str = "tools/manipulator.ron";
+/// Path of the data of carrying props in the hands, relative to the data
+/// directory.
+pub const HANDS_FILE: &str = "tools/hands.ron";
 /// File name of the ammo types.
 pub const AMMO_FILE: &str = "ammo.ron";
 /// Directory of the weapons, one file each.
@@ -138,6 +144,7 @@ const BUILTIN: &[(&str, &str)] = &builtin_files![
     "simulation.ron",
     "physics.ron",
     "tools/manipulator.ron",
+    "tools/hands.ron",
     "ammo.ron",
     "entity_map.ron",
     "player.ron",
@@ -237,6 +244,8 @@ pub struct GameData {
     pub physics: PhysicsConfig,
     /// The Manipulator tool.
     pub manipulator: ManipulatorConfig,
+    /// Carrying props in the hands.
+    pub hands: HandsConfig,
     /// Ammo types.
     pub ammo: AmmoConfig,
     /// Weapons by id (their file name).
@@ -329,6 +338,7 @@ impl GameData {
             MANIPULATOR_FILE.to_owned(),
             ron::to_string(&self.manipulator),
         )?;
+        put(HANDS_FILE.to_owned(), ron::to_string(&self.hands))?;
         put(AMMO_FILE.to_owned(), ron::to_string(&self.ammo))?;
         for (id, weapon) in &self.weapons {
             put(format!("{WEAPONS_DIR}/{id}.ron"), ron::to_string(weapon))?;
@@ -354,6 +364,7 @@ impl GameData {
             simulation: load_file(files, SIMULATION_FILE, SimulationConfig::validate)?,
             physics: load_file(files, PHYSICS_FILE, PhysicsConfig::validate)?,
             manipulator: load_file(files, MANIPULATOR_FILE, ManipulatorConfig::validate)?,
+            hands: load_file(files, HANDS_FILE, HandsConfig::validate)?,
             ammo: load_file(files, AMMO_FILE, AmmoConfig::validate)?,
             weapons: load_dir(files, WEAPONS_DIR, WeaponConfig::validate)?,
             items: load_dir(files, ITEMS_DIR, ItemConfig::validate)?,

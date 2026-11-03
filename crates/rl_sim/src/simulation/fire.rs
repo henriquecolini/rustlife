@@ -335,7 +335,7 @@ impl Simulation {
 
     /// What the Manipulator of `id` having done `event` means for the rest of
     /// the simulation.
-    fn tool_acted(&mut self, id: PlayerId, event: ToolEvent) {
+    pub(super) fn tool_acted(&mut self, id: PlayerId, event: ToolEvent) {
         let smash = self.data.manipulator.punt.brush_damage;
         match event {
             ToolEvent::Launched(body)

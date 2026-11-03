@@ -16,6 +16,7 @@ use rl_sim::simulation::{
     DamageEvent, ExplosionEvent, Kill, MapEvent, PlayerId, ProjectileEvent, PropBreak,
     PropIgnition, PropImpactEvent, PropScrapeEvent, RespawnEvent, ShotEvent, TickEvents,
 };
+use rl_sim::tools::hands::HandsEvent;
 use rl_sim::tools::manipulator::ToolEvent;
 use rl_sim::weapons::{Mode, Noise, WeaponId};
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,13 @@ pub enum Event {
         /// What it did.
         event: ToolEvent,
     },
+    /// A player's hands picked up, set down or tossed a prop.
+    Hands {
+        /// Whose.
+        player: PlayerId,
+        /// What they did.
+        event: HandsEvent,
+    },
     /// The match ended or restarted.
     Match(MatchEvent),
     /// The map's logic did something: a door moved, a button was pressed,
@@ -101,17 +109,19 @@ pub enum Event {
     PropScrape(PropScrapeEvent),
 }
 
-/// Whether `events` say `player` threw or punted the prop `body`.
+/// Whether `events` say `player` threw, punted or tossed the prop `body`.
 #[must_use]
 pub fn threw(events: &[Event], player: PlayerId, body: rl_sim::physics::BodyId) -> bool {
-    events.iter().any(|event| {
-        matches!(
-            *event,
-            Event::Tool {
-                player: who,
-                event: ToolEvent::Launched(thrown) | ToolEvent::Punted(thrown),
-            } if who == player && thrown == body
-        )
+    events.iter().any(|event| match *event {
+        Event::Tool {
+            player: who,
+            event: ToolEvent::Launched(thrown) | ToolEvent::Punted(thrown),
+        }
+        | Event::Hands {
+            player: who,
+            event: HandsEvent::Tossed(thrown),
+        } => who == player && thrown == body,
+        _ => false,
     })
 }
 
@@ -211,6 +221,12 @@ pub fn from_tick_events(events: &TickEvents, viewer: Option<PlayerId>) -> Vec<Ev
             .iter()
             .map(|&(player, event)| Event::Tool { player, event }),
     );
+    out.extend(
+        events
+            .hands
+            .iter()
+            .map(|&(player, event)| Event::Hands { player, event }),
+    );
     out.extend(events.match_event.map(Event::Match));
     out.extend(events.map.iter().map(|&event| Event::Map(event)));
     out.extend(
@@ -271,6 +287,7 @@ pub fn to_tick_events(events: &[Event], kills: &[Kill]) -> TickEvents {
             }
             Event::Respawn(respawn) => tick.respawns.push(respawn),
             Event::Tool { player, event } => tick.tools.push((player, event)),
+            Event::Hands { player, event } => tick.hands.push((player, event)),
             Event::Match(event) => tick.match_event = Some(event),
             Event::Map(event) => tick.map.push(event),
             Event::PropBreak(broke) => tick.prop_breaks.push(broke),

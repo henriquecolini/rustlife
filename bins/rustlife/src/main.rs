@@ -107,17 +107,23 @@ struct Cli {
     /// Once the map has had time to load, go to the grabbable prop nearest
     /// the player and pick it up with the Manipulator (for scripted
     /// captures); with `--screenshot`, the shot shows it held.
-    #[arg(long)]
+    #[arg(long, group = "taking_prop")]
     grab_prop: bool,
 
-    /// With `--grab-prop`, throw the prop this many seconds after going for
-    /// it; the shot is taken a moment after the throw.
-    #[arg(long, value_name = "SECS", requires = "grab_prop")]
+    /// Like `--grab-prop`, but pick up the nearest prop light enough in the
+    /// hands, with use, keeping the weapon in hand put away; `--throw-after`
+    /// then tosses it.
+    #[arg(long, group = "taking_prop")]
+    carry_prop: bool,
+
+    /// With `--grab-prop` or `--carry-prop`, throw the prop this many seconds
+    /// after going for it; the shot is taken a moment after the throw.
+    #[arg(long, value_name = "SECS", requires = "taking_prop")]
     throw_after: Option<f32>,
 
-    /// With `--grab-prop`, look this many degrees above the horizon once the
-    /// prop is in hand, so that it is thrown into the air.
-    #[arg(long, value_name = "DEGREES", requires = "grab_prop")]
+    /// With `--grab-prop` or `--carry-prop`, look this many degrees above the
+    /// horizon once the prop is in hand, so that it is thrown into the air.
+    #[arg(long, value_name = "DEGREES", requires = "taking_prop")]
     throw_pitch: Option<f32>,
 
     /// Add this many training dummies to a hosted game: players who stand
@@ -263,7 +269,7 @@ fn main() -> Result<()> {
     let mut data = GameData::load(cli.data_dir.as_deref())?;
     let vfs = Arc::new(Vfs::new());
     let content = Content::mount(config, cli.content.config_path(), &vfs);
-    let grab_at = cli.grab_prop.then_some(LOAD_SECS);
+    let grab_at = (cli.grab_prop || cli.carry_prop).then_some(LOAD_SECS);
     let fire_at = cli.throw_after.map(|secs| LOAD_SECS + secs);
     let walk = cli.walk_forward.map(|secs| (LOAD_SECS, secs));
     let shoot = cli.shoot_for.map(|secs| (LOAD_SECS, secs));
@@ -294,6 +300,7 @@ fn main() -> Result<()> {
             .with_use(use_mover.clone())
             .with_teleport(cli.teleport)
             .with_throw_pitch(cli.throw_pitch)
+            .with_hands(cli.carry_prop)
             .with_pcf(cli.pcf)
             .with_explosion(cli.explode)
     });

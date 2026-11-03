@@ -54,6 +54,7 @@ use crate::physics::{BodyId, Impact, JointDesc, PhysicsWorld, PropDesc};
 use crate::pickups::{self, Pickup};
 use crate::rules::{Match, MatchEvent};
 use crate::scene::{PlayerBox, Scene};
+use crate::tools::hands::{Hands, HandsEvent};
 use crate::tools::manipulator::{Manipulator, ToolEvent};
 use crate::weapons::projectile::Projectile;
 use crate::weapons::{Arsenal, Inventory, Mode, Noise, WeaponId};
@@ -61,6 +62,7 @@ use crate::weapons::{Arsenal, Inventory, Mode, Noise, WeaponId};
 mod breakables;
 mod fire;
 mod grenades;
+mod hands;
 mod lag;
 mod life;
 mod map;
@@ -124,6 +126,8 @@ pub struct Player {
     body: BodyId,
     /// The player's Manipulator.
     pub manipulator: Manipulator,
+    /// The player's bare hands, which carry light props.
+    pub hands: Hands,
     /// Health and armor.
     pub vitals: Vitals,
     /// Weapons and ammo.
@@ -142,6 +146,28 @@ impl Player {
     #[must_use]
     pub fn alive(&self) -> bool {
         self.life == Life::Alive
+    }
+
+    /// The prop the player holds, with the Manipulator or in their hands.
+    #[must_use]
+    pub fn held_prop(&self) -> Option<BodyId> {
+        self.manipulator.held().or_else(|| self.hands.held())
+    }
+
+    /// The command as the player's move sees it: no sprinting while their
+    /// hands carry a prop.
+    #[must_use]
+    pub fn movement_cmd(&self, cmd: &UserCmd) -> UserCmd {
+        UserCmd {
+            buttons: hands::movement_buttons(cmd.buttons, self.hands.held().is_some()),
+            ..*cmd
+        }
+    }
+
+    /// Lets go of whatever the player holds, as when they die or leave.
+    fn drop_all(&mut self, physics: &mut PhysicsWorld, data: &GameData) {
+        self.manipulator.drop_held(physics);
+        self.hands.drop_held(physics, &data.hands.release);
     }
 }
 
@@ -292,6 +318,8 @@ pub struct TickEvents {
     pub impacts: Vec<(PlayerId, Impact)>,
     /// What players' Manipulators did.
     pub tools: Vec<(PlayerId, ToolEvent)>,
+    /// What players' hands did.
+    pub hands: Vec<(PlayerId, HandsEvent)>,
     /// Trigger pulls: who fired which weapon's fire mode.
     pub fired: Vec<(PlayerId, WeaponId, Mode)>,
     /// Reloads begun: who began reloading which weapon.
@@ -707,6 +735,7 @@ impl Simulation {
             state,
             body,
             manipulator: Manipulator::default(),
+            hands: Hands::default(),
             vitals: Vitals::spawn(&self.data.player),
             inventory: Inventory::loadout(&self.arsenal, &self.data.rules.loadout),
             life: Life::Alive,
@@ -737,8 +766,8 @@ impl Simulation {
         let Some(player) = self.players.get_mut(id.index()).and_then(Option::take) else {
             return false;
         };
-        let mut manipulator = player.manipulator;
-        manipulator.drop_held(&mut self.physics);
+        let mut player = player;
+        player.drop_all(&mut self.physics, &self.data);
         self.physics.set_player_enabled(player.body, false);
         self.spare_bodies.push(player.body);
         self.game.remove_player(id, &self.data.rules);
@@ -857,21 +886,23 @@ impl Simulation {
         if !player.alive() {
             return;
         }
-        if cmd.buttons.contains(Buttons::USE) {
-            if !player.state.old_buttons.contains(Buttons::USE) {
-                self.users.push(id);
-            }
-            if !self.holders.contains(&id) {
-                self.holders.push(id);
-            }
-        }
+        let use_held = cmd.buttons.contains(Buttons::USE);
+        let use_pressed = use_held && !player.state.old_buttons.contains(Buttons::USE);
+        let carrying = player.hands.held().is_some();
         let scene = Scene {
             world: &self.world,
             physics: &self.physics,
-            ignore: player.manipulator.held(),
+            ignore: player.held_prop(),
             others: &others,
         };
-        let (state, moved) = simulate(&player.state, cmd, &self.data.movement, self.dt, &scene);
+        let movement_cmd = player.movement_cmd(cmd);
+        let (state, moved) = simulate(
+            &player.state,
+            &movement_cmd,
+            &self.data.movement,
+            self.dt,
+            &scene,
+        );
         player.state = state;
         player.look = (cmd.pitch, cmd.yaw);
         for touch in moved.touches() {
@@ -889,6 +920,16 @@ impl Simulation {
                 cause: Cause::Fall,
             };
             self.hurt(id, damage, events);
+        }
+        // The hands come first: a press of use they take opens no door, and
+        // while they carry, holding use draws from no station.
+        if !self.run_hands(id, cmd, use_pressed, events) && use_held && !carrying {
+            if use_pressed {
+                self.users.push(id);
+            }
+            if !self.holders.contains(&id) {
+                self.holders.push(id);
+            }
         }
         self.run_weapon(id, cmd, events);
     }

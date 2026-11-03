@@ -330,7 +330,7 @@ impl Simulation {
             let scene = Scene {
                 world: &self.world,
                 physics: &self.physics,
-                ignore: player.manipulator.held(),
+                ignore: player.held_prop(),
                 others: &[],
             };
             let stuck = crate::collision::CollisionQuery::trace_hull(

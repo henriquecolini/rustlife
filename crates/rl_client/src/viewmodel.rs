@@ -83,6 +83,18 @@ impl Plugin for ViewModelPlugin {
 #[derive(Component)]
 struct ViewCamera;
 
+/// Where a view model is in being put away while the hands carry a prop.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Stowage {
+    /// In hand.
+    #[default]
+    Out,
+    /// Playing its holster sequence.
+    Holstering,
+    /// Put away: not drawn.
+    Away,
+}
+
 /// The view model of a weapon.
 #[derive(Component)]
 pub(crate) struct ViewModel {
@@ -108,12 +120,19 @@ pub(crate) struct ViewModel {
     /// A shot charging (or a grenade being let go) has started its
     /// animation.
     charging: bool,
+    /// Whether it is put away.
+    stowage: Stowage,
 }
 
 impl ViewModel {
     /// The weapon it is the view model of.
     pub(crate) fn weapon(&self) -> WeaponId {
         self.weapon
+    }
+
+    /// Whether it is put away, while the hands carry a prop, and not drawn.
+    pub(crate) fn away(&self) -> bool {
+        self.stowage == Stowage::Away
     }
 }
 
@@ -220,6 +239,7 @@ fn swap_view_model(
             slam_detonations: 0,
             queue: Vec::new(),
             charging: false,
+            stowage: Stowage::Out,
         },
         Moving,
         crate::gravity_gun::Prongs::default(),
@@ -644,6 +664,16 @@ pub(crate) fn animate_view_model(
             slam_activity(name, sticking, detonator)
         })
     };
+    // Put away while the hands carry a prop; drawn anew when they let go.
+    if inventory.is_some_and(Inventory::holstered) {
+        ticks.clear();
+        stow(&mut view, animated, &mut player, &act);
+        return;
+    }
+    if view.stowage != Stowage::Out {
+        view.stowage = Stowage::Out;
+        view.drawn = false;
+    }
     if !view.drawn {
         view.drawn = true;
         player.fade = VIEW_FADE_SECS;
@@ -701,6 +731,37 @@ pub(crate) fn animate_view_model(
         slam.is_some(),
         stepping,
     );
+}
+
+/// Puts the view model away, for the hands to carry a prop: it plays its
+/// holster sequence (`ACT_VM_HOLSTER`) once, holding the last frame, and is no
+/// longer drawn when that ends (at once, without one). What it was in the
+/// middle of is forgotten.
+fn stow(
+    view: &mut ViewModel,
+    animated: &Animated,
+    player: &mut SequencePlayer,
+    act: &impl Fn(&'static str) -> &'static str,
+) {
+    match view.stowage {
+        Stowage::Out => {
+            view.queue.clear();
+            view.thrown = false;
+            view.primed = None;
+            view.charging = false;
+            view.stowage = match animated.activity(act("ACT_VM_HOLSTER")) {
+                Some(sequence) => {
+                    player.restart_held(sequence, 1.0);
+                    Stowage::Holstering
+                }
+                None => Stowage::Away,
+            };
+        }
+        Stowage::Holstering if player.finished(&animated.animation.sequences) => {
+            view.stowage = Stowage::Away;
+        }
+        Stowage::Holstering | Stowage::Away => {}
+    }
 }
 
 /// Keeps the view model lit where the player's eyes are.

@@ -4,8 +4,9 @@
 //! they carry cannot be: it would trail them by that delay plus half a round
 //! trip. So the client steers it as the server does, from where the newest
 //! snapshot has it, with the commands the server has not run yet, and again with
-//! each command it issues (the formulas are the server's,
-//! [`hold_target`] and [`hold_velocity`]). A snapshot that disagrees leaves an
+//! each command it issues (the formulas are the server's: [`hold_target`] and
+//! [`hold_velocity`] for the Manipulator, [`carry_target`] and
+//! [`carry_velocity`] for the hands). A snapshot that disagrees leaves an
 //! error that fades away, like the view's. The server's prop stops at walls: the
 //! prediction sweeps a box against the map and the other props, so it does not
 //! go through what the server's will not. It cannot know a prop will be shoved
@@ -24,6 +25,7 @@ use rl_sim::movement::UserCmd;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::scene::Scene;
 use rl_sim::simulation::{PlayerId, Simulation};
+use rl_sim::tools::hands::{Carrier, carry_target, carry_velocity};
 use rl_sim::tools::manipulator::{Aim, hold_rotation, hold_target, hold_velocity};
 
 /// Seconds a prop let go of takes to ease back into the interpolated past.
@@ -142,13 +144,23 @@ fn prediction_box((mins, maxs): (Vec3, Vec3), centre: Vec3) -> Hull {
     }
 }
 
+/// What holds a prop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Grip {
+    /// The Manipulator, which holds its centre this far beyond the hold
+    /// distance.
+    Manipulator { radius: f32 },
+    /// The hands.
+    Hands,
+}
+
 /// The prop the local player holds, predicted.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct HeldProp {
     body: BodyId,
     course: Course,
-    /// How far its centre is held beyond the hold distance.
-    radius: f32,
+    /// What holds it.
+    grip: Grip,
     /// What its prediction is swept as.
     hull: Hull,
 }
@@ -157,7 +169,14 @@ impl HeldProp {
     /// The prop `player` holds in `sim`, where `sim` has it.
     pub(crate) fn of(sim: &Simulation, player: PlayerId) -> Option<Self> {
         let holder = sim.player(player)?;
-        let body = holder.manipulator.held()?;
+        let (body, relative_rotation, grip) = if let Some(body) = holder.manipulator.held() {
+            let radius = sim.physics().radius(body)?;
+            let rotation = holder.manipulator.held_rotation()?;
+            (body, rotation, Grip::Manipulator { radius })
+        } else {
+            let body = holder.hands.held()?;
+            (body, holder.hands.held_rotation()?, Grip::Hands)
+        };
         let physics = sim.physics();
         let pose = physics.pose(body)?;
         let centre = physics.center_of_mass(body)?;
@@ -169,11 +188,11 @@ impl HeldProp {
                 current: centre,
                 previous_yaw: yaw,
                 current_yaw: yaw,
-                relative_rotation: holder.manipulator.held_rotation()?,
+                relative_rotation,
                 local_centre: pose.rotation.inverse() * (centre - pose.position),
                 error: Vec3::ZERO,
             },
-            radius: physics.radius(body)?,
+            grip,
             hull: prediction_box(physics.bounds(body)?, centre),
         })
     }
@@ -188,15 +207,36 @@ impl HeldProp {
             pitch: cmd.pitch,
             yaw: cmd.yaw,
         };
-        let tuning = &sim.data().manipulator.hold;
-        let error = hold_target(&aim, self.radius, tuning) - self.course.current;
+        let velocity = match self.grip {
+            Grip::Manipulator { radius } => {
+                let tuning = &sim.data().manipulator.hold;
+                hold_velocity(
+                    hold_target(&aim, radius, tuning) - self.course.current,
+                    tuning,
+                )
+            }
+            Grip::Hands => {
+                let Some(holder) = sim.player(player) else {
+                    return;
+                };
+                let carrier = Carrier {
+                    origin: holder.state.origin,
+                    hull: holder.state.hull(&sim.data().movement),
+                    aim,
+                };
+                let hold = &sim.data().hands.hold;
+                let target = carry_target(&carrier, self.body, sim.world(), sim.physics(), hold)
+                    .unwrap_or(self.course.current);
+                carry_velocity(target - self.course.current, hold)
+            }
+        };
         let scene = Scene {
             world: sim.world(),
             physics: sim.physics(),
             ignore: Some(self.body),
             others: &[],
         };
-        let motion = hold_velocity(error, tuning) * sim.dt();
+        let motion = velocity * sim.dt();
         let centre = sweep(&scene, self.course.current, motion, &self.hull);
         self.course.advance(centre, cmd.yaw);
     }
@@ -337,7 +377,7 @@ mod tests {
         HeldProp {
             body: BodyId::from_index(body),
             course: course(),
-            radius: 12.0,
+            grip: Grip::Manipulator { radius: 12.0 },
             hull: Hull::POINT,
         }
     }

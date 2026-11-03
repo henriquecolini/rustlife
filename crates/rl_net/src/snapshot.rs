@@ -33,6 +33,7 @@ use rl_sim::movement::PlayerState;
 use rl_sim::physics::{BodyId, BodyPose};
 use rl_sim::rules::Match;
 use rl_sim::simulation::{GrenadeView, Life, Player, PlayerId, Simulation};
+use rl_sim::tools::hands::Hands;
 use rl_sim::tools::manipulator::Manipulator;
 use rl_sim::weapons::projectile::Projectile;
 use rl_sim::weapons::{Inventory, WeaponId};
@@ -50,6 +51,9 @@ pub struct Motion {
     pub look: (f32, f32),
     /// The weapon in hand.
     pub weapon: Option<WeaponId>,
+    /// The weapon in hand is put away while the hands carry a prop: it is
+    /// not drawn.
+    pub holstered: bool,
 }
 
 /// What only the player themselves is told: enough to predict their own
@@ -62,6 +66,8 @@ pub struct Private {
     pub inventory: Inventory,
     /// The Manipulator, and what it holds.
     pub manipulator: Manipulator,
+    /// The hands, and what they carry.
+    pub hands: Hands,
 }
 
 /// One player, as one client sees them.
@@ -83,12 +89,14 @@ impl PlayerView {
                 state: player.state,
                 look: player.look,
                 weapon: player.inventory.active(),
+                holstered: player.inventory.holstered(),
             },
             life: player.life,
             private: (Some(id) == viewer).then(|| Private {
                 vitals: player.vitals,
                 inventory: player.inventory.clone(),
                 manipulator: player.manipulator.clone(),
+                hands: player.hands.clone(),
             }),
         }
     }
@@ -441,10 +449,12 @@ impl WorldState {
                 player.vitals = private.vitals;
                 player.inventory = private.inventory.clone();
                 player.manipulator = private.manipulator.clone();
+                player.hands = private.hands.clone();
             } else {
-                // Of everyone else only the weapon in hand is known: it is
-                // what their model holds.
+                // Of everyone else only the weapon in hand is known, and
+                // whether it is put away: it is what their model holds.
                 player.inventory.set_held(view.motion.weapon);
+                player.inventory.set_holstered(view.motion.holstered);
             }
         }
         for (pickup, &there) in sim.pickups_mut().iter_mut().zip(&self.pickups) {

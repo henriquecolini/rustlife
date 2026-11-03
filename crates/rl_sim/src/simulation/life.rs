@@ -13,6 +13,7 @@ use crate::movement::{Buttons, PlayerState, UserCmd};
 use crate::physics::{BodyId, Impact, Shove};
 use crate::rng::Rng;
 use crate::rules::{self, MatchEvent};
+use crate::tools::hands::Hands;
 use crate::tools::manipulator::Manipulator;
 use crate::weapons::Inventory;
 
@@ -69,7 +70,7 @@ impl Simulation {
             killer: damage.attacker,
         };
         player.state.velocity = Vec3::ZERO;
-        player.manipulator.drop_held(&mut self.physics);
+        player.drop_all(&mut self.physics, &self.data);
         self.physics.set_player_enabled(player.body, false);
         events.kills.push(Kill {
             victim,
@@ -138,11 +139,12 @@ impl Simulation {
         let Some(player) = self.players.get_mut(id.index()).and_then(Option::as_mut) else {
             return;
         };
-        player.manipulator.drop_held(&mut self.physics);
+        player.drop_all(&mut self.physics, &self.data);
         *player = super::Player {
             state: PlayerState::at(origin),
             body: player.body,
             manipulator: Manipulator::default(),
+            hands: Hands::default(),
             vitals: Vitals::spawn(&self.data.player),
             inventory: Inventory::loadout(&arsenal, &self.data.rules.loadout),
             life: Life::Alive,

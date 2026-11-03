@@ -344,6 +344,9 @@ pub struct Inventory {
     zoomed: bool,
     /// The laser is on.
     laser: bool,
+    /// The weapon in hand is put away while the hands carry a prop: it does
+    /// nothing until it is brought out again.
+    holstered: bool,
     /// A SLAM's modes.
     slam: SlamState,
     /// Counts clicks and pumps, for views to notice them: wraps.
@@ -373,6 +376,7 @@ impl Inventory {
             empty_wait: 0.0,
             zoomed: false,
             laser: true,
+            holstered: false,
             slam: SlamState::default(),
             dry_count: 0,
             pump_count: 0,
@@ -412,6 +416,57 @@ impl Inventory {
     /// it drawn. Their own inventory never needs this.
     pub fn set_held(&mut self, weapon: Option<WeaponId>) {
         self.active = weapon;
+    }
+
+    /// Whether the weapon in hand is put away (see [`holster`](Self::holster)).
+    #[must_use]
+    pub fn holstered(&self) -> bool {
+        self.holstered
+    }
+
+    /// Shows the weapon in hand as put away or not, with none of the state of
+    /// doing it: how the replica of another player keeps it hidden.
+    pub fn set_holstered(&mut self, holstered: bool) {
+        self.holstered = holstered;
+    }
+
+    /// Whether the weapon in hand can be put away: not a launcher whose rocket
+    /// is still in the air (`CWeaponRPG::CanHolster`).
+    #[must_use]
+    pub fn can_holster(&self, arsenal: &Arsenal) -> bool {
+        !(self.latch.projectile_out
+            && self
+                .active
+                .and_then(|weapon| arsenal.weapon(weapon))
+                .is_some_and(|config| config.reload_after_projectile.is_some()))
+    }
+
+    /// Puts the weapon in hand away, for the hands to carry a prop: whatever it
+    /// was doing (a reload, a grenade drawn back, a charge) is called off, and
+    /// it does nothing until [`unholster`](Self::unholster).
+    pub fn holster(&mut self) {
+        self.put_away();
+        self.phase = Phase::Ready;
+        self.holstered = true;
+    }
+
+    /// Brings the weapon put away back out: it deploys as if just switched to
+    /// (`Deploy`). Returns it, if there is one.
+    pub fn unholster(&mut self, arsenal: &Arsenal) -> Option<WeaponId> {
+        if !std::mem::take(&mut self.holstered) {
+            return None;
+        }
+        let weapon = self.active?;
+        let deploy = arsenal
+            .weapon(weapon)
+            .map_or(0.0, |config| config.deploy_time);
+        self.phase = if deploy > 0.0 {
+            Phase::Deploying(deploy)
+        } else {
+            Phase::Ready
+        };
+        self.next = [deploy; 2];
+        Some(weapon)
     }
 
     /// Primary shots fired since the primary button went down, this tick's
@@ -800,12 +855,12 @@ impl Inventory {
         })
     }
 
-    /// When the weapon in hand is a tool (the Manipulator) and deployed:
-    /// the rest after each of its actions, for `tools::manipulator`.
+    /// When the weapon in hand is a tool (the Manipulator), deployed and not
+    /// put away: the rest after each of its actions, for `tools::manipulator`.
     #[must_use]
     pub fn tool(&self, arsenal: &Arsenal) -> Option<Intervals> {
         let config = arsenal.weapon(self.active?)?;
-        if !is_tool(config) || matches!(self.phase, Phase::Deploying(_)) {
+        if !is_tool(config) || self.holstered || matches!(self.phase, Phase::Deploying(_)) {
             return None;
         }
         let interval = |fire: &Option<FireConfig>| fire.as_ref().map_or(0.0, |fire| fire.interval);
@@ -833,6 +888,11 @@ impl Inventory {
 
     fn run(&mut self, arsenal: &Arsenal, cmd: &UserCmd, dt: f32) -> WeaponTick {
         let mut result = WeaponTick::default();
+        // Put away, a weapon does nothing at all (HL2 skips `ItemPostFrame`
+        // while the player uses something).
+        if self.holstered {
+            return result;
+        }
         let pressed = Buttons::from_bits(cmd.buttons.bits() & !self.old_buttons.bits());
         let held = cmd.buttons;
         self.old_buttons = held;

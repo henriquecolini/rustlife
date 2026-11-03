@@ -95,7 +95,9 @@ pub struct Aim {
 }
 
 impl Aim {
-    fn forward(&self) -> Vec3 {
+    /// The view's direction.
+    #[must_use]
+    pub fn forward(&self) -> Vec3 {
         view_direction(self.pitch, self.yaw)
     }
 
@@ -493,9 +495,9 @@ fn punt_target(
             .map(|model| PuntTarget::Brush(model, trace.end)),
         (None, None) => None,
     };
-    first_hit(aim.eye, end, &PUNT_BOX, world, physics)
+    first_hit(aim.eye, end, &PUNT_BOX, AIM_MASK, world, physics)
         .and_then(of)
-        .or_else(|| first_hit(aim.eye, end, &Hull::POINT, world, physics).and_then(of))
+        .or_else(|| first_hit(aim.eye, end, &Hull::POINT, AIM_MASK, world, physics).and_then(of))
 }
 
 /// The prop `hull` hits going from `start` to `end`, with where it stopped;
@@ -508,25 +510,27 @@ fn first_prop(
     world: &CollisionWorld,
     physics: &PhysicsWorld,
 ) -> Option<(BodyId, Vec3)> {
-    let trace = first_hit(start, end, hull, world, physics)?;
+    let trace = first_hit(start, end, hull, AIM_MASK, world, physics)?;
     Some((trace.body?, trace.end))
 }
 
-/// What `hull` hits going from `start` to `end`, of the map and the props;
-/// `None` if it starts stuck in the map.
-fn first_hit(
+/// What `hull` hits going from `start` to `end`, of the map and the props
+/// (debris too) whose contents share `mask`; `None` if it starts stuck in the
+/// map.
+pub(crate) fn first_hit(
     start: Vec3,
     end: Vec3,
     hull: &Hull,
+    mask: u32,
     world: &CollisionWorld,
     physics: &PhysicsWorld,
 ) -> Option<Trace> {
-    let map = world.trace_hull(start, end, hull, AIM_MASK);
+    let map = world.trace_hull(start, end, hull, mask);
     if map.all_solid {
         return None;
     }
     // Nothing beyond the map's hit matters: trace props only that far.
-    let props = physics.trace_hull_including_debris(start, map.end, hull, AIM_MASK, None);
+    let props = physics.trace_hull_including_debris(start, map.end, hull, mask, None);
     Some(if props.hit() || props.start_solid {
         // Rescale the props' fraction of the shortened move to the whole
         // move, as `Scene` does.

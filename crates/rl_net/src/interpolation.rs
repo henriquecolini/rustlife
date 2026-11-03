@@ -255,6 +255,7 @@ mod tests {
                 state: PlayerState::at(Vec3::new(x, 0.0, 0.0)),
                 look: (0.0, yaw),
                 weapon: None,
+                holstered: false,
             },
             life,
             private: None,

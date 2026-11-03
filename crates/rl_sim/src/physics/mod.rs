@@ -598,6 +598,51 @@ impl PhysicsWorld {
         Some((from_b3(aabb.lower_bound), from_b3(aabb.upper_bound)))
     }
 
+    /// How far a prop reaches from its origin along `direction` (a unit
+    /// vector, Source space) as it is turned now: the most any corner of its
+    /// shape lies that way (Source's `CollideGetExtent`, as a distance).
+    #[must_use]
+    pub fn extent(&self, body: BodyId, direction: Vec3) -> Option<f32> {
+        let prop = self.prop(body)?;
+        let local = self.pose(body)?.rotation.inverse() * direction;
+        prop.pieces
+            .iter()
+            .flat_map(|piece| piece.hull.vertices())
+            .map(|vertex| vertex.dot(local))
+            .reduce(f32::max)
+    }
+
+    /// The size of a prop's box in its own frame, units: how long its shape
+    /// is along each of its axes, however it is turned (Source's
+    /// `OBBSize`).
+    #[must_use]
+    pub fn size(&self, body: BodyId) -> Option<Vec3> {
+        let prop = self.prop(body)?;
+        let mut corners = prop
+            .pieces
+            .iter()
+            .flat_map(|piece| piece.hull.vertices())
+            .copied();
+        let first = corners.next()?;
+        let (mins, maxs) = corners.fold((first, first), |(mins, maxs), vertex| {
+            (mins.min(vertex), maxs.max(vertex))
+        });
+        Some(maxs - mins)
+    }
+
+    /// Whether a body is touching anything after the last step: the map, a
+    /// prop or a player it collides with.
+    #[must_use]
+    pub fn in_contact(&self, body: BodyId) -> bool {
+        let Some(handle) = self.handle(body) else {
+            return false;
+        };
+        let world = self.b3_world();
+        let capacity =
+            usize::try_from(b3::body::body_get_contact_capacity(&world, handle)).unwrap_or(0);
+        capacity > 0 && !b3::body::body_get_contact_data(&world, handle, capacity).is_empty()
+    }
+
     /// Whether a prop is simulated (rather than fixed in place).
     #[must_use]
     pub fn is_dynamic(&self, body: BodyId) -> bool {
@@ -769,6 +814,18 @@ impl PhysicsWorld {
         let world = self.b3_world_mut();
         if body_get_type(world, handle) == BodyType::Dynamic {
             body_apply_linear_impulse(world, handle, to_b3(impulse), to_b3(point), true);
+        }
+    }
+
+    /// Applies an angular `impulse` (kg·units²·radians/s, world axes) to a
+    /// dynamic body, waking it.
+    pub fn apply_angular_impulse(&mut self, body: BodyId, impulse: Vec3) {
+        let Some(handle) = self.handle(body) else {
+            return;
+        };
+        let world = self.b3_world_mut();
+        if body_get_type(world, handle) == BodyType::Dynamic {
+            b3::body::body_apply_angular_impulse(world, handle, to_b3(impulse), true);
         }
     }
 

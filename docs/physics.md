@@ -1,10 +1,12 @@
-# Prop physics and the Manipulator
+# Prop physics, the Manipulator and the hands
 
 Implemented in `crates/rl_sim/src/physics/` (the physics world),
-`crates/rl_sim/src/tools/manipulator.rs` (the tool) and
+`crates/rl_sim/src/tools/manipulator.rs` (the tool),
+`crates/rl_sim/src/tools/hands.rs` (carrying by hand) and
 `crates/rl_sim/src/simulation/` (the tick that ties them to players). All
 tuning lives in [`data/physics.ron`](../data/physics.ron),
-[`data/tools/manipulator.ron`](../data/tools/manipulator.ron) and, for how
+[`data/tools/manipulator.ron`](../data/tools/manipulator.ron),
+[`data/tools/hands.ron`](../data/tools/hands.ron) and, for how
 often the Manipulator acts, [`data/weapons/manipulator.ron`](../data/weapons/manipulator.ron).
 
 ## The physics world
@@ -339,6 +341,57 @@ example when looking down. Once let go, the prop and its former holder keep
 ignoring each other until their bounds come apart. So a prop thrown from up
 close neither shoves the thrower nor hits them.
 
+## Carrying by hand
+
+As in HL2DM (`CPlayerPickupController`), a player can pick up a light prop with
+use, whatever the weapon in hand: a much weaker Gravity Gun that needs no
+weapon. Every number in [`data/tools/hands.ron`](../data/tools/hands.ron) is
+HL2DM's, read from its `server.so`.
+
+| Input | Action |
+|-------|--------|
+| Use on a prop | Pick it up if it is grabbable, weighs at most `pickup.max_mass` (35 kg: a wooden crate, a drum, a paint can) and no side of its own box is longer than `pickup.max_size` (128). The weapon in hand is put away (its view model plays its holster sequence and goes; others see no weapon). A prop the player stands on cannot be picked up, nor can anything while a launcher's rocket is in the air (`CWeaponRPG::CanHolster`). The Gravity Gun lets go of what it held. |
+| Primary fire while carrying | Toss it along the view: an impulse of `toss.force` (1000, `player_throwforce`) times a factor ramping from 0.5 at 0.5 kg to 4 at 15 kg, plus a random spin of up to `toss.spin` × the factor about each axis. A 1 kg can leaves at about 620 units/s, a 5 kg box at 317, a 35 kg drum at 114. |
+| Secondary fire or use while carrying | Set it down. |
+
+Letting go of the prop in any way brings the weapon back out, deploying as if
+just switched to. While carrying, the weapon in hand does nothing at all (not
+even a switch: the weapon list stays shut), sprinting stops, and holding use
+draws from no charger. Use finds props as HL2's `FindUseEntity` does: a ray
+along the view, then boxes 16 units to each side swept 72 units along lines
+tilted 45, 30, 20, 15 and 10 degrees down and 10 and 15 up, taking the first
+prop to carry whose hit point is within `map_logic.use_range` (80) of the eyes,
+heights within a band as tall as the player's box (from its middle up) counting
+as level. A button or door the ray meets within reach is used instead.
+
+**Carrying** steers the prop as the Manipulator does, by velocity, but to where
+`CGrabController::UpdateObject` puts it: along the view with its pitch clamped
+to ±`hold.max_pitch` (75), `hold.gap` (24) plus `radius` ahead of the eyes,
+where `radius` is half the player box's diagonal plus how far the prop reaches
+back from its origin; only half of `radius` ahead when a wall is within half of
+`gap` + 2 × `radius`; and never closer than `radius` to the player's upright
+axis, so that looking down holds it in front of the feet. It arrives in one tick
+(`follow_time` 0.015) at no more than 1000 units/s, turning with the view's yaw
+only.
+
+**Falling from the hands.** HL2 measures how far the prop is from where it was
+steered each tick and keeps a smoothed `error`: each measurement weighs in by
+the seconds since the last, and counts half when it is more than 1000 units/s
+could close in that time (the view swinging round rather than a wall). Above
+`hold.drop_error` (12) the prop drops. Nothing counts for `hold.error_grace`
+(1 s) after the pickup.
+
+**Setting down.** A prop let go of while touching something stops dead;
+otherwise (and before a toss) its speed is clamped to `release.max_speed` (285,
+`hl2_normspeed` × 1.5) and its spin to 720 degrees/s, so a prop swept along
+with a turning view does not fly off.
+
+Not reproduced: the angle alignment HL2 asks for on pickup
+(`SetAngleAlignment(DOT_30DEGREE)`), which as written only nudges the roll;
+props' `preferred_carryangles`; the carried prop's mass being cut to 1 kg while
+held (it pushes other props as hard as its own mass does, as the Manipulator's
+does); and the use and deny sounds of pressing use.
+
 ## The tick
 
 `Simulation::tick` runs, for each player with a command:
@@ -346,7 +399,8 @@ close neither shoves the thrower nor hits them.
 1. **Move**, against the map and its props. The prop the player holds is
    ignored.
 2. **Push** the props the player ran into.
-3. Run the player's **Manipulator** from where they now stand.
+3. Run the player's **hands** (use picking up or setting down; carrying,
+   tossing), then the **Manipulator**, from where they now stand.
 
 It then moves every player's kinematic box and **steps** physics, collecting
 impacts.
@@ -372,6 +426,8 @@ steer ahead of the server with the same formula ([netcode.md](netcode.md)).
 
 For scripted checks, `rustlife --grab-prop` goes to the grabbable prop
 nearest the spawn and picks it up, and `--throw-after <secs>` throws it.
+`--carry-prop` does the same by hand, with use, on the nearest prop light
+enough.
 With `--screenshot`, the shot shows the prop held, or in flight just after
 the throw. These scripts move the player on the hosted server.
 
@@ -383,6 +439,7 @@ the throw. These scripts move the player on the hosted server.
 | `rl_sim/src/physics/joints.rs` | Reading ball sockets (attached to the world either way), hinges, length constraints, and what is left out |
 | `rl_level/tests/level.rs` | A named prop hanging on the map's ball socket through `Level::simulation` |
 | `rl_sim/tests/manipulator.rs` | Grabbing within range and mass, pulling, carrying and turning, launching and punting at the configured speeds, punting frozen props (breaking, freeing, a dry fire), dropping, the grip breaking, a thrown prop hurting another player |
+| `rl_sim/tests/hands.rs` | Picking up by hand and putting the weapon away, carrying ahead and turning, looking down, tossing light and heavy props at HL2's speeds, setting down with either button, the release speed clamp, too heavy, too big and stood-on props, no sprinting, a prop left behind dropping after the grace, the Gravity Gun put away |
 | `rl_sim/tests/simulation.rs` | Spawning clear of props, walking while carrying, repeatable runs |
 | `rl_sim/tests/real_map.rs` | A real map's physics world, with crates dropped at every spawn landing on the floor (`RUSTLIFE_TEST_BSP`) |
 | `rl_client/tests/local_play.rs` | A real map's props becoming bodies in the running client (`RUSTLIFE_TEST_GAME_DIR`) |

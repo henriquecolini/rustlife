@@ -36,6 +36,8 @@ use rl_sim::weapons::WeaponId;
 
 /// How far from the target prop the grab step places the player, units.
 const GRAB_STAND_OFF: f32 = 110.0;
+/// How far from a prop the carry step stands, units: within use's reach.
+const CARRY_STAND_OFF: f32 = 56.0;
 /// How far from the target player the shoot step places the player, units.
 const SHOOT_STAND_OFF: f32 = 320.0;
 /// How far from a pickup the visit step places the player, units.
@@ -91,6 +93,9 @@ pub struct InputScript {
     /// Once the grabbed prop is in hand, look this many degrees above the
     /// horizon, so that it is thrown into the air rather than at the floor.
     pub throw_pitch: Option<f32>,
+    /// The grab step picks the prop up in the hands (use) rather than with the
+    /// Manipulator, choosing one light enough; primary fire then tosses it.
+    pub by_hand: bool,
     progress: Progress,
 }
 
@@ -118,6 +123,14 @@ impl InputScript {
     #[must_use]
     pub fn with_throw_pitch(mut self, degrees: Option<f32>) -> Self {
         self.throw_pitch = degrees;
+        self
+    }
+
+    /// This script, picking the prop up in the hands rather than with the
+    /// Manipulator if `by_hand`.
+    #[must_use]
+    pub fn with_hands(mut self, by_hand: bool) -> Self {
+        self.by_hand = by_hand;
         self
     }
 
@@ -445,19 +458,23 @@ fn arm(player: PlayerId, sim: &mut Simulation, name: &str) -> Option<WeaponId> {
 }
 
 /// The grab step: Manipulator in hand, at the nearest prop, secondary fire
-/// held until it is picked up.
+/// held until it is picked up; or, by hand, at the nearest prop light enough,
+/// use pressed until it is.
 fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &mut UserCmd) {
-    let manipulator = sim.arsenal().tool();
-    let in_hand = sim
-        .player(player)
-        .and_then(|player| player.inventory.active());
-    if in_hand != manipulator {
-        cmd.select = manipulator;
+    let by_hand = script.by_hand;
+    if !by_hand {
+        let manipulator = sim.arsenal().tool();
+        let in_hand = sim
+            .player(player)
+            .and_then(|player| player.inventory.active());
+        if in_hand != manipulator {
+            cmd.select = manipulator;
+        }
     }
     let target = script
         .progress
         .target
-        .find_once(|| go_to_nearest_prop(player, sim));
+        .find_once(|| go_to_nearest_prop(player, sim, by_hand));
     if let Some((body, pitch, yaw)) = target {
         // Keep aiming at the target: the player settles onto the floor
         // after being moved, and a grabbed prop moves in front.
@@ -465,9 +482,13 @@ fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &
             (Some(eye), Some(center)) => angles_to(eye, center),
             _ => (pitch, yaw),
         };
-        let held = sim
-            .player(player)
-            .and_then(|player| player.manipulator.held());
+        let held = sim.player(player).and_then(|player| {
+            if by_hand {
+                player.hands.held()
+            } else {
+                player.manipulator.held()
+            }
+        });
         // Once the prop is in hand, look up if asked to: it is thrown
         // along the view.
         let pitch = match (held == Some(body), script.throw_pitch) {
@@ -477,7 +498,14 @@ fn grab(script: &mut InputScript, player: PlayerId, sim: &mut Simulation, cmd: &
         cmd.pitch = pitch;
         cmd.yaw = yaw;
         if held != Some(body) && !script.progress.fired {
-            cmd.buttons = cmd.buttons | Buttons::ATTACK2;
+            if !by_hand {
+                cmd.buttons = cmd.buttons | Buttons::ATTACK2;
+            } else if !std::mem::replace(&mut script.progress.used, true) {
+                // Use acts on a press: press it, let go, press again.
+                cmd.buttons = cmd.buttons | Buttons::USE;
+            } else {
+                script.progress.used = false;
+            }
         }
     }
 }
@@ -582,19 +610,30 @@ fn go_to_nearest_player(player: PlayerId, sim: &mut Simulation) -> Option<(Playe
 
 /// Moves the player near the grabbable prop closest to them, facing it, and
 /// returns the prop with the view angles aimed at its centre.
-fn go_to_nearest_prop(player: PlayerId, sim: &mut Simulation) -> Option<(BodyId, f32, f32)> {
+fn go_to_nearest_prop(
+    player: PlayerId,
+    sim: &mut Simulation,
+    by_hand: bool,
+) -> Option<(BodyId, f32, f32)> {
     let origin = sim.player(player)?.state.origin;
     let physics = sim.physics();
+    let pickup = &sim.data().hands.pickup;
     let (body, center) = physics
         .props()
         .filter(|&body| physics.is_grabbable(body))
+        .filter(|&body| !by_hand || rl_sim::tools::hands::can_carry(body, physics, pickup))
         .filter_map(|body| Some((body, physics.center_of_mass(body)?)))
         .min_by(|a, b| {
             a.1.distance_squared(origin)
                 .total_cmp(&b.1.distance_squared(origin))
         })?;
     let floor = center - Vec3::Z * 16.0;
-    if !stand_near(player, sim, origin, floor, GRAB_STAND_OFF, center) {
+    let stand_off = if by_hand {
+        CARRY_STAND_OFF
+    } else {
+        GRAB_STAND_OFF
+    };
+    if !stand_near(player, sim, origin, floor, stand_off, center) {
         warn!("script: no room to stand by prop {body:?}");
         return None;
     }

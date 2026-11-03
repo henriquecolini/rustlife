@@ -375,8 +375,10 @@ fn hold_weapons(
     };
     for (holder, view, global, holding) in &mut views {
         let light = global.translation() + Vec3::Y * HELD_LIGHT_HEIGHT;
+        // A weapon put away while the hands carry a prop is not drawn.
         let weapon = sim
             .player(view.0)
+            .filter(|player| !player.inventory.holstered())
             .and_then(|player| player.inventory.active());
         if let Some(holding) = &holding
             && holding.weapon == weapon

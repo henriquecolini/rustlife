@@ -87,6 +87,15 @@ pub(crate) fn latch_input(
         .sim()
         .zip(game.local())
         .and_then(|(sim, local)| Some((&sim.player(local)?.inventory, sim.arsenal())));
+    // With the weapon put away while the hands carry a prop there is no list
+    // to pick from (HL2 hides it, `HIDEHUD_WEAPONSELECTION`).
+    let carried = match carried {
+        Some((inventory, _)) if inventory.holstered() => {
+            selector.dismiss();
+            None
+        }
+        carried => carried,
+    };
     // Either fire button picks from the list instead of firing, as HL2's
     // `CBaseHudWeaponSelection::ProcessInput` has it.
     let picking = selector.is_open()

@@ -127,10 +127,11 @@ fn spawn_scope(mut commands: Commands) {
 }
 
 /// While scoped, the weapon's view model is put away and the reticle shows.
+/// A view model put away for the hands to carry a prop is not drawn either.
 fn show_scope(
     zoom: Res<Zoom>,
     mut scope: Query<&mut Visibility, (With<Scope>, Without<ViewModel>)>,
-    mut view_models: Query<&mut Visibility, (With<ViewModel>, Without<Scope>)>,
+    mut view_models: Query<(&mut Visibility, &ViewModel), Without<Scope>>,
 ) {
     let scoped = zoom.blend >= SCOPED_AT;
     for mut visibility in &mut scope {
@@ -140,8 +141,8 @@ fn show_scope(
             Visibility::Hidden
         };
     }
-    for mut visibility in &mut view_models {
-        *visibility = if scoped {
+    for (mut visibility, view) in &mut view_models {
+        *visibility = if scoped || view.away() {
             Visibility::Hidden
         } else {
             Visibility::Inherited
