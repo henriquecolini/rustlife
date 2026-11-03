@@ -105,6 +105,12 @@ impl AssetLoader for VtfLoader {
 /// constantly (floors, long corridors), where anisotropy matters most.
 const ANISOTROPY: u16 = 8;
 
+/// An [`Image`] of `texture`'s pixels, as a texture loaded by the game is:
+/// with its mips, sRGB and tiling, whatever the texture quality.
+pub(crate) fn image_from_rgba(texture: DecodedTexture) -> Image {
+    image_from_decoded(texture, &TextureDetail::default())
+}
+
 /// Wraps decoded VTF pixels in a GPU-ready [`Image`] with a full mip chain and
 /// a tiling sampler.
 ///

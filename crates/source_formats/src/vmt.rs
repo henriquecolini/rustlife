@@ -350,6 +350,44 @@ fn flag_on(texts: &[&str], flag: &str) -> bool {
     })
 }
 
+/// What an `Eyes` material draws a character's eye with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EyeTextures {
+    /// `$basetexture`: the eyeball, the white of the eye.
+    pub eyeball: String,
+    /// `$iris`: the iris, which the game lays over the eyeball where the
+    /// eye looks.
+    pub iris: String,
+}
+
+/// The textures of an `Eyes` material's text, lower-cased, or `None` for
+/// any other shader or an eye without an iris.
+#[must_use]
+pub fn eye_textures(text: &str) -> Option<EyeTextures> {
+    let shader = text
+        .split(|c: char| c == '"' || c.is_whitespace() || c == '{')
+        .find(|word| !word.is_empty())?;
+    if !shader.eq_ignore_ascii_case("eyes") {
+        return None;
+    }
+    Some(EyeTextures {
+        eyeball: parameter(text, "$basetexture")?,
+        iris: parameter(text, "$iris")?,
+    })
+}
+
+/// The value of parameter `key` in a VMT's text, lower-cased and without
+/// quotes, if it is set on a line of its own.
+fn parameter(text: &str, key: &str) -> Option<String> {
+    text.lines().find_map(|line| {
+        let mut words = line.split_whitespace();
+        let name = words.next()?.trim_matches('"');
+        let value = words.next()?.trim_matches('"');
+        name.eq_ignore_ascii_case(key)
+            .then(|| value.to_ascii_lowercase())
+    })
+}
+
 /// `$basetexture` for any shader. `vmt-parser`'s own `base_texture()` returns
 /// `None` for several shaders that do have one — notably `sky`, which would
 /// otherwise make a skybox fall back to its compressed-HDR texture and render
@@ -401,6 +439,22 @@ mod tests {
         }
         let other = r#""UnlitGeneric" { "$basetexture" "a" }"#;
         assert_eq!(as_vertex_lit(other), other);
+    }
+
+    #[test]
+    fn an_eyes_material_names_its_eyeball_and_iris() {
+        let text = "\"eyes\"\n{\n\t\"$basetexture\" \"models/Humans/Male/eyeball_l\"\n\t\"$iris\" \"models/Humans/Male/pupil_l\"\n\t\"$halflambert\" 1\n}";
+        assert_eq!(
+            eye_textures(text),
+            Some(EyeTextures {
+                eyeball: "models/humans/male/eyeball_l".to_owned(),
+                iris: "models/humans/male/pupil_l".to_owned(),
+            })
+        );
+        let no_iris = "Eyes\n{\n\"$basetexture\" \"models/humans/male/eyeball_l\"\n}";
+        assert_eq!(eye_textures(no_iris), None, "an eye without an iris");
+        let other = "\"VertexLitGeneric\"\n{\n\"$basetexture\" \"a\"\n\"$iris\" \"b\"\n}";
+        assert_eq!(eye_textures(other), None, "not an eye");
     }
 
     #[test]

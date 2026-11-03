@@ -483,6 +483,7 @@ mod tests {
             physics: None,
             animation: None,
             root_idle: None,
+            eyes: Vec::new(),
         }
     }
 

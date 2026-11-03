@@ -23,6 +23,7 @@ use bevy_asset::AssetApp;
 
 pub mod coords;
 pub mod decal;
+pub mod eyes;
 pub mod irradiance;
 pub mod light_field;
 pub mod map;

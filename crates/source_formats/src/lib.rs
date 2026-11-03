@@ -31,6 +31,7 @@ pub mod anim;
 pub mod bsp;
 pub mod collision;
 pub mod entities;
+pub mod eyes;
 mod leaves;
 pub mod lightmap;
 pub mod lights;

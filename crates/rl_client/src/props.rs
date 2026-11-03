@@ -391,7 +391,11 @@ fn attach_models(
                         base: part.mesh.clone(),
                     });
                 }
-                if let Some(material) = model.material(prop.skin, part.material) {
+                if let Some(eyes) = model.eye_material(prop.skin, part.material) {
+                    // A character's eyes, with their irises.
+                    material_maps.provide(&eyes.name, &eyes.material);
+                    child.insert((Surface(eyes.name.clone()), PartSlot(part.material)));
+                } else if let Some(material) = model.material(prop.skin, part.material) {
                     material_maps.request(material, &asset_server);
                     child.insert((Surface(material.to_owned()), PartSlot(part.material)));
                 }

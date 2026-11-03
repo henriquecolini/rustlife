@@ -75,6 +75,14 @@ impl MaterialMaps {
             self.source.insert(name.to_owned(), handle);
         }
     }
+
+    /// Gives material `name` the material a model made for itself (see
+    /// [`rl_assets::model::EyeMaterial`]), rather than one read from a VMT.
+    pub(crate) fn provide(&mut self, name: &str, material: &Handle<SourceMaterial>) {
+        self.source
+            .entry(name.to_owned())
+            .or_insert_with(|| material.clone());
+    }
 }
 
 /// The Bevy material a surface is drawn with.

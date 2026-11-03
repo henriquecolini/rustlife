@@ -31,11 +31,16 @@ use bevy_mesh::{Mesh, PrimitiveTopology, VertexAttributeValues};
 use bevy_reflect::TypePath;
 use futures_lite::AsyncReadExt;
 use source_formats::anim::{self, ModelAnimation};
+use source_formats::eyes::{self, Eyeball};
 use source_formats::mdl::{self, ModelError, ModelGeometry, ModelMesh};
 use source_formats::phy::{self, PhysicsModel};
+use source_formats::vmt;
+use source_formats::vtf::{self, DecodedTexture};
 use thiserror::Error;
 
 use crate::coords;
+use crate::eyes::{self as eye_bake, EyeTriangle};
+use crate::material::SourceMaterial;
 use crate::pose::PoseRig;
 use crate::skeleton::{self, SequenceClips, Skeleton};
 use crate::source::SOURCE;
@@ -57,6 +62,19 @@ pub struct ModelPart {
     /// Model vertex index of each of the mesh's vertices, which baked
     /// per-vertex lighting is indexed by.
     pub vertex_ids: Vec<u32>,
+}
+
+/// The material a character's eyes are drawn with, made for one model: its
+/// eyeball texture with the iris laid over it (see [`crate::eyes`]).
+#[derive(Debug, Clone)]
+pub struct EyeMaterial {
+    /// The material slot of the model's meshes that it is drawn on.
+    pub slot: usize,
+    /// A name for it that is unique to the model, the way materials are
+    /// named by whatever caches them.
+    pub name: String,
+    /// The material.
+    pub material: Handle<SourceMaterial>,
 }
 
 /// A loaded model: its meshes and, per skin, the material each slot uses.
@@ -88,6 +106,9 @@ pub struct ModelAsset {
     /// its bone, Bevy space, model frame. A weapon held by that bone is
     /// placed at its inverse.
     pub root_idle: Option<bevy_transform::components::Transform>,
+    /// The eyes of a character, which are drawn with a material made for the
+    /// model rather than the one its skin names (in skin 0 only).
+    pub eyes: Vec<EyeMaterial>,
 }
 
 /// What animating a skeletal model takes.
@@ -127,6 +148,15 @@ impl ModelAnimationAsset {
 }
 
 impl ModelAsset {
+    /// The eyes' own material for `slot` in `skin`, if it has one.
+    #[must_use]
+    pub fn eye_material(&self, skin: usize, slot: usize) -> Option<&EyeMaterial> {
+        if skin != 0 {
+            return None;
+        }
+        self.eyes.iter().find(|eye| eye.slot == slot)
+    }
+
     /// The material of `slot` in `skin`, falling back to skin 0 for skins the
     /// model does not have (as the engine does).
     #[must_use]
@@ -191,6 +221,7 @@ impl AssetLoader for MdlLoader {
         let physics = load_physics(load_context, &stem).await;
         let animation = load_animation(load_context, &mdl).await;
         let skinned = animation.is_some();
+        let eyes = bake_eyes(load_context, &mdl, &geometry, &skins).await;
         let parts = geometry
             .meshes
             .iter()
@@ -215,6 +246,7 @@ impl AssetLoader for MdlLoader {
             root_idle: geometry
                 .root_idle
                 .map(|(position, rotation)| skeleton::local_transform(position, rotation)),
+            eyes,
         })
     }
 
@@ -333,6 +365,151 @@ async fn load_animation(
         attachments,
         rig,
     })
+}
+
+/// The eyes of a character: for each material slot that is an eye's (an
+/// `Eyes` material with an iris), the eyeball texture with the iris laid
+/// over it, as a material of its own. A model without eyeballs has none.
+async fn bake_eyes(
+    load_context: &mut LoadContext<'_>,
+    mdl: &[u8],
+    geometry: &ModelGeometry,
+    skins: &[Vec<Option<String>>],
+) -> Vec<EyeMaterial> {
+    let eyeballs = eyes::read(mdl);
+    let Some(bones) = (!eyeballs.is_empty())
+        .then(|| anim::read(mdl, None).ok())
+        .flatten()
+        .map(|model| bone_rests(&model))
+    else {
+        return Vec::new();
+    };
+    let mut slots: Vec<usize> = geometry.meshes.iter().map(|mesh| mesh.material).collect();
+    slots.sort_unstable();
+    slots.dedup();
+    let mut materials = Vec::new();
+    for slot in slots {
+        let Some(name) = skins
+            .first()
+            .and_then(|skin| skin.get(slot))
+            .cloned()
+            .flatten()
+        else {
+            continue;
+        };
+        let Some(textures) = eye_textures(load_context, &name).await else {
+            continue;
+        };
+        let (eyeball, iris) = textures;
+        let triangles = eye_triangles(geometry, &eyeballs, &bones, slot);
+        let baked = eye_bake::bake(&eyeball, &iris, &triangles, EYE_TEXTURE_SIZE);
+        let image = load_context.add_labeled_asset(
+            format!("eye{slot}_texture"),
+            crate::texture::image_from_rgba(baked),
+        );
+        let material = load_context.add_labeled_asset(
+            format!("eye{slot}"),
+            SourceMaterial {
+                base_color: Some(image),
+                ..SourceMaterial::default()
+            },
+        );
+        materials.push(EyeMaterial {
+            slot,
+            name: format!("{}#eye{slot}", load_context.path()),
+            material,
+        });
+    }
+    materials
+}
+
+/// Pixels on a side of an eye's texture.
+const EYE_TEXTURE_SIZE: u32 = 256;
+
+/// The eyeball and iris textures of material `name`, if it is an eye's.
+async fn eye_textures(
+    load_context: &mut LoadContext<'_>,
+    name: &str,
+) -> Option<(DecodedTexture, DecodedTexture)> {
+    let bytes = load_context
+        .read_asset_bytes(format!("{SOURCE}://materials/{name}.vmt"))
+        .await
+        .ok()?;
+    let textures = vmt::eye_textures(&String::from_utf8_lossy(&bytes))?;
+    let mut decoded = Vec::new();
+    for texture in [&textures.eyeball, &textures.iris] {
+        let path = format!("{SOURCE}://materials/{}.vtf", texture.replace('\\', "/"));
+        let bytes = load_context.read_asset_bytes(path).await.ok()?;
+        decoded.push(vtf::decode(&bytes).ok()?);
+    }
+    let iris = decoded.pop()?;
+    Some((decoded.pop()?, iris))
+}
+
+/// Where each bone is at rest, as the matrix that takes a point in its space
+/// to the model's, Source space.
+fn bone_rests(model: &ModelAnimation) -> Vec<bevy_math::Mat4> {
+    let mut rests: Vec<bevy_math::Mat4> = Vec::with_capacity(model.bones.len());
+    for bone in &model.bones {
+        let [x, y, z, w] = bone.rotation;
+        let local = bevy_math::Mat4::from_rotation_translation(
+            bevy_math::Quat::from_xyzw(x, y, z, w).normalize(),
+            Vec3::from(bone.position),
+        );
+        rests.push(match bone.parent.and_then(|parent| rests.get(parent)) {
+            Some(parent) => *parent * local,
+            None => local,
+        });
+    }
+    rests
+}
+
+/// The triangles of the meshes drawn with `slot`, each with where its
+/// corners fall on the iris of the eyeball it is part of: the one nearest
+/// it. (An eyeball's own `texture` is not the slot: it is no help.)
+fn eye_triangles(
+    geometry: &ModelGeometry,
+    eyeballs: &[Eyeball],
+    bones: &[bevy_math::Mat4],
+    slot: usize,
+) -> Vec<EyeTriangle> {
+    let eyeballs: Vec<(&Eyeball, bevy_math::Mat4)> = eyeballs
+        .iter()
+        .filter_map(|eye| Some((eye, bones.get(eye.bone)?.inverse())))
+        .collect();
+    let mut triangles = Vec::new();
+    for mesh in geometry.meshes.iter().filter(|mesh| mesh.material == slot) {
+        for (corners, uvs) in mesh
+            .positions
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(mesh.uvs.as_chunks::<3>().0)
+        {
+            let centre = corners.iter().map(|&c| Vec3::from(c)).sum::<Vec3>() / 3.0;
+            // In the space of each eyeball's bone, the eyeball nearest the
+            // triangle owns it.
+            let owner = eyeballs.iter().min_by(|(a, to_a), (b, to_b)| {
+                let distance = |eye: &Eyeball, to_bone: &bevy_math::Mat4| {
+                    to_bone
+                        .transform_point3(centre)
+                        .distance(Vec3::from(eye.origin))
+                };
+                distance(a, to_a).total_cmp(&distance(b, to_b))
+            });
+            let Some((eye, to_bone)) = owner else {
+                continue;
+            };
+            let iris = |corner: [f32; 3]| {
+                eye.iris_uv(to_bone.transform_point3(Vec3::from(corner)).to_array())
+            };
+            triangles.push(EyeTriangle {
+                uv: [uvs[0], uvs[1], uvs[2]],
+                iris: [iris(corners[0]), iris(corners[1]), iris(corners[2])],
+            });
+        }
+    }
+    triangles
 }
 
 /// An attachment's 3×4 offset from its bone as a Bevy transform.
@@ -503,6 +680,7 @@ mod tests {
             physics: None,
             animation: None,
             root_idle: None,
+            eyes: Vec::new(),
         };
         assert_eq!(model.material(1, 0), Some("b"));
         assert_eq!(model.material(7, 0), Some("a"));
