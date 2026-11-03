@@ -38,10 +38,11 @@ pub const MAX_SLOT: u8 = 9;
 /// - `hold`: the loop the Manipulator hums while it holds or pulls a prop;
 /// - `bounce`, `burst`: a projectile with an effect of its own
 ///   ([`ProjectileConfig::effect`]) bouncing, and bursting at the end of its
-///   flight (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`).
-pub const WEAPON_SOUNDS: [&str; 19] = [
+///   flight (the energy ball's `NPC_CombineBall.Impact` and `.Explosion`);
+/// - `skewer`: a crossbow bolt pinning a body to a wall.
+pub const WEAPON_SOUNDS: [&str; 20] = [
     "fire", "fire2", "hit", "reload", "deploy", "pickup", "drop", "launch", "punt", "dryfire",
-    "blip", "empty", "pump", "charge", "open", "close", "hold", "bounce", "burst",
+    "blip", "empty", "pump", "charge", "open", "close", "hold", "bounce", "burst", "skewer",
 ];
 
 /// For serde defaults.

@@ -194,6 +194,14 @@ for the surface's impact effect, sound and mark. A glance leaves no mark, as
 HL2DM's ricochet traces no impact. A projectile that strikes a prop shoves it
 with `impact_force`.
 
+A bolt that strikes a player wounds them where it struck (a late `ShotEvent`,
+for the blood and the push a corpse gets) and, as HL2DM's
+`CCrossbowBolt::BoltTouch` does, looks 128 units on along its flight: if that
+line meets the map (not a prop or a door), the `Hit` `ProjectileEvent` carries
+the point there, and should the victim die of the bolt the client pins their
+body to it ([presentation.md](presentation.md)). The server pins nothing
+itself: corpses are the client's.
+
 A **missile** (the RPG's rocket) leaves the launcher's muzzle (offset from
 the eyes) at `launch_forward` and `launch_up`, falling under gravity until its
 motor lights `ignite_delay` seconds later; then it flies at the projectile's

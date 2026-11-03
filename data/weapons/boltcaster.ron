@@ -55,7 +55,12 @@ Weapon(
     secondary: None,
     deploy_time: 1.0,
     pickup: Some((ammo: 4, owned_ammo: 5, respawn: 20.0, radius: 24.0)),
-    sounds: {"fire": "Weapon_Crossbow.Single", "reload": "Weapon_Crossbow.Reload"},
+    sounds: {
+        "fire": "Weapon_Crossbow.Single",
+        "reload": "Weapon_Crossbow.Reload",
+        // A body the bolt pins to a wall.
+        "skewer": "Weapon_Crossbow.BoltSkewer",
+    },
     // Players hold it with the crossbow sequences of HL2DM's player models (run_crossbow, ...).
     hold: Some("crossbow"),
 )

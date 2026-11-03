@@ -363,6 +363,71 @@ fn a_bolt_embeds_in_a_wall_and_is_left_stuck_there_by_the_client() {
     );
 }
 
+/// A bolt shot at a target 300 units ahead with a wall `behind` units
+/// behind them: what the bolt reported, and whether it killed.
+fn bolt_into_target_before_a_wall(
+    behind: f32,
+) -> (Vec<rl_sim::simulation::ProjectileEvent>, usize) {
+    let data = data();
+    let wall = WorldBuilder::new().solid_box(
+        Vec3::new(300.0 + behind, -500.0, 0.0),
+        Vec3::new(320.0 + behind, 500.0, 300.0),
+    );
+    let mut arena = Arena::with_world(&data, 300.0, wall);
+    arena.arm("boltcaster");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(10));
+    let reported = events
+        .iter()
+        .flat_map(|e| e.projectiles.iter().copied())
+        .collect();
+    let kills = events.iter().map(|e| e.kills.len()).sum();
+    (reported, kills)
+}
+
+#[test]
+fn a_bolt_through_someone_before_a_wall_says_where_to_pin_them() {
+    let (reported, kills) = bolt_into_target_before_a_wall(60.0);
+    assert_eq!(kills, 1, "100 damage kills");
+    assert_eq!(reported.len(), 1, "{reported:?}");
+    let ProjectileEventKind::Hit { pin, .. } = reported[0].kind else {
+        panic!("not a hit: {reported:?}");
+    };
+    let pin = pin.expect("the wall is within 128 units behind");
+    assert!((pin.x - 360.0).abs() < 1.0, "on the wall: {pin}");
+    assert!(reported[0].normal.dot(Vec3::X) > 0.99);
+    assert!((reported[0].position.x - 284.0).abs() < 2.0, "{reported:?}");
+
+    let (far, _) = bolt_into_target_before_a_wall(200.0);
+    assert!(
+        matches!(far[0].kind, ProjectileEventKind::Hit { pin: None, .. }),
+        "{far:?}"
+    );
+}
+
+#[test]
+fn a_bolt_wounds_its_victim_where_it_strikes() {
+    let data = data();
+    let mut arena = Arena::new(&data, 300.0);
+    arena.arm("boltcaster");
+    let mut events = arena.hold(Buttons::ATTACK, 0.0, 1);
+    events.extend(arena.idle(10));
+    let wounds: Vec<_> = events
+        .iter()
+        .flat_map(|e| &e.shots)
+        .filter(|s| s.late)
+        .collect();
+    assert_eq!(wounds.len(), 1, "{wounds:?}");
+    assert_eq!(
+        wounds[0].trace.struck,
+        rl_sim::combat::hitscan::Struck::Player(arena.target)
+    );
+    assert!(
+        wounds[0].start.x < wounds[0].trace.end.x,
+        "shot from behind"
+    );
+}
+
 #[test]
 fn a_bolt_that_grazes_a_wall_glances_off_and_falls() {
     let data = data();

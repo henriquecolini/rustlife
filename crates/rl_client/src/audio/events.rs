@@ -155,12 +155,20 @@ fn play_events(
     map_surfaces: Res<MapSurfaces>,
     local: Option<Res<LocalPlayer>>,
     entities: Res<LevelEntities>,
+    mut skewers: MessageReader<crate::ragdolls::Skewered>,
     mut player: SoundPlayer,
 ) {
     let Some(sim) = game.sim() else {
         ticks.clear();
+        skewers.clear();
         return;
     };
+    // A body pinned to a wall by a crossbow bolt.
+    for skewer in skewers.read() {
+        if let Some(name) = weapon_sound(sim, skewer.weapon, "skewer") {
+            player.play(name, Some(skewer.at), 1.0);
+        }
+    }
     let places = Places {
         sim,
         drawn: &drawn,
@@ -246,6 +254,7 @@ fn weapon_sounds(
             ProjectileEventKind::Bounce => "bounce",
             ProjectileEventKind::Embed => "embed",
             ProjectileEventKind::Burst => "burst",
+            ProjectileEventKind::Hit { .. } => "hit_body",
         };
         if let Some(name) = weapon_sound(sim, event.weapon, purpose) {
             player.play(name, Some(event.position), 1.0);

@@ -197,7 +197,7 @@ pub struct ProjectileEvent {
 }
 
 /// What a projectile did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ProjectileEventKind {
     /// It bounced off the map or a prop, or glanced off the map.
     Bounce,
@@ -206,6 +206,16 @@ pub enum ProjectileEventKind {
     Embed,
     /// Its time ran out and it burst where it was.
     Burst,
+    /// It struck a player and ended there; the event's `normal` is the way it
+    /// flew. A bolt with the map close behind its victim (within 128 units
+    /// along its flight) gives the point there: should the victim die of it,
+    /// the client pins their body to it.
+    Hit {
+        /// Who it struck.
+        victim: PlayerId,
+        /// Where on the map behind them it would pin them.
+        pin: Option<Vec3>,
+    },
 }
 
 /// Where the client looks for the surface a blast scorches. The mark is only

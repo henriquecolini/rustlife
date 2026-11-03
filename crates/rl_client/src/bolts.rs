@@ -15,6 +15,9 @@
 //!
 //! The surface's own impact effect and mark there come from the bolt's impact
 //! trace (a late [`rl_sim::simulation::ShotEvent`], [`crate::effects`]).
+//!
+//! A bolt that went through someone with the map close behind them leaves
+//! one stuck there too, through the body it pins ([`crate::ragdolls`]).
 
 use std::collections::VecDeque;
 
@@ -97,7 +100,8 @@ pub(crate) fn stuck_transform(point: Vec3, direction: Vec3) -> Transform {
     }
 }
 
-/// Sparks where bolts glance off or embed, and a stuck bolt where they embed.
+/// Sparks where bolts glance off or embed, and a stuck bolt where they embed
+/// or pin someone.
 fn stick_bolts(
     mut commands: Commands,
     mut ticks: MessageReader<Ticked>,
@@ -117,22 +121,31 @@ fn stick_bolts(
                 continue;
             }
             let at = coords::position(event.position.to_array());
-            match event.kind {
-                ProjectileEventKind::Bounce | ProjectileEventKind::Embed => {
-                    sparks.write(Sparks {
-                        at,
-                        direction: Vec3::ZERO,
-                        burst: Burst::Electric {
-                            magnitude: 1,
-                            trail: 1,
-                        },
-                    });
-                }
-                ProjectileEventKind::Burst => {}
+            // Where a stuck bolt is left: where it embedded, or on the wall
+            // behind the body it went through (`StickRagdollNow` makes one
+            // there whether or not a body is pinned to it).
+            let stuck_at = match event.kind {
+                ProjectileEventKind::Bounce => None,
+                ProjectileEventKind::Embed => Some(event.position),
+                ProjectileEventKind::Hit { pin, .. } => pin,
+                ProjectileEventKind::Burst => continue,
+            };
+            if matches!(
+                event.kind,
+                ProjectileEventKind::Bounce | ProjectileEventKind::Embed
+            ) {
+                sparks.write(Sparks {
+                    at,
+                    direction: Vec3::ZERO,
+                    burst: Burst::Electric {
+                        magnitude: 1,
+                        trail: 1,
+                    },
+                });
             }
-            if event.kind != ProjectileEventKind::Embed {
+            let Some(stuck_at) = stuck_at else {
                 continue;
-            }
+            };
             let Some(Shot::Projectile(config)) = sim
                 .arsenal()
                 .fire(event.weapon, event.mode)
@@ -145,7 +158,7 @@ fn stick_bolts(
                 &mut models,
                 &asset_server,
                 &config.model,
-                stuck_transform(event.position, event.normal),
+                stuck_transform(stuck_at, event.normal),
             );
             if let Some(oldest) = stuck.keep(bolt) {
                 commands.entity(oldest).try_despawn();

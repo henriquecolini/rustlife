@@ -18,7 +18,8 @@
 //!
 //! It is visual only: the server does not know or care where a corpse lies.
 //! Corpses are removed after 25 seconds, and at most eight are kept, oldest
-//! first.
+//! first. A crossbow bolt that kills someone with a wall close behind them
+//! pins their body to it (the `pin` module).
 
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
@@ -46,6 +47,10 @@ use crate::animation::{Animated, SequencePlayer};
 use crate::net::Game;
 use crate::player::Ticked;
 use crate::visual_world::{RAGDOLL_GROUP, WORLD_GROUP, build_static_world, filter};
+
+mod pin;
+
+pub(crate) use pin::Skewered;
 
 /// How long a corpse lies before it is removed, seconds.
 const RAGDOLL_LIFE: f32 = 25.0;
@@ -129,10 +134,12 @@ impl Plugin for RagdollsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RagdollPhysics>()
             .init_resource::<RecentHits>()
+            .init_resource::<pin::PendingPins>()
+            .add_message::<Skewered>()
             .add_systems(OnExit(AppState::InGame), reset)
             .add_systems(
                 Update,
-                (spawn_ragdolls, simulate_ragdolls)
+                (spawn_ragdolls, pin::pin_ragdolls, simulate_ragdolls)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -179,9 +186,23 @@ fn tune_world(world: &mut World) {
     b3::world::world_set_contact_tuning(world, CONTACT_HERTZ, CONTACT_DAMPING, PUSH_OUT_SPEED);
 }
 
-fn reset(mut physics: ResMut<RagdollPhysics>, mut hits: ResMut<RecentHits>) {
+fn reset(
+    mut physics: ResMut<RagdollPhysics>,
+    mut hits: ResMut<RecentHits>,
+    mut pins: ResMut<pin::PendingPins>,
+) {
     *physics = RagdollPhysics::default();
     *hits = RecentHits::default();
+    *pins = pin::PendingPins::default();
+}
+
+/// Removes `bodies` from `world`, those still in it.
+fn destroy_bodies<'a>(world: &mut World, bodies: impl IntoIterator<Item = &'a b3::BodyId>) {
+    for body in bodies {
+        if b3::body::body_is_valid(world, *body) {
+            b3::body::destroy_body(world, *body);
+        }
+    }
 }
 
 /// Shots that recently struck players, so the corpse can be pushed by the
@@ -203,6 +224,11 @@ pub(crate) struct Ragdoll {
     parents: Vec<Option<usize>>,
     /// One `Box3D` body per simulated bone.
     bodies: Vec<b3::BodyId>,
+    /// Each simulated bone's collider in its body's own frame: its two ends
+    /// and its radius, Source units.
+    bones: Vec<(Vec3, Vec3, f32)>,
+    /// The fixed points a crossbow bolt pinned the body to, if any.
+    pins: Vec<b3::BodyId>,
     /// The simulated bone the whole rig hangs from.
     root: usize,
     /// For each skeleton joint, the simulated body that carries it.
@@ -225,6 +251,13 @@ pub(crate) struct Ragdoll {
     life: f32,
 }
 
+impl Ragdoll {
+    /// Every body of the corpse: its bones' and the points it is pinned to.
+    fn all_bodies(&self) -> Vec<b3::BodyId> {
+        self.bodies.iter().chain(&self.pins).copied().collect()
+    }
+}
+
 /// The part of the physical world a corpse owns.
 struct PhysRig {
     /// The skeleton joint each body follows, in skeleton order.
@@ -232,6 +265,9 @@ struct PhysRig {
     /// Each body's spawn position, Source units.
     positions: Vec<Vec3>,
     bodies: Vec<b3::BodyId>,
+    /// Each body's collider in the body's own frame: its two ends and its
+    /// radius.
+    bones: Vec<(Vec3, Vec3, f32)>,
     /// The body the rig hangs from.
     root: usize,
 }
@@ -407,16 +443,12 @@ fn spawn_ragdolls(
         // The oldest corpses make room for new ones.
         let mut corpses: Vec<(f32, Entity, Vec<b3::BodyId>)> = existing
             .iter()
-            .map(|(entity, ragdoll)| (ragdoll.born, entity, ragdoll.bodies.clone()))
+            .map(|(entity, ragdoll)| (ragdoll.born, entity, ragdoll.all_bodies()))
             .collect();
         corpses.sort_by(|a, b| a.0.total_cmp(&b.0));
         while corpses.len() >= MAX_RAGDOLLS {
             let (_, entity, bodies) = corpses.remove(0);
-            for body in bodies {
-                if b3::body::body_is_valid(world, body) {
-                    b3::body::destroy_body(world, body);
-                }
-            }
+            destroy_bodies(world, &bodies);
             commands.entity(entity).try_despawn();
         }
 
@@ -487,6 +519,8 @@ fn spawn_ragdolls(
                         joints,
                         parents,
                         bodies: rig.bodies,
+                        bones: rig.bones,
+                        pins: Vec::new(),
                         root: rig.root,
                         drivers,
                         rests,
@@ -603,6 +637,7 @@ fn build_phys_rig(
         .collect();
 
     let mut bodies = Vec::with_capacity(selection.len());
+    let mut bones = Vec::with_capacity(selection.len());
     for (phys, &(joint, kind)) in selection.iter().enumerate() {
         let position = positions[joint];
         let rotation = rotations[joint];
@@ -639,6 +674,11 @@ fn build_phys_rig(
             .normalize_or(Vec3::X);
         let center = direction * (length * 0.5);
         let half_height = length * 0.5 - radius;
+        bones.push((
+            center - direction * half_height.max(0.0),
+            center + direction * half_height.max(0.0),
+            radius,
+        ));
         if half_height > 0.01 * UNITS_PER_METRE {
             let capsule = Capsule {
                 center1: b3v(center - direction * half_height),
@@ -759,6 +799,7 @@ fn build_phys_rig(
             .map(|&(joint, _)| positions[joint])
             .collect(),
         bodies,
+        bones,
         root,
     }
 }
@@ -1229,15 +1270,11 @@ fn simulate_ragdolls(
     let mut expired = Vec::new();
     for (entity, corpse, _) in &mut corpses {
         if now - corpse.born >= corpse.life {
-            expired.push((entity, corpse.bodies.clone()));
+            expired.push((entity, corpse.all_bodies()));
         }
     }
     for (entity, bodies) in expired {
-        for body in bodies {
-            if b3::body::body_is_valid(world, body) {
-                b3::body::destroy_body(world, body);
-            }
-        }
+        destroy_bodies(world, &bodies);
         commands.entity(entity).try_despawn();
     }
     if corpses.is_empty() {
@@ -1302,11 +1339,7 @@ fn simulate_ragdolls(
         }
         if has_run_away(world, &corpse.bodies, corpse.root, corpse.anchor) {
             tracing::warn!(player = ?corpse.player, "ragdoll: simulation diverged; freezing the corpse");
-            for body in &corpse.bodies {
-                if b3::body::body_is_valid(world, *body) {
-                    b3::body::destroy_body(world, *body);
-                }
-            }
+            destroy_bodies(world, &corpse.all_bodies());
             corpse.frozen = true;
             continue;
         }
@@ -1581,6 +1614,76 @@ mod tests {
             .iter()
             .filter(|body| b3::body::body_is_awake(world, **body))
             .count()
+    }
+
+    /// A body shot through the chest from -X with a wall `gap` units behind
+    /// it, pinned as a bolt pins it, after `seconds`: where the bone's
+    /// pinned point is against the wall, how the body moved over the last
+    /// second, and the run's extremes.
+    fn pinned_body(gap: f32, seconds: f32) -> (f32, f32, Observed, bool) {
+        let mut world = floor_world();
+        let (rig, selection) = spawn_human(&mut world, 1.0, 0.0);
+        let chest = selection
+            .iter()
+            .position(|(_, kind)| *kind == BoneKind::Chest || *kind == BoneKind::Spine)
+            .unwrap();
+        let chest_at = rig.positions[chest];
+        let bones = pin::bones_in_world(&world, &rig.bodies, &rig.bones);
+        let front = bones
+            .iter()
+            .map(|&(a, b, r)| a.x.max(b.x) + r)
+            .fold(f32::MIN, f32::max);
+        let wall = Vec3::new(front + gap, chest_at.y, chest_at.z + 4.0);
+        // The wall itself, for the body to hang against.
+        let mut wall_def = b3::default_body_def();
+        wall_def.type_ = BodyType::Static;
+        wall_def.position = b3v(Vec3::new(wall.x + 10.0, 0.0, 100.0));
+        let wall_body = create_body(&mut world, &wall_def);
+        let hull = make_box_hull(10.0, 500.0, 100.0);
+        create_hull_shape(&mut world, wall_body, &b3::default_shape_def(), &hull.base);
+
+        let (bone, entry) = pin::skewered_bone(&bones, wall, Vec3::X).expect("a bone");
+        let body = rig.bodies[bone];
+        let local = b3::body::body_get_local_point(&world, body, b3v(entry));
+        let anchor = pin::pin_body(&mut world, body, entry, wall);
+        let seen = run(&mut world, &rig, seconds - 1.0);
+        let settle = run(&mut world, &rig, 1.0);
+        let pinned_at = b3v_to_glam(b3::body::body_get_world_point(&world, body, local));
+        let anchor_at = b3v_to_glam(body_get_transform(&world, anchor).p);
+        assert!(anchor_at.distance(wall) < 1e-3, "the anchor stays put");
+        let observed = Observed {
+            worst_stretch: seen.worst_stretch.max(settle.worst_stretch),
+            ..seen
+        };
+        let anchor_point = rig.positions.iter().copied().sum::<Vec3>() / rig.positions.len() as f32;
+        let ran_away = has_run_away(&world, &rig.bodies, rig.root, anchor_point);
+        (
+            pinned_at.distance(wall),
+            settle.top_speed,
+            observed,
+            ran_away,
+        )
+    }
+
+    #[test]
+    fn a_body_pinned_by_a_bolt_is_drawn_to_the_wall_and_hangs_there_calmly() {
+        for gap in [0.0, 40.0, 100.0] {
+            let (off_wall, settling_speed, seen, ran_away) = pinned_body(gap, 5.0);
+            assert!(
+                off_wall < 4.0,
+                "gap {gap}: the pin is {off_wall} units off the wall"
+            );
+            assert!(!ran_away, "gap {gap}: the body tore apart");
+            assert!(
+                seen.worst_stretch < MAX_STRETCH,
+                "gap {gap}: stretched {}",
+                seen.worst_stretch
+            );
+            assert!(
+                settling_speed < 0.5 * UNITS_PER_METRE,
+                "gap {gap}: still moving at {settling_speed} units/s after 4 s"
+            );
+        }
     }
 
     #[test]

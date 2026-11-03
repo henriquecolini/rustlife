@@ -4,14 +4,17 @@
 use std::sync::Arc;
 
 use glam::Vec3;
-use rl_data::{ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, Shot};
+use rl_data::{
+    ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, ProjectileEffect, Shot,
+};
 
 use super::breakables::Blow;
 use super::{
     BlastSource, ExplosionEvent, PlayerId, ProjectileEvent, ProjectileEventKind, ScorchTrace,
     ShotEvent, Simulation, TickEvents,
 };
-use crate::collision::Hull;
+use crate::collision::contents::{MOVEABLE, SOLID};
+use crate::collision::{CollisionQuery, Hull};
 use crate::combat::hitscan::{self, ShotTrace, Struck};
 use crate::combat::{Cause, Damage, Target, blast};
 use crate::movement::{Buttons, UserCmd, view_direction};
@@ -27,6 +30,14 @@ const BLUDGEON_MIN_ALIGNMENT: f32 = 0.70721;
 
 /// How far a launcher's laser reaches, units: Source's longest trace.
 const LASER_RANGE: f32 = 56755.0;
+
+/// How far behind a body a bolt that struck it looks for a wall to pin it
+/// to, units (`CCrossbowBolt::BoltTouch`).
+const BOLT_PIN_REACH: f32 = 128.0;
+
+/// Where a bolt's wound is said to have been shot from: this far back along
+/// its flight, units (for the way the blood and the corpse go).
+const BOLT_WOUND_BACK: f32 = 16.0;
 
 /// One bullet of a hitscan shot.
 #[derive(Debug, Clone, Copy)]
@@ -535,6 +546,9 @@ impl Simulation {
                                 attacker: Some(projectile.owner),
                                 cause: Cause::Weapon(projectile.weapon),
                             };
+                            if config.effect == Some(ProjectileEffect::Bolt) {
+                                self.bolt_through(projectile, victim, point, events);
+                            }
                             self.dissolving = config.dissolves;
                             self.hurt(victim, damage, events);
                             self.dissolving = false;
@@ -595,6 +609,55 @@ impl Simulation {
                 events,
             );
         }
+    }
+
+    /// A bolt striking `victim` at `point`: the wound (a late shot, for the
+    /// blood and the push it gives a corpse), and what lies behind them, as
+    /// HL2DM's `CCrossbowBolt::BoltTouch` looks: a line 128 units on along
+    /// the bolt's flight; if it meets the map (not a prop, not a door), the
+    /// client pins the victim's body there should they die of it.
+    fn bolt_through(
+        &self,
+        projectile: &Projectile,
+        victim: PlayerId,
+        point: Vec3,
+        events: &mut TickEvents,
+    ) {
+        let direction = projectile.velocity.normalize_or(projectile.heading);
+        events.shots.push(ShotEvent {
+            player: projectile.owner,
+            weapon: projectile.weapon,
+            start: point - direction * BOLT_WOUND_BACK,
+            trace: ShotTrace {
+                end: point,
+                normal: -direction,
+                struck: Struck::Player(victim),
+                material: None,
+                head: false,
+            },
+            late: true,
+        });
+        let scene = Scene {
+            world: &self.world,
+            physics: &self.physics,
+            ignore: None,
+            others: &[],
+        };
+        let behind = scene.trace_hull(
+            point,
+            point + direction * BOLT_PIN_REACH,
+            &Hull::POINT,
+            SOLID | MOVEABLE,
+        );
+        let pin =
+            (behind.hit() && behind.body.is_none() && behind.model.is_none()).then_some(behind.end);
+        events.projectiles.push(ProjectileEvent {
+            weapon: projectile.weapon,
+            mode: projectile.mode,
+            kind: ProjectileEventKind::Hit { victim, pin },
+            position: point,
+            normal: direction,
+        });
     }
 
     /// A blast at `center` set off by `owner` with `weapon` (neither: the
