@@ -278,13 +278,13 @@ async fn load_animation(
             load_context.add_labeled_asset(format!("clip{clip_count}"), clip)
         };
         sequences.extend(skeleton::sequence_clips(&skeleton, &model, &mut add));
-        let includes = if depth >= MAX_INCLUDE_DEPTH {
+        let to_read = if depth >= MAX_INCLUDE_DEPTH {
             Vec::new()
         } else {
             model.includes.clone()
         };
         read_models.push(model);
-        for include in &includes {
+        for include in &to_read {
             let path = include.to_ascii_lowercase();
             if seen.contains(&path) {
                 continue;
