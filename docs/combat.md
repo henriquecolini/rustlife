@@ -144,7 +144,7 @@ can break, whatever its health: a vent's grate, a window, a `func_breakable`.
 | Shot | What happens |
 |------|--------------|
 | `Hitscan` | `pellets` rays from the eyes, each strayed by Source's draw within the weapon's `cone` (triangular per axis; a deterministic draw seeded by the command's number, player and mode, so the shooter's prediction sprays exactly as the server does; other players are hit where the shooter saw them, see [netcode.md](netcode.md)). Each stops at the map, a prop or a player's box; a player takes `damage` (no falloff, as in HL2) times 3 if the ray also passes through their head, a prop an impulse of `force` along the ray. |
-| `Melee` | A box of half-width `size` swept `range` units along the view: `damage` to a player, `force` to a prop. Reported as a shot, hit or miss. |
+| `Melee` | A box of half-width `size` swept `range` units along the view: `damage` to a player, `force` to a prop. Reported as a shot, hit or miss. A blow that lands on the map or a prop leaves the surface's own decal and debris, as a bullet does: the Crowbar's and the Stun Stick's blows are both the game's `DMG_CLUB` (server.so's shared bludgeon `Hit`, 0xc871a0), and its `UTIL_ImpactTrace` picks the same `Impact.*` decal for a club as for a bullet (only `DMG_SLASH` gets `ManhackCut`). A blow on a player bleeds as a bullet does (see [presentation.md](presentation.md)). |
 | `Projectile` | A box of half-width `size` launched from the eyes at `speed` along the view plus `lift` upwards (see below). |
 
 Bullets and swings stop at what Source's `MASK_SHOT` stops at: solids,

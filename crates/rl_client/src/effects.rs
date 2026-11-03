@@ -612,6 +612,24 @@ fn fires_bullets(sim: &Simulation, weapon: WeaponId) -> bool {
     })
 }
 
+/// Whether a weapon is swung (some fire mode of it is a melee blow): the
+/// Crowbar and the Stun Stick, whose blows are the game's `DMG_CLUB`.
+fn swung(sim: &Simulation, weapon: WeaponId) -> bool {
+    sim.arsenal().weapon(weapon).is_some_and(|weapon| {
+        weapon
+            .fire_modes()
+            .any(|fire| matches!(fire.shot, Shot::Melee(_)))
+    })
+}
+
+/// Whether a shot of `weapon` marks the surface it strikes. A bullet does;
+/// so does a swing: the game's `UTIL_ImpactTrace` with `DMG_CLUB` leaves the
+/// surface's own `Impact.*` decal (client.so's `ImpactCallback` keeps
+/// `ManhackCut` for `DMG_SLASH` alone).
+fn marks_surface(sim: &Simulation, weapon: WeaponId) -> bool {
+    fires_bullets(sim, weapon) || swung(sim, weapon)
+}
+
 /// Turns the tick events' shots and explosions into effects.
 fn spawn_effects(
     mut ticks: MessageReader<Ticked>,
@@ -674,7 +692,11 @@ fn spawn_effects(
                     );
                 }
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
-                    strike_surface(shot, bullets, sim, &quad, &mut painter, &mut marks);
+                    let blow = Blow {
+                        bullets,
+                        marks: marks_surface(sim, shot.weapon),
+                    };
+                    strike_surface(shot, blow, sim, &quad, &mut painter, &mut marks);
                 }
             }
         }
@@ -704,11 +726,20 @@ struct Marks<'w> {
     sparks: MessageWriter<'w, Sparks>,
 }
 
-/// What a shot (`bullets`, or a swing) striking the map or a prop leaves: the
-/// surface's code effect, the weapon's own flash, and a bullet's decal.
+/// What kind of shot struck a surface.
+#[derive(Debug, Clone, Copy)]
+struct Blow {
+    /// A bullet: the weapon's own flash plays where it strikes.
+    bullets: bool,
+    /// It leaves the surface's decal (a bullet or a swing).
+    marks: bool,
+}
+
+/// What a shot striking the map or a prop leaves: the surface's code effect,
+/// a bullet's weapon flash, and the decal of a bullet or a swing.
 fn strike_surface(
     shot: &ShotEvent,
-    bullets: bool,
+    blow: Blow,
     sim: &Simulation,
     quad: &Handle<Mesh>,
     painter: &mut Painter,
@@ -742,15 +773,16 @@ fn strike_surface(
             painter.surface_flash(quad, glow, lifted, normal);
         }
     }
-    if !bullets {
-        return;
-    }
-    if let Some(flash) = sim
-        .arsenal()
-        .weapon_name(shot.weapon)
-        .and_then(|weapon| effects.weapon_flashes.get(weapon))
+    if blow.bullets
+        && let Some(flash) = sim
+            .arsenal()
+            .weapon_name(shot.weapon)
+            .and_then(|weapon| effects.weapon_flashes.get(weapon))
     {
         painter.surface_flash(quad, flash, lifted, normal);
+    }
+    if !blow.marks {
+        return;
     }
     marks.decals.write(DecalRequest {
         kind: DecalKind::Bullet(class),
@@ -1035,6 +1067,22 @@ mod tests {
         assert!(as_seen_by_main(point, &camera, fov).abs_diff_eq(point, 1e-6));
         let wider = as_seen_by_main(point, &camera, 2.0 * fov);
         assert!(wider.x > point.x && wider.y < point.y && (wider.z - point.z).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bullets_and_swings_mark_surfaces_and_projectiles_do_not() {
+        let data = rl_data::GameData::builtin().expect("builtin data");
+        let world = rl_sim::collision::WorldBuilder::new().build();
+        let sim = Simulation::new(std::sync::Arc::new(world), &data);
+        let id = |name: &str| sim.arsenal().find_weapon(name).expect(name);
+        for marking in ["sidearm", "smg", "scattergun", "bar", "stunstick"] {
+            assert!(marks_surface(&sim, id(marking)), "{marking}");
+        }
+        for clean in ["launcher", "frag", "manipulator"] {
+            assert!(!marks_surface(&sim, id(clean)), "{clean}");
+        }
+        assert!(swung(&sim, id("bar")) && swung(&sim, id("stunstick")));
+        assert!(!fires_bullets(&sim, id("bar")));
     }
 
     #[test]
