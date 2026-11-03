@@ -149,13 +149,12 @@ Sounds are named as the mounted game names them, as soundscript entries
 game's soundscripts (`scripts/game_sounds_manifest.txt`, plus the map's
 `maps/<map>_level_sounds.txt`). Playing an entry picks one of its waves,
 and a volume and pitch within its ranges. `source_formats::wav` decodes
-PCM and Microsoft ADPCM waves, with their loop points; MP3s play as they
-are.
+PCM and Microsoft ADPCM waves, with their loop points; MP3s are decoded
+when they load.
 
-Each sound plays from an emitter at a place: panned between the
-listener's ears and fading with distance as its sound level says (a
-gunshot carries further than a footstep). The local player's own sounds
-play at the listener. What plays, by source:
+Each sound plays from an emitter at a place, mixed as HL2DM's engine
+mixes it (below). The local player's own sounds play just ahead of the
+listener. What plays, by source:
 
 | Source | Sounds |
 |--------|--------|
@@ -174,6 +173,69 @@ A widget is heard once as the pointer enters it, however long it stays or
 whichever of its parts it crosses; a slider clicks when grabbed, not as it
 is dragged; disabled widgets are silent. They follow the master volume
 only.
+
+### Hearing where a sound is
+
+rustlife mixes sounds itself (`rl_audio`), as HL2DM's engine does in
+`SND_Spatialize`, with the engine's own constants read from its
+`engine.so`; Bevy's audio output only plays the finished stereo stream.
+
+- **Distance.** A sound's level (decibels at 36 units) sets how it fades:
+  its gain is the inverse of the distance times `10^((60 - level) / 20) /
+  36`, with 4 dB more lost through the air every 1200 units. Close by,
+  where that would pass 0.5, a compressor bends it smoothly up towards
+  full volume (more gently for sounds over 90 dB); below 0.01 it falls on
+  to silence. A normal sound (75 dB) is at about 0.9 at 200 units, 0.33 at
+  500 and 0.14 at 1000; gunfire (140 dB) is still at 0.65 at 10000.
+- **Direction.** With stereo speakers (the default) a sound is heard from
+  four virtual speakers: front ones 45° either side of ahead, each
+  hearing out to 90° from itself as `1 - (angle / 90)^1.5`, and rear ones
+  added at three quarters. A sound to one side is in that speaker alone,
+  and one behind is quieter than one ahead. With headphones (Settings →
+  Audio) one speaker points straight out of each ear. Sounds far above or
+  below drift to the middle, and `@` waves are in both alike.
+- **The local player** is heard 12 units ahead: centred, at full volume,
+  and with a little of the room.
+- **Walls.** A sound behind a wall is 2.7 dB quieter, sliding over a
+  quarter of a second.
+- **The room.** A share of every sound goes to the room effect: from the
+  preset's `mix_min` beside the listener to its `mix_max` 1440 units off
+  (distant sounds are mostly echo), less for sounds quieter than its
+  `db_min`. `#` waves and the menus' sounds stay dry. A distance-variant
+  wave (`^`: a stereo wave of the sound near by on the left and far off on
+  the right) cross-fades from near to far between 240 and 1320 units.
+
+### Room effects
+
+The room effect is a preset of the game's `scripts/dsp_presets.txt`, a
+chain of delays, reverberators, diffusors and filters. The soundscape in
+charge chooses it with its `dsp` (0 none, 2-29 rooms of fixed kinds: small
+metal, concrete, outside, a cavern...), and most of HL2DM's choose 1,
+automatic, which rustlife also uses where no soundscape plays. A change of
+effect cross-fades over a second.
+
+The automatic effect is HL2DM's: every quarter of a second, once the
+listener has moved 48 units, twenty traces run from the eye (eight level,
+ten rising, one up, one down). They give the place's width and length
+(across the pair of axes enclosing the most), its height, the average
+`audioreflectivity` of what they hit (`surfaceproperties.txt`: dirt 0.03,
+concrete 0.66, tile 0.99), and whether the sky is above and on which sides.
+That sorts the place into a room, duct, hall or tunnel indoors, or a
+street, alley, courtyard or open space (by its open sides) outdoors. Each
+kind has two templates among presets 102-133, its smallest brightest room
+and its hugest dullest, and the effect is blended between them by the
+place's size, its height, how reflective it is (brighter keeps more
+treble) and how cluttered (a cluttered place uses the "diffuse"
+templates).
+
+Not HL2DM's own: the inside of each processor, built after the preset
+file's description of its parameters with standard comb, all-pass and
+biquad designs and each reverberator scaled to come out as loud as it goes
+in (as the file says the engine's are set); how cluttered a place is,
+estimated from the props the level traces hit before a wall; and the
+effects no room uses (pitch shifting, chorus, envelopes), which pass sound
+through. There is no Doppler, no surround output, and none of the engine's
+player effects (being under water, deafened by an explosion).
 
 ### Soundscapes
 

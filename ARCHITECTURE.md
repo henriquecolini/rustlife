@@ -8,6 +8,7 @@ bins/rustlife ─────────► rl_client ──► rl_server ─�
 bins/rustlife-server ──────────────────► rl_server │                 ▲
                                                    └──► rl_level ────┘
                          rl_client ──► rl_assets          │
+                         rl_client ──► rl_audio           │
                                            │              │
                                            ▼              ▼
                                       source_formats ──► source_fs
@@ -20,6 +21,7 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `rl_config` | User config file schema and command-line overrides. |
 | `source_formats` | Pure parsers for Source file formats. No Bevy. |
 | `rl_assets` | Bevy `AssetSource` over the `Vfs` and loaders that turn Source formats into Bevy assets. |
+| `rl_audio` | The sound mixer, after HL2DM's: distance falloff, panning, the room effects of `dsp_presets.txt` and the automatic room classifier. No Bevy. |
 | `rl_data` | Schema, validation and loading of rustlife's own gameplay data (`data/*.ron`). |
 | `rl_sim` | Shared simulation: collision, deterministic movement, prop physics (Box3D), weapons and the Manipulator, damage, pickups, deathmatch rules. Runs headless; no Bevy. |
 | `rl_level` | A map's simulation (collision, spawns, entities, prop bodies) from mounted content, without rendering. |
@@ -28,7 +30,7 @@ bins/rustlife-inspect ──► rl_config ────────────�
 | `rl_client` | The Bevy app: rendering, input, HUD, hosting or joining a game. |
 
 Crates are introduced by the milestone that needs them. As of M7 the workspace
-has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_data`,
+has `source_fs`, `rl_config`, `source_formats`, `rl_assets`, `rl_audio`, `rl_data`,
 `rl_sim`, `rl_level`, `rl_net`, `rl_server`, `rl_client`, the `rustlife`,
 `rustlife-server` and `rustlife-inspect` binaries, and `xtask`. Everything up
 to `rl_server` runs without Bevy, so the dedicated server is headless and the
@@ -230,10 +232,12 @@ See [docs/netcode.md](docs/netcode.md).
    engine's joint limits, friction and soft rest-pose spring (bones of one
    corpse collide with each other, except neighbours and those overlapping at
    death), and the killing blow applied to the bone it hit.
-3. **Sound.** `source_formats` reads WAV files, soundscripts and
-   soundscapes; `rl_assets` loads sounds as Bevy audio. The client plays
-   the tick's events, the map's ambient and door sounds, soundscapes and
-   footsteps from spatial emitters.
+3. **Sound.** `source_formats` reads WAV files, soundscripts,
+   soundscapes and room-effect presets; `rl_assets` decodes sounds to PCM.
+   The client plays the tick's events, the map's ambient and door sounds,
+   soundscapes and footsteps from emitters, each a voice of `rl_audio`'s
+   mixer, which places them as HL2DM's engine does and runs them through
+   the room effect of the place; Bevy plays the mixer's stereo stream.
 4. **The world.** The BSP loader reads the PVS, leaf clusters and areas
    and the sky camera, and chunks surfaces by material and cell with the
    clusters they lie in. The client culls chunks by the PVS, draws the 3D
