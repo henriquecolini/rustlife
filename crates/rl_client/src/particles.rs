@@ -629,6 +629,7 @@ fn note_fires(
             &mut fires,
             Follow::Body(body),
             at,
+            Vec3::ZERO,
             (1.0, 1.0),
         );
         let own = pcf.play_on(
@@ -636,6 +637,7 @@ fn note_fires(
             &mut fires,
             Follow::Body(body),
             at,
+            Vec3::ZERO,
             FIRE_LIFE_SCALE,
         );
         burning.0.insert(body, (time.elapsed_secs(), own));

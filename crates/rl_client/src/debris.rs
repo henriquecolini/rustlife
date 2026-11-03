@@ -6,6 +6,7 @@
 //! shrinking away. They are only for show — the server knows nothing of
 //! them — but each is a real `Box3D` body with the model's `.phy` convex
 //! pieces (or its bounding box), colliding with the map and nothing else.
+//! Some of what an exploding prop throws burns for a few seconds.
 
 use std::sync::{Mutex, PoisonError};
 
@@ -27,6 +28,7 @@ use rl_sim::rng::Rng;
 
 use crate::AppState;
 use crate::net::Game;
+use crate::pcf_particles::{Follow, Pcf, PcfSpawn, PcfStop};
 use crate::player::Ticked;
 use crate::props::{ModelHandles, Moving, Prop, spawn_model};
 use crate::visual_world::{DEBRIS_GROUP, WORLD_GROUP, build_static_world, filter};
@@ -56,6 +58,13 @@ const THROW: (f32, f32) = (120.0, 380.0);
 const BLAST_FACTOR: f32 = 2.2;
 /// Spin range, radians/s.
 const SPIN: f32 = 12.0;
+/// Seconds a piece an exploding prop threw burns: from, to.
+const BURN_TIME: (f32, f32) = (3.0, 5.0);
+/// Most pieces of one explosion that burn: each burning one is an effect, and
+/// a chain of barrels must not use them all up.
+const MAX_BURNING: u32 = 4;
+/// The game's particle system for a burning piece, with its smoke as a child.
+const GIB_FIRE: &str = "burning_gib_01";
 /// Smallest collider half-extent, Source units.
 const MIN_HALF_EXTENT: f32 = 0.05 * UNITS_PER_METRE;
 
@@ -120,6 +129,25 @@ struct Gib {
     life: f32,
     /// Its body, once its model has loaded.
     body: Option<b3::BodyId>,
+    /// Seconds it goes on burning, from once it has a body.
+    burning: f32,
+}
+
+/// How long the next piece of a break burns: only an exploding prop's do, the
+/// first `lit` of them (which it counts down).
+fn burn_time(rng: &mut Rng, lit: &mut u32) -> f32 {
+    if *lit == 0 {
+        return 0.0;
+    }
+    *lit -= 1;
+    BURN_TIME.0 + (BURN_TIME.1 - BURN_TIME.0) * rng.unit()
+}
+
+/// Burns a piece down by `dt`; says whether it has just gone out.
+fn burn_down(burning: &mut f32, dt: f32) -> bool {
+    let was_burning = *burning > 0.0;
+    *burning = (*burning - dt).max(0.0);
+    was_burning && *burning <= 0.0
 }
 
 fn throw_gibs(
@@ -140,6 +168,7 @@ fn throw_gibs(
             };
             let mut rng = Rng::seeded(&[sim.tick_count(), u64::from(broke.body.index() as u32)]);
             let factor = if broke.exploded { BLAST_FACTOR } else { 1.0 };
+            let mut lit = if broke.exploded { MAX_BURNING } else { 0 };
             if !spec.pieces.is_empty() {
                 for piece in spec.pieces.iter().take(MAX_PIECES) {
                     let (x, y) = rng.in_disc();
@@ -172,6 +201,7 @@ fn throw_gibs(
                                 LIFETIME
                             },
                             body: None,
+                            burning: burn_time(&mut rng, &mut lit),
                         },
                         Moving,
                     ));
@@ -208,6 +238,7 @@ fn throw_gibs(
                         age: 0.0,
                         life: LIFETIME,
                         body: None,
+                        burning: burn_time(&mut rng, &mut lit),
                     },
                     Moving,
                 ));
@@ -220,18 +251,22 @@ fn random_spin(rng: &mut Rng) -> Vec3 {
     Vec3::new(rng.unit() - 0.5, rng.unit() - 0.5, rng.unit() - 0.5) * (2.0 * SPIN)
 }
 
-/// Creates a body for each gib once its model's assets are loaded.
+/// Creates a body for each gib once its model's assets are loaded, and sets
+/// light to it, around the middle of the piece (a piece's model has its origin
+/// where the whole prop's was), if it is to burn.
 fn make_gib_bodies(
     mut physics: ResMut<DebrisPhysics>,
     game: Game,
     assets: Res<Assets<ModelAsset>>,
-    mut gibs: Query<(&mut Gib, &Prop)>,
+    pcf: Res<Pcf>,
+    mut fires: MessageWriter<PcfSpawn>,
+    mut gibs: Query<(Entity, &mut Gib, &Prop)>,
 ) {
     let Some(sim) = game.sim() else {
         return;
     };
     let world = physics.world(sim);
-    for (mut gib, prop) in &mut gibs {
+    for (entity, mut gib, prop) in &mut gibs {
         if gib.body.is_some() {
             continue;
         }
@@ -240,6 +275,17 @@ fn make_gib_bodies(
         };
         if let Some(body) = add_gib_body(world, model, &gib, sim.data()) {
             gib.body = Some(body);
+            if gib.burning > 0.0 {
+                let (low, high) = model.source_bounds;
+                pcf.play_on(
+                    GIB_FIRE,
+                    &mut fires,
+                    Follow::Entity(entity),
+                    gib.position,
+                    (Vec3::from(low) + Vec3::from(high)) / 2.0,
+                    (1.0, 1.0),
+                );
+            }
         } else {
             tracing::debug!(model = ?prop.model, "gib model has no usable collision");
         }
@@ -252,6 +298,7 @@ fn move_gibs(
     time: Res<Time>,
     game: Game,
     mut physics: ResMut<DebrisPhysics>,
+    mut out: MessageWriter<PcfStop>,
     mut gibs: Query<(Entity, &mut Gib, &mut Transform)>,
 ) {
     if game.sim().is_none() {
@@ -261,6 +308,9 @@ fn move_gibs(
     let mut expired = Vec::new();
     for (entity, mut gib, _) in &mut gibs {
         gib.age += frame;
+        if gib.body.is_some() && burn_down(&mut gib.burning, frame) {
+            out.write(PcfStop(Follow::Entity(entity)));
+        }
         if gib.age >= gib.life {
             expired.push((entity, gib.body));
         }
@@ -437,6 +487,38 @@ mod tests {
     }
 
     #[test]
+    fn only_so_many_pieces_of_an_explosion_burn_for_a_few_seconds() {
+        let mut rng = Rng::seeded(&[1]);
+        let mut lit = MAX_BURNING;
+        let times: Vec<f32> = (0..MAX_BURNING + 3)
+            .map(|_| burn_time(&mut rng, &mut lit))
+            .collect();
+        let (burning, not) = times.split_at(MAX_BURNING as usize);
+        for time in burning {
+            assert!((BURN_TIME.0..BURN_TIME.1).contains(time), "{time}");
+        }
+        assert!(not.iter().all(|&time| time == 0.0), "the rest do not");
+        assert_ne!(times[0], times[1], "each its own");
+    }
+
+    #[test]
+    fn a_piece_of_a_prop_that_did_not_explode_does_not_burn() {
+        let mut lit = 0;
+        assert_eq!(burn_time(&mut Rng::seeded(&[1]), &mut lit), 0.0);
+        assert_eq!(lit, 0);
+    }
+
+    #[test]
+    fn a_burning_piece_goes_out_once_when_its_time_runs_out() {
+        let mut burning = 0.25;
+        assert!(!burn_down(&mut burning, 0.1));
+        assert!(!burn_down(&mut burning, 0.1));
+        assert!(burn_down(&mut burning, 0.1), "out");
+        assert_eq!(burning, 0.0);
+        assert!(!burn_down(&mut burning, 0.1), "it says so once");
+    }
+
+    #[test]
     fn a_thrown_gib_falls_bounces_and_comes_to_rest_on_the_floor() {
         let sim = floor();
         let mut world = build_static_world(&sim, DEBRIS_GROUP);
@@ -448,6 +530,7 @@ mod tests {
             age: 0.0,
             life: LIFETIME,
             body: None,
+            burning: 0.0,
         };
         let body = add_gib_body(&mut world, &box_model(), &gib, sim.data()).expect("body");
         let mut lowest = f32::MAX;

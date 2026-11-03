@@ -74,6 +74,8 @@ pub struct PcfSpawn {
     /// while what it has emitted stays behind (so a moving fire trails), and
     /// stops emitting once that is gone.
     pub follow: Option<Follow>,
+    /// Where on an entity it follows, in that entity's frame, Source units.
+    pub offset: Vec3,
     /// Multipliers on how long its particles live, and its children's.
     pub life_scale: (f32, f32),
 }
@@ -111,13 +113,15 @@ impl Pcf {
     /// Plays the looping system `name` on `follow`, starting from `position`
     /// (Source units), facing up, until told to stop or `follow` is gone, its
     /// particles living `life_scale` times as long (and its children's, the
-    /// second); says whether there is such a system.
+    /// second); says whether there is such a system. On an entity it stays
+    /// `offset` from its origin, in its frame.
     pub(crate) fn play_on(
         &self,
         name: &str,
         spawns: &mut MessageWriter<PcfSpawn>,
         follow: Follow,
         position: Vec3,
+        offset: Vec3,
         life_scale: (f32, f32),
     ) -> bool {
         if !self.has(name) {
@@ -129,6 +133,7 @@ impl Pcf {
             normal: Vec3::Z,
             lifetime: None,
             follow: Some(follow),
+            offset,
             life_scale,
         });
         true
@@ -153,6 +158,7 @@ impl Pcf {
             normal,
             lifetime: None,
             follow: None,
+            offset: Vec3::ZERO,
             life_scale: (1.0, 1.0),
         });
         true
@@ -183,7 +189,8 @@ struct PcfEffect {
 #[derive(Debug, Clone, Copy)]
 struct Following {
     target: Follow,
-    /// For a prop, where its centre is from its model's origin, in its frame.
+    /// Where on it, from its origin, in its frame: a prop's centre, or as asked
+    /// for an entity.
     center: Vec3,
 }
 
@@ -258,6 +265,7 @@ fn play_scripted(
         normal,
         lifetime: None,
         follow: None,
+        offset: Vec3::ZERO,
         life_scale: (1.0, 1.0),
     });
 }
@@ -320,7 +328,9 @@ fn start_effects(
             PcfEffect {
                 instance,
                 stop_after: request.lifetime,
-                follow: request.follow.map(|target| following(target, &game)),
+                follow: request
+                    .follow
+                    .map(|target| following(target, request.offset, &game)),
                 layers: HashMap::new(),
             },
             Transform::IDENTITY,
@@ -332,7 +342,7 @@ fn start_effects(
 }
 
 /// What it takes to stay on `target`.
-fn following(target: Follow, game: &Game) -> Following {
+fn following(target: Follow, offset: Vec3, game: &Game) -> Following {
     let center = match target {
         Follow::Body(body) => game
             .sim()
@@ -341,7 +351,7 @@ fn following(target: Follow, game: &Game) -> Following {
             .map_or(Vec3::ZERO, |(pose, center)| {
                 pose.rotation.inverse() * (center - pose.position)
             }),
-        Follow::Entity(_) => Vec3::ZERO,
+        Follow::Entity(_) => offset,
     };
     Following { target, center }
 }
@@ -374,10 +384,10 @@ fn follow_targets(
                     time.overstep_fraction(),
                 )
             }
-            Follow::Entity(entity) => transforms
-                .get(entity)
-                .ok()
-                .map(|transform| Vec3::from(coords::to_source_position(transform.translation))),
+            Follow::Entity(entity) => transforms.get(entity).ok().map(|transform| {
+                let on = transform.transform_point(coords::position(following.center.to_array()));
+                Vec3::from(coords::to_source_position(on))
+            }),
         };
         if stopped.contains(&following.target) {
             effect.instance.stop();
