@@ -154,6 +154,9 @@ codegen-units = 16
 inherits = "release"
 lto = "thin"
 codegen-units = 1
+# Shipped binaries carry no symbol table or debug info: it is most of their
+# size, and players have no use for it. Debug a `release` build instead.
+strip = true
 
 [profile.release.build-override]
 # Keep build-time tools at the same optimisation as release, so switching
