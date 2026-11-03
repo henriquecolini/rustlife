@@ -57,6 +57,7 @@ pub mod fog;
 mod gravity_gun;
 pub mod grenades;
 pub mod hud;
+mod impact_debris;
 pub mod input;
 mod laser;
 mod lightning;
@@ -207,6 +208,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         particles::ParticlesPlugin,
         explosion::ExplosionPlugin,
         trail_sparks::TrailSparksPlugin,
+        impact_debris::ImpactDebrisPlugin,
         physcannon_impact::PhyscannonImpactPlugin,
         screen_fade::ScreenFadePlugin,
         view_punch::ViewPunchPlugin,

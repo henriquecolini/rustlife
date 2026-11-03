@@ -2,9 +2,15 @@
 //!
 //! Effects are drawn with the game's own sprite materials (named relative
 //! to `materials/`, without extension), on quads facing the camera: muzzle
-//! flashes, bullet tracers, the spray and decals where bullets strike, and
+//! flashes, bullet tracers, the debris and decals where bullets strike, and
 //! explosions, whose sprites may be animated, and what a thrown grenade
 //! shows: a red dot flashing with its ticking and a red trail behind it.
+//!
+//! What a bullet throws off a surface is one of the game's code effects
+//! (`PerformCustomEffects` in `client.so`), chosen by the surface's
+//! material: flecks and dust for concrete, tile and wood, a dust cloud for
+//! dirt and sand, sparks for metal. Their numbers are in
+//! [`ImpactParticlesConfig`].
 
 use std::collections::BTreeMap;
 
@@ -23,7 +29,9 @@ pub struct EffectsConfig {
     /// What a bullet throws off and leaves where it strikes, by surface
     /// class (`concrete`, `metal`, `wood`, `glass`, `dirt`, `water`);
     /// `default` catches the rest.
-    pub bullet_impacts: BTreeMap<String, ImpactEffectConfig>,
+    pub bullet_impacts: BTreeMap<String, SurfaceImpactConfig>,
+    /// The numbers of the code effects `bullet_impacts` choose from.
+    pub impact_particles: ImpactParticlesConfig,
     /// A bullet striking a player: blood and the stain it leaves.
     pub blood: ImpactEffectConfig,
     /// A blast.
@@ -116,8 +124,288 @@ impl ImpactFlashConfig {
     }
 }
 
-/// What a bullet throws off a surface and the mark it leaves: spray
-/// sprites flying away from the surface, and decals drawn flat on it.
+/// What a bullet or swing leaves where it strikes a surface: the game's code
+/// effect for the surface's material, and the mark.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurfaceImpactConfig {
+    /// What is thrown off it.
+    pub effect: SurfaceEffect,
+    /// The surface's own colour, linear RGB `0..=1`: what the game reads from
+    /// the struck texture's reflectivity. The light falling on the spot
+    /// darkens it (`GetColorForSurface`); debris and dust are tinted by it.
+    pub color: [f32; 3],
+    /// Decals to choose from; empty for a surface that keeps no mark. A
+    /// decal is as large as its texture times its `$decalscale`.
+    pub decals: Vec<String>,
+    /// How long a decal stays, seconds.
+    pub decal_life: f32,
+}
+
+impl SurfaceImpactConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if let SurfaceEffect::Debris(flecks) = &self.effect {
+            if flecks.is_empty() {
+                check.fail(&format!("{field}.effect"), "debris needs fleck sprites");
+            }
+            for (index, sprite) in flecks.iter().enumerate() {
+                if sprite.trim().is_empty() {
+                    check.fail(&format!("{field}.effect[{index}]"), "must name a sprite");
+                }
+            }
+        }
+        for (axis, value) in self.color.iter().enumerate() {
+            check.range(&format!("{field}.color[{axis}]"), *value, 0.0, 1.0);
+        }
+        for (index, decal) in self.decals.iter().enumerate() {
+            if decal.trim().is_empty() {
+                check.fail(&format!("{field}.decals[{index}]"), "must name a decal");
+            }
+        }
+        if !self.decals.is_empty() {
+            check.non_negative(&format!("{field}.decal_life"), self.decal_life);
+        }
+    }
+}
+
+/// The game's code effect for a struck surface (`PerformCustomEffects`, by
+/// the surface's game material).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SurfaceEffect {
+    /// Nothing is thrown off (glass, flesh, water).
+    None,
+    /// `FX_DebrisFlecks` (concrete, tile, wood): flecks of these sprites,
+    /// and the `debris_dust` puffs.
+    Debris(Vec<String>),
+    /// `FX_DustImpact` (dirt, sand): the `dust` puffs.
+    Dust,
+    /// `FX_MetalSpark` (metal, vents): `sparks` and the `spark_glow`.
+    Sparks,
+}
+
+/// The numbers of the game's code effects for struck surfaces, read from
+/// `client.so` (`c_impact_effects.cpp`, `fx_sparks.cpp`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImpactParticlesConfig {
+    /// `FX_DebrisFlecks`' flecks.
+    pub flecks: FleckConfig,
+    /// `FX_DebrisFlecks`' puffs of dust.
+    pub debris_dust: Vec<PuffConfig>,
+    /// `FX_DustImpact`'s puffs.
+    pub dust: Vec<PuffConfig>,
+    /// `FX_MetalSpark`'s sparks.
+    pub sparks: SparkConfig,
+    /// `FX_MetalSpark`'s glow lying on the surface.
+    pub spark_glow: ImpactFlashConfig,
+}
+
+impl ImpactParticlesConfig {
+    fn validate(&self, check: &mut Validator) {
+        let field = "impact_particles";
+        self.flecks.validate(check, &format!("{field}.flecks"));
+        for (index, puff) in self.debris_dust.iter().enumerate() {
+            puff.validate(check, &format!("{field}.debris_dust[{index}]"));
+        }
+        for (index, puff) in self.dust.iter().enumerate() {
+            puff.validate(check, &format!("{field}.dust[{index}]"));
+        }
+        self.sparks.validate(check, &format!("{field}.sparks"));
+        self.spark_glow
+            .validate(check, &format!("{field}.spark_glow"));
+    }
+}
+
+/// Requires `low <= high`, both at least zero.
+fn span(check: &mut Validator, field: &str, (low, high): (f32, f32)) {
+    check.non_negative(&format!("{field}.0"), low);
+    if high < low || high.is_nan() {
+        check.fail(field, "the range runs low to high");
+    }
+}
+
+/// Flecks: chips that fly off a surface, fall, bounce off the map and fade
+/// (`CFleckParticles` with a `CParticleCollision`). Units and seconds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FleckConfig {
+    /// How many, picked between these.
+    pub count: (u32, u32),
+    /// How far each fleck's direction strays from the surface's normal, on
+    /// each axis.
+    pub spread: f32,
+    /// Its speed, picked between these, then times three less its size.
+    pub speed: (f32, f32),
+    /// Its half-size, a whole number picked between these.
+    pub size: (u32, u32),
+    /// Seconds it lasts, fading all the while.
+    pub life: f32,
+    /// How fast it falls, units/s².
+    pub gravity: f32,
+    /// The share of its speed a bounce keeps, give or take `bounce_jitter`.
+    pub bounce: f32,
+    /// How much `bounce` varies.
+    pub bounce_jitter: f32,
+    /// A fleck landing on a floor slower than this (vertically) lies still.
+    pub rest_speed: f32,
+    /// Its turn, radians/s, picked up to this.
+    pub roll_speed: f32,
+    /// What the surface's colour is multiplied by, picked between these.
+    pub color_ramp: (f32, f32),
+}
+
+impl FleckConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if self.count.1 < self.count.0 || self.size.1 < self.size.0 {
+            check.fail(field, "count and size run low to high");
+        }
+        check.non_negative(&format!("{field}.spread"), self.spread);
+        span(check, &format!("{field}.speed"), self.speed);
+        check.positive(&format!("{field}.life"), self.life);
+        check.non_negative(&format!("{field}.gravity"), self.gravity);
+        check.range(&format!("{field}.bounce"), self.bounce, 0.0, 1.0);
+        check.non_negative(&format!("{field}.bounce_jitter"), self.bounce_jitter);
+        check.non_negative(&format!("{field}.rest_speed"), self.rest_speed);
+        span(check, &format!("{field}.color_ramp"), self.color_ramp);
+    }
+}
+
+/// A group of puffs: sprites that drift off a struck surface, growing and
+/// fading (the game's `SimpleParticle`s). Units and seconds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PuffConfig {
+    /// The sprite (a material under `materials/`).
+    pub sprite: String,
+    /// How many.
+    pub count: u32,
+    /// Seconds each lasts, picked between these.
+    pub life: (f32, f32),
+    /// Which way each goes.
+    pub aim: PuffAim,
+    /// Its speed, picked between these.
+    pub speed: (f32, f32),
+    /// What the speed of the first, second, ... puff is multiplied by, over
+    /// and over; none for one.
+    #[serde(default)]
+    pub steps: Vec<f32>,
+    /// What is done to its vertical speed.
+    #[serde(default)]
+    pub vertical: Vertical,
+    /// Its half-size at birth, a whole number picked between these.
+    pub size: (u32, u32),
+    /// Whether the size is also multiplied by one more than its step.
+    #[serde(default)]
+    pub size_by_step: bool,
+    /// Its half-size at death, as a multiple of that at birth.
+    pub end_size: f32,
+    /// Its opacity at birth, out of 255, picked between these; it fades to
+    /// nothing. A `dust` puff ignores it.
+    pub alpha: (u32, u32),
+    /// Its turn, radians/s, picked between minus and plus this.
+    pub roll_speed: f32,
+    /// What the surface's colour is multiplied by, picked between these.
+    pub color_ramp: (f32, f32),
+    /// Whether it moves as the game's `CDustParticle`: braking to a ten
+    /// thousandth of its speed each half second (but never below 32 units/s),
+    /// its turn slowing too, and fading from full as `1 - t`, squared once
+    /// a quarter of its life is gone.
+    #[serde(default)]
+    pub dust: bool,
+}
+
+impl PuffConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if self.sprite.trim().is_empty() {
+            check.fail(&format!("{field}.sprite"), "must name a sprite");
+        }
+        span(check, &format!("{field}.life"), self.life);
+        check.positive(&format!("{field}.life.1"), self.life.1);
+        span(check, &format!("{field}.speed"), self.speed);
+        if self.size.1 < self.size.0 || self.alpha.1 < self.alpha.0 || self.alpha.1 > 255 {
+            check.fail(field, "size and alpha run low to high, alpha up to 255");
+        }
+        check.non_negative(&format!("{field}.end_size"), self.end_size);
+        span(check, &format!("{field}.color_ramp"), self.color_ramp);
+    }
+}
+
+/// Which way a puff is thrown.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PuffAim {
+    /// The surface's normal, each axis strayed by up to this.
+    Scatter(f32),
+    /// The surface's normal times a push picked between `push`, plus a stray
+    /// of up to `scatter` on each axis, made one long.
+    Pushed {
+        /// The stray on each axis.
+        scatter: f32,
+        /// How far the normal is pushed out, picked between these.
+        push: (f32, f32),
+    },
+}
+
+/// What is done to a puff's vertical speed once it is aimed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub enum Vertical {
+    /// Nothing.
+    #[default]
+    Keep,
+    /// Lowered by a speed picked between these, times its step.
+    Sink(f32, f32),
+    /// Set to a speed picked between these.
+    Set(f32, f32),
+}
+
+/// Sparks: streaks thrown off metal (`CTrailParticles`). Units and seconds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SparkConfig {
+    /// How many, picked between these, then doubled.
+    pub count: (u32, u32),
+    /// How far the bullet's reflection off the surface is strayed on each
+    /// axis before the sparks are thrown along it.
+    pub jitter: f32,
+    /// Each spark's spread, picked between these: it strays its direction
+    /// by up to half of it on each axis, and slows it.
+    pub spread: (f32, f32),
+    /// Its speed, picked between these, then times two less its spread.
+    pub speed: (f32, f32),
+    /// Seconds it lasts, picked between these.
+    pub life: (f32, f32),
+    /// Its width, picked between these.
+    pub width: (f32, f32),
+    /// Seconds of its flight its streak spans, picked between these.
+    pub length: (f32, f32),
+    /// How fast it falls, units/s².
+    pub gravity: f32,
+    /// The share of its speed it loses each second.
+    pub drag: f32,
+}
+
+impl SparkConfig {
+    fn validate(&self, check: &mut Validator, field: &str) {
+        if self.count.1 < self.count.0 {
+            check.fail(&format!("{field}.count"), "the range runs low to high");
+        }
+        check.non_negative(&format!("{field}.jitter"), self.jitter);
+        for (name, range) in [
+            ("spread", self.spread),
+            ("speed", self.speed),
+            ("life", self.life),
+            ("width", self.width),
+            ("length", self.length),
+        ] {
+            span(check, &format!("{field}.{name}"), range);
+        }
+        check.non_negative(&format!("{field}.gravity"), self.gravity);
+        check.non_negative(&format!("{field}.drag"), self.drag);
+    }
+}
+
+/// What a bullet throws out of a wound and the stain it leaves: spray
+/// sprites flying out of it (when the game's particle system is missing),
+/// and decals drawn flat on what lies behind.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImpactEffectConfig {
@@ -138,10 +426,9 @@ pub struct ImpactEffectConfig {
     /// The game's impact sprites are fullbright; blood should fall under the
     /// same light as everything else.
     pub lit: bool,
-    /// Decals to choose from; empty for a surface that keeps no mark.
+    /// Decals to choose from; empty for none. A decal is as large as its
+    /// texture times its `$decalscale`.
     pub decals: Vec<String>,
-    /// A decal's size, units.
-    pub decal_size: f32,
     /// How long a decal stays, seconds.
     pub decal_life: f32,
     /// The game's particle system (from its `.pcf` files) to play instead of
@@ -182,7 +469,6 @@ impl ImpactEffectConfig {
             check.fail(&format!("{field}.pcf"), "must name a particle system");
         }
         if !self.decals.is_empty() {
-            check.positive(&format!("{field}.decal_size"), self.decal_size);
             check.non_negative(&format!("{field}.decal_life"), self.decal_life);
         }
     }
@@ -236,7 +522,7 @@ impl EffectsConfig {
     /// What a bullet throws off the surface class `class`, or the default
     /// surface's effect.
     #[must_use]
-    pub fn bullet_impact(&self, class: &str) -> Option<&ImpactEffectConfig> {
+    pub fn bullet_impact(&self, class: &str) -> Option<&SurfaceImpactConfig> {
         self.bullet_impacts
             .get(class)
             .or_else(|| self.bullet_impacts.get("default"))
@@ -268,6 +554,7 @@ impl EffectsConfig {
         for (surface, impact) in &self.bullet_impacts {
             impact.validate(check, &format!("bullet_impacts.{surface}"));
         }
+        self.impact_particles.validate(check);
         self.blood.validate(check, "blood");
         for (weapon, flash) in &self.weapon_flashes {
             flash.validate(check, &format!("weapon_flashes.{weapon}"));
@@ -306,9 +593,68 @@ mod tests {
             color: [1.0; 3],
             lit: false,
             decals: vec!["decals/concrete/shot1".to_owned()],
-            decal_size: 10.0,
             decal_life: 20.0,
             pcf: None,
+        }
+    }
+
+    fn surface() -> SurfaceImpactConfig {
+        SurfaceImpactConfig {
+            effect: SurfaceEffect::Debris(vec!["effects/fleck_cement1".to_owned()]),
+            color: [0.4, 0.4, 0.38],
+            decals: vec!["decals/concrete/shot1".to_owned()],
+            decal_life: 30.0,
+        }
+    }
+
+    fn puff() -> PuffConfig {
+        PuffConfig {
+            sprite: "particle/particle_smokegrenade".to_owned(),
+            count: 2,
+            life: (1.0, 1.0),
+            aim: PuffAim::Scatter(0.8),
+            speed: (2.0, 24.0),
+            steps: vec![1.0, 2.0],
+            vertical: Vertical::Sink(8.0, 32.0),
+            size: (2, 4),
+            size_by_step: false,
+            end_size: 8.0,
+            alpha: (100, 200),
+            roll_speed: 1.0,
+            color_ramp: (0.5, 1.25),
+            dust: false,
+        }
+    }
+
+    fn particles() -> ImpactParticlesConfig {
+        ImpactParticlesConfig {
+            flecks: FleckConfig {
+                count: (4, 16),
+                spread: 0.4,
+                speed: (64.0, 128.0),
+                size: (1, 2),
+                life: 3.0,
+                gravity: 800.0,
+                bounce: 0.3,
+                bounce_jitter: 0.1,
+                rest_speed: 48.0,
+                roll_speed: 360.0,
+                color_ramp: (0.75, 1.25),
+            },
+            debris_dust: vec![puff()],
+            dust: vec![puff()],
+            sparks: SparkConfig {
+                count: (4, 8),
+                jitter: 0.2,
+                spread: (0.0, 2.0),
+                speed: (128.0, 512.0),
+                life: (0.05, 0.1),
+                width: (1.0, 4.0),
+                length: (0.025, 0.1),
+                gravity: 400.0,
+                drag: 8.0,
+            },
+            spark_glow: flash(),
         }
     }
 
@@ -327,9 +673,10 @@ mod tests {
                 speed: 6000.0,
             },
             bullet_impacts: BTreeMap::from([
-                ("default".to_owned(), impact()),
-                ("metal".to_owned(), impact()),
+                ("default".to_owned(), surface()),
+                ("metal".to_owned(), surface()),
             ]),
+            impact_particles: particles(),
             blood: impact(),
             explosion: ExplosionEffectConfig {
                 shake: 0.6,
@@ -396,8 +743,7 @@ mod tests {
         bad.bullet_impacts
             .get_mut("default")
             .expect("default impact")
-            .sprites
-            .clear();
+            .effect = SurfaceEffect::Debris(Vec::new());
         bad.explosion.shake = 2.0;
         bad.grenade.flash_fade = 0.0;
         bad.explosion.pcf = Some(" ".to_owned());
@@ -405,5 +751,23 @@ mod tests {
         let mut check = Validator::default();
         bad.validate(&mut check);
         assert_eq!(check.finish().len(), 7);
+    }
+
+    #[test]
+    fn the_code_effects_numbers_are_checked() {
+        let mut bad = config();
+        bad.impact_particles.flecks.count = (16, 4);
+        bad.impact_particles.flecks.bounce = 2.0;
+        bad.impact_particles.debris_dust[0].sprite.clear();
+        bad.impact_particles.dust[0].alpha = (100, 300);
+        bad.impact_particles.sparks.speed = (512.0, 128.0);
+        bad.bullet_impacts.get_mut("metal").expect("metal").color = [1.5, 0.0, 0.0];
+        let mut check = Validator::default();
+        bad.validate(&mut check);
+        let problems = check.finish();
+        let fields: Vec<&str> = problems.iter().map(|p| p.field.as_str()).collect();
+        assert_eq!(fields.len(), 6, "{fields:?}");
+        assert!(fields.contains(&"bullet_impacts.metal.color[0]"));
+        assert!(fields.contains(&"impact_particles.sparks.speed"));
     }
 }

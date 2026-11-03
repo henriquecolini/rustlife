@@ -257,8 +257,8 @@ fn load_assets(game: Game, mut decals: ResMut<DecalAssets>, asset_server: Res<As
     for name in effects
         .bullet_impacts
         .values()
-        .chain([&effects.blood])
         .flat_map(|impact| &impact.decals)
+        .chain(&effects.blood.decals)
     {
         decals.request(name, &asset_server);
     }
@@ -440,23 +440,40 @@ fn spawn_decals(
     let effects = &sim.data().effects;
     let map = map_handle.and_then(|handle| maps.get(&handle.0));
     for request in requests.read() {
-        let config = match request.kind {
-            DecalKind::Bullet(class) => effects.bullet_impact(class.name()),
-            DecalKind::Blood => Some(&effects.blood),
+        let (names, life) = match request.kind {
+            DecalKind::Bullet(class) => match effects.bullet_impact(class.name()) {
+                Some(impact) => (&impact.decals, impact.decal_life),
+                None => continue,
+            },
+            DecalKind::Blood => (&effects.blood.decals, effects.blood.decal_life),
         };
-        let Some(config) = config else {
-            continue;
-        };
-        if config.decals.is_empty() || config.decal_life <= 0.0 {
+        if names.is_empty() || life <= 0.0 {
             continue;
         }
-        let name = &config.decals[assets.rng.below(config.decals.len())];
+        let name = &names[assets.rng.below(names.len())];
+        // As large as its texture times its `$decalscale`, as the engine
+        // draws it; it waits for the material to load.
+        let Some(size) = assets
+            .handles
+            .get(name)
+            .and_then(|handle| decal_assets.get(handle))
+            .map(|decal| Vec2::from(decal.size) * coords::METERS_PER_UNIT)
+        else {
+            continue;
+        };
         let point = coords::position(request.at.to_array());
         let normal = coords::direction(request.normal.to_array()).normalize_or(Vec3::Y);
         let direction = coords::direction(request.direction.to_array());
-        let size = config.decal_size * coords::METERS_PER_UNIT;
-        let (triangles, parent) =
-            target_triangles(request, point, size, &world, map, &meshes, &models, &scene);
+        let (triangles, parent) = target_triangles(
+            request,
+            point,
+            size.length(),
+            &world,
+            map,
+            &meshes,
+            &models,
+            &scene,
+        );
         let parent_transform = parent.and_then(|parent| scene.globals.get(parent).ok());
         let target = DecalBox::facing(point, normal, direction, size);
         let Some(geometry) = project(&target, &triangles, parent_transform) else {
@@ -469,7 +486,7 @@ fn spawn_decals(
         else {
             continue;
         };
-        let until = time.elapsed_secs() + config.decal_life;
+        let until = time.elapsed_secs() + life;
         let mut entity = commands.spawn((
             Mesh3d(meshes.add(geometry.into_mesh(lit))),
             MeshMaterial3d(material),
@@ -618,9 +635,9 @@ pub(crate) struct DecalBox {
 }
 
 impl DecalBox {
-    /// A square decal of side `size`, with its *u* along `direction` as it lies
-    /// in the surface: a bullet mark, turned the way the bullet came.
-    fn facing(point: Vec3, normal: Vec3, direction: Vec3, size: f32) -> Self {
+    /// A decal `size` across, with its *u* along `direction` as it lies in the
+    /// surface: a bullet mark, turned the way the bullet came.
+    fn facing(point: Vec3, normal: Vec3, direction: Vec3, size: Vec2) -> Self {
         let tangent = (direction - normal * direction.dot(normal))
             .try_normalize()
             .unwrap_or_else(|| normal.any_orthonormal_vector());
@@ -629,8 +646,8 @@ impl DecalBox {
             normal,
             tangent,
             bitangent: normal.cross(tangent).normalize_or_zero(),
-            size: Vec2::splat(size),
-            depth: (size * 0.5 * 0.35).max(0.03),
+            size,
+            depth: (size.max_element() * 0.5 * 0.35).max(0.03),
         }
     }
 }
@@ -924,12 +941,17 @@ mod tests {
 
     #[test]
     fn a_bullets_decal_is_square_and_turned_by_the_bullet() {
-        let target = DecalBox::facing(Vec3::ZERO, Vec3::Y, Vec3::new(1.0, -1.0, 0.0), 0.2);
+        let target = DecalBox::facing(
+            Vec3::ZERO,
+            Vec3::Y,
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec2::splat(0.2),
+        );
         assert_eq!(target.size, Vec2::splat(0.2));
         assert!((target.tangent - Vec3::X).length() < 1e-5);
         assert!((target.bitangent.dot(target.tangent)).abs() < 1e-5);
         // Straight into the surface: any direction in it will do.
-        let head_on = DecalBox::facing(Vec3::ZERO, Vec3::Y, Vec3::NEG_Y, 0.2);
+        let head_on = DecalBox::facing(Vec3::ZERO, Vec3::Y, Vec3::NEG_Y, Vec2::splat(0.2));
         assert!(head_on.tangent.dot(Vec3::Y).abs() < 1e-5);
         assert_eq!(head_on.depth, 0.035);
     }

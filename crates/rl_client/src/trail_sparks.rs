@@ -5,20 +5,23 @@
 //! spark is long and a slow one a dot. The sparks of one group move alike
 //! (`CParticleCollision`: gravity and how much speed a bounce keeps).
 //!
-//! Two of the game's code effects are built here, both read from `client.so`
-//! (`fx_sparks.cpp`):
+//! Three of the game's code effects are built here, all read from
+//! `client.so` (`fx_sparks.cpp`):
 //!
 //! - [`gauss_explosion`], `FX_GaussExplosion`: sixteen to thirty-two sparks
 //!   flung along the direction it is given, then an electric spark from the
 //!   same place (what the Gravity Gun's `PhyscannonImpact` makes);
 //! - [`electric_spark`], `FX_ElectricSpark`: a few long, slow sparks, and a
 //!   spray of short, fast ones. Its third emitter makes three `yellowflare_noz`
-//!   glints at the spot ([`electric_glints`]).
+//!   glints at the spot ([`electric_glints`]);
+//! - [`metal_spark`], `FX_MetalSpark`: what a bullet striking metal throws,
+//!   a few quick sparks along its reflection that pass through the map.
 //!
 //! Everything here is in Source units until a spark is drawn.
 
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
+use rl_data::SparkConfig;
 use rl_sim::collision::CollisionWorld;
 use rl_sim::collision::contents::SOLID;
 use rl_sim::rng::Rng;
@@ -66,9 +69,14 @@ pub(crate) struct Group {
     pub gravity: f32,
     /// The share of its speed a spark keeps when it bounces off a wall.
     pub bounce: f32,
+    /// The share of its speed a spark loses each second
+    /// (`bitsPARTICLE_TRAIL_VELOCITY_DAMPEN`).
+    pub drag: f32,
     /// Whether they fade out over their life (`bitsPARTICLE_TRAIL_FADE`)
     /// rather than going out at the end.
     pub fades: bool,
+    /// Whether they bounce off the map, or fly through it.
+    pub collides: bool,
     /// The sparks.
     pub sparks: Vec<Spark>,
 }
@@ -122,13 +130,17 @@ pub(crate) fn electric_spark(
         Group {
             gravity: 800.0,
             bounce: 0.3,
+            drag: 0.0,
             fades: true,
+            collides: true,
             sparks: long_sparks,
         },
         Group {
             gravity: 400.0,
             bounce: 0.3,
+            drag: 0.0,
             fades: false,
+            collides: true,
             sparks: spray_sparks,
         },
     ]
@@ -155,11 +167,54 @@ pub(crate) fn gauss_explosion(rng: &mut Rng, direction: Vec3) -> Vec<Group> {
     let mut groups = vec![Group {
         gravity: 800.0,
         bounce: 0.3,
+        drag: 0.0,
         fades: true,
+        collides: true,
         sparks,
     }];
     groups.extend(electric_spark(rng, 1, 1, Some(last)));
     groups
+}
+
+/// `FX_MetalSpark`: `count` sparks (twice a pick between its two) thrown
+/// along `direction` (the bullet's reflection off the metal). Each picks a
+/// spread `s`: it strays up to `s / 2` on each axis and flies slower the more
+/// it spreads (times `2 - s`). They lose most of their speed at once and fly
+/// through the map.
+pub(crate) fn metal_spark(rng: &mut Rng, config: &SparkConfig, direction: Vec3) -> Group {
+    let count =
+        2 * (config.count.0 as usize + rng.below((config.count.1 - config.count.0 + 1) as usize));
+    let sparks = (0..count)
+        .map(|_| {
+            let life = between(rng, config.life.0, config.life.1);
+            let spread = between(rng, config.spread.0, config.spread.1);
+            let aim = (direction + random_vector(rng, 0.5 * spread)).normalize_or(direction);
+            let width = between(rng, config.width.0, config.width.1);
+            let length = between(rng, config.length.0, config.length.1);
+            let slowed = 2.0 - spread;
+            let speed = between(rng, config.speed.0 * slowed, config.speed.1 * slowed);
+            Spark {
+                velocity: aim * speed,
+                life,
+                length,
+                width,
+            }
+        })
+        .collect();
+    Group {
+        gravity: config.gravity,
+        bounce: 0.0,
+        drag: config.drag,
+        fades: false,
+        collides: false,
+        sparks,
+    }
+}
+
+/// A spark's speed after `dt` more seconds of losing `drag` of it a second
+/// (never turning it back).
+pub(crate) fn dragged(velocity: Vec3, drag: f32, dt: f32) -> Vec3 {
+    velocity * (1.0 - drag * dt).max(0.0)
 }
 
 /// One glint of light to make: a sprite that faces the camera, added to what
@@ -236,6 +291,8 @@ pub(crate) fn electric_glints(rng: &mut Rng, magnitude: u32) -> [Glint; 3] {
 pub(crate) enum Burst {
     /// `FX_GaussExplosion`.
     Gauss,
+    /// `FX_MetalSpark`.
+    Metal,
 }
 
 /// A burst of sparks to draw: where (Bevy space, metres) and which way
@@ -354,7 +411,9 @@ struct Alive {
     width: f32,
     gravity: f32,
     bounce: f32,
+    drag: f32,
     fades: bool,
+    collides: bool,
     material: Handle<EffectMaterial>,
 }
 
@@ -362,6 +421,7 @@ struct Alive {
 fn spawn_sparks(
     mut commands: Commands,
     mut bursts: MessageReader<Sparks>,
+    game: crate::net::Game,
     sprite: Res<SparkSprite>,
     assets: Res<Assets<SpriteAsset>>,
     live: Query<(), With<Alive>>,
@@ -385,6 +445,13 @@ fn spawn_sparks(
     for burst in bursts.read() {
         let groups = match burst.burst {
             Burst::Gauss => gauss_explosion(rng, burst.direction),
+            Burst::Metal => {
+                let Some(sim) = game.sim() else {
+                    continue;
+                };
+                let config = &sim.data().effects.impact_particles.sparks;
+                vec![metal_spark(rng, config, burst.direction)]
+            }
         };
         let origin = Vec3::from(coords::to_source_position(burst.at));
         for group in groups {
@@ -419,7 +486,9 @@ fn spawn_sparks(
                         width: spark.width,
                         gravity: group.gravity,
                         bounce: group.bounce,
+                        drag: group.drag,
                         fades: group.fades,
+                        collides: group.collides,
                         material: material.clone(),
                     },
                     Mesh3d(quad.clone()),
@@ -428,6 +497,9 @@ fn spawn_sparks(
                     MapScoped,
                 ));
             }
+        }
+        if burst.burst != Burst::Gauss {
+            continue;
         }
         for glint in electric_glints(rng, 1) {
             let material = materials.add(effect_material(StandardMaterial {
@@ -486,10 +558,13 @@ fn move_sparks(
             commands.entity(entity).try_despawn();
             continue;
         }
-        let (gravity, bounce) = (spark.gravity, spark.bounce);
+        let (gravity, bounce, collides) = (spark.gravity, spark.bounce, spark.collides);
         fly(&mut spark.flight, gravity, bounce, dt, |from, to| {
-            world.and_then(|world| wall(world, from, to))
+            world
+                .filter(|_| collides)
+                .and_then(|world| wall(world, from, to))
         });
+        spark.flight.velocity = dragged(spark.flight.velocity, spark.drag, dt);
         let head = coords::position(spark.flight.position.to_array());
         let velocity = spark.flight.velocity;
         let heading = coords::direction(velocity.to_array()).normalize_or_zero();
@@ -747,5 +822,37 @@ mod tests {
         assert!((brightness(1.0, 2.0, true) - 0.5).abs() < 1e-6);
         assert_eq!(brightness(3.0, 2.0, true), 0.0);
         assert_eq!(brightness(1.9, 2.0, false), 1.0);
+    }
+
+    #[test]
+    fn metal_throws_eight_to_sixteen_quick_sparks_along_the_reflection() {
+        let data = rl_data::GameData::builtin().expect("builtin data");
+        let config = &data.effects.impact_particles.sparks;
+        for seed in 0..16 {
+            let group = metal_spark(&mut Rng::seeded(&[seed]), config, Vec3::X);
+            assert!(
+                (8..=16).contains(&group.sparks.len()),
+                "{}",
+                group.sparks.len()
+            );
+            assert_eq!(group.sparks.len() % 2, 0, "doubled");
+            assert!(!group.collides && !group.fades);
+            assert_eq!((group.gravity, group.drag), (400.0, 8.0));
+            for spark in &group.sparks {
+                assert!((0.05..=0.1).contains(&spark.life));
+                assert!((1.0..=4.0).contains(&spark.width));
+                // Never faster than 512 x 2, and not thrown back into the wall.
+                assert!(spark.velocity.length() <= 1024.0 + 1e-3);
+                assert!(spark.velocity.x >= 0.0, "{}", spark.velocity);
+            }
+        }
+    }
+
+    #[test]
+    fn drag_slows_a_spark_but_never_turns_it_back() {
+        let velocity = Vec3::new(100.0, 0.0, 0.0);
+        assert!(dragged(velocity, 8.0, 0.05).abs_diff_eq(Vec3::new(60.0, 0.0, 0.0), 1e-4));
+        assert_eq!(dragged(velocity, 8.0, 0.5), Vec3::ZERO);
+        assert_eq!(dragged(velocity, 0.0, 0.5), velocity);
     }
 }

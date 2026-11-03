@@ -64,8 +64,9 @@ pub mod weapons;
 
 pub use ammo::{AmmoConfig, AmmoType};
 pub use effects::{
-    EffectsConfig, ExplosionEffectConfig, GrenadeEffectConfig, ImpactEffectConfig,
-    ImpactFlashConfig, MuzzleFlashConfig, TracerConfig,
+    EffectsConfig, ExplosionEffectConfig, FleckConfig, GrenadeEffectConfig, ImpactEffectConfig,
+    ImpactFlashConfig, ImpactParticlesConfig, MuzzleFlashConfig, PuffAim, PuffConfig, SparkConfig,
+    SurfaceEffect, SurfaceImpactConfig, TracerConfig, Vertical,
 };
 pub use entity_map::{EntityMapConfig, MappedEntity};
 pub use hud::{CrosshairConfig, HudConfig, KillFeedConfig, Rgba};

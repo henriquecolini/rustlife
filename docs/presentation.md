@@ -247,12 +247,37 @@ Combat effects draw the game's own sprite materials, named in
 |--------|------|-------|
 | Muzzle flash | a gun fires | one of `muzzle_flash.sprites` at random, briefly, rolled at random, at the gun's `muzzle` attachment: the view model's for the local player (on the view model's layer), the held world model's for others |
 | Tracer | a bullet flies | a streak of `tracer.length` flying at `tracer.speed` from the muzzle to where the bullet stopped, turned about its line to face the camera |
-| Impact spray | a bullet or swing strikes the map or a prop | the surface class's sprites (concrete flecks, metal sparks, wood chips, glass shards, water splash) thrown off the surface |
-| Bullet decal | a bullet strikes a surface | one of the surface class's decal materials, projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them, or for a material that is not `DecalModulate` (wood) blended over them |
+| Impact debris | a bullet or swing strikes the map or a prop | the game's code effect for the surface class (below): flecks and a little dust off concrete, tile and wood, a dust cloud off dirt, sparks and a glow off metal, nothing off glass, flesh or water |
+| Bullet decal | a bullet strikes a surface | one of the surface class's decal materials, as large as its texture times its `$decalscale` (a shot hole: 64 x 0.10 = 6.4 units), projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them, or for a material that is not `DecalModulate` (wood) blended over them |
 | Blood | a bullet strikes a player | lit blood sprites thrown out of the wound, and a large blood decal on the floor or wall behind the player |
 | Explosion | something blows up | particles the game makes itself (below) |
 | Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |
 | Grenade trail | a grenade is in flight | a red ribbon of where it has been, turned to face the camera, tapering and fading over `grenade.trail_life` |
+
+### Impact debris
+
+HL2DM plays no particle system where a bullet strikes: it leaves
+`cl_new_impact_effects` at 0, and the systems that would play
+(`impact_fx.pcf`'s `impact_concrete` and its big puff of smoke) are not in
+`particles/particles_manifest.txt`, so the game never loads them. Neither
+does rustlife: only the files the manifest lists are loaded. Instead the
+game's `PerformCustomEffects` (client.so) picks a code effect by the
+surface's material, and `rl_client::impact_debris` and `trail_sparks`
+rebuild them with the numbers read from it (`effects.ron`'s
+`impact_particles`, commented with where each came from):
+
+| Surface | Code effect | What it throws |
+|---------|-------------|----------------|
+| concrete, tile, wood | `FX_DebrisFlecks` | 4 to 16 flecks (`fleck_cement1/2`, `fleck_wood1/2` for wood), 2 to 4 units across, flung at up to 256 units/s, falling at 800, bouncing off the map and fading over 3 s; two faint puffs of `particle_smokegrenade` growing to at most 32 units, four quick dark specks, one slow puff at the hole |
+| dirt, sand | `FX_DustImpact` | twelve `CDustParticle` puffs thrown hard and braked to a crawl within half a second |
+| metal | `FX_MetalSpark` | 8 to 16 short-lived `effects/spark` streaks along the bullet's reflection, passing through the map, and an `effects/yellowflare` glow lying on the surface for a tenth of a second |
+
+Every piece is tinted by the surface as the game's `GetColorForSurface`
+does: the class's `color` (standing in for the texture's reflectivity) times
+the map's light at the spot, seen from the surface's side, raised to
+`1/2.2`. So debris off a dim wall is dim: from a few hundred units away it
+is all but invisible, as it is in the game. The smoke's material carries
+`srgb?$alpha .27`, which sprites now honour.
 
 ### Explosions
 
@@ -325,4 +350,6 @@ player's own volumes.
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
 | `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |
 | `rl_client/src/fog.rs`, `effects.rs` | Fog from entity keys, sprite frames, tracers' stretch and turn, view model points seen by the main camera |
+| `rl_client/src/impact_debris.rs`, `trail_sparks.rs` | Each surface's code effect: how many flecks, puffs and sparks, their speeds, sizes and steps, flecks falling, bouncing and coming to rest, dust fading from full, the surface's colour under the light; metal's sparks along the reflection |
+| `rl_client/src/pcf_particles/render.rs` | Only the particle files the game's manifest lists are loaded |
 | `rl_client/src/effect_material.rs` | Fully fogged additive and multiplying effects leaving the frame alone, unfogged ones unchanged, the shader parsing |

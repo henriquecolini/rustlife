@@ -97,6 +97,8 @@ pub struct SpriteAsset {
     pub size_limits: SizeLimits,
     /// What the colour is multiplied by (`$overbrightfactor`), `1` if unset.
     pub overbright: f32,
+    /// How opaque the material makes it (`$alpha`), `1` if unset.
+    pub alpha: f32,
     /// Where each frame of each animation lies in the image, for particle
     /// textures that carry a sprite sheet; `None` for plain sprites, whose
     /// frames are `frames` strips.
@@ -136,6 +138,7 @@ impl AssetLoader for SpriteLoader {
             frames: count.max(1),
             additive: is_additive(&text),
             overbright: overbright(&text),
+            alpha: alpha(&text),
             size_limits: size_limits(&text),
             sheet,
         })
@@ -204,6 +207,24 @@ fn overbright(text: &str) -> f32 {
         .and_then(|value| value.trim().parse::<f32>().ok())
         .filter(|factor| *factor > 0.0)
         .unwrap_or(1.0)
+}
+
+/// A material's `$alpha`, or `1`. A `srgb?$alpha` overrides it: that is the
+/// value for a renderer that blends in linear light, as the game does on a
+/// PC (the dust of a bullet impact, `particle/particle_smokegrenade`, is
+/// `0.27` there).
+fn alpha(text: &str) -> f32 {
+    let Ok(document) = source_fs::keyvalues::parse(text) else {
+        return 1.0;
+    };
+    let Some(block) = document.root.iter().find_map(|pair| pair.value.as_block()) else {
+        return 1.0;
+    };
+    block
+        .get_str("srgb?$alpha")
+        .or_else(|| block.get_str("$alpha"))
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .map_or(1.0, |alpha| alpha.clamp(0.0, 1.0))
 }
 
 /// The frames side by side in one image (frames of differing sizes, which
@@ -298,6 +319,15 @@ mod tests {
         assert!((limits.max - 0.5).abs() < 1e-6);
         assert_eq!(limits.min, 0.0);
         assert_eq!(size_limits(r#""SpriteCard" { }"#), SizeLimits::default());
+    }
+
+    #[test]
+    fn alpha_prefers_the_linear_blending_setting() {
+        let smoke = r#""UnlitGeneric" { "$basetexture" "particle/particle_smokegrenade" "srgb?$alpha" ".27" "$alpha" "1" }"#;
+        assert!((alpha(smoke) - 0.27).abs() < 1e-6);
+        assert!((alpha(r#""UnlitGeneric" { "$alpha" "0.5" }"#) - 0.5).abs() < 1e-6);
+        assert_eq!(alpha(r#""UnlitGeneric" { "$basetexture" "x" }"#), 1.0);
+        assert_eq!(alpha("not a material {"), 1.0);
     }
 
     #[test]

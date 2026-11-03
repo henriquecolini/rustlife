@@ -8,8 +8,10 @@
 //!   it sits on the weapon in hand), the world model's for everyone else;
 //! - a **tracer** flying from the muzzle to where each bullet stopped, a
 //!   streak turned about its line to face the camera;
-//! - **impact spray** where a bullet or swing strikes something, by its
-//!   surface class (concrete, metal, wood, glass, ...);
+//! - **impact debris** where a bullet or swing strikes something: the game's
+//!   code effect for its surface class (flecks and dust off concrete and
+//!   wood, a dust cloud off dirt, sparks and a glow off metal; see
+//!   `impact_debris` and `trail_sparks`);
 //! - **blood** spray when a bullet strikes a player;
 //! - an **explosion**, which [`crate::particles`] draws.
 //!
@@ -25,7 +27,8 @@ use bevy::math::Affine2;
 use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
 use rl_data::{
-    EffectsConfig, ImpactEffectConfig, ImpactFlashConfig, MuzzleFlashConfig, Shot, TracerConfig,
+    EffectsConfig, ImpactEffectConfig, ImpactFlashConfig, MuzzleFlashConfig, Shot, SurfaceEffect,
+    TracerConfig,
 };
 use rl_sim::collision::contents::MASK_PLAYER_SOLID;
 use rl_sim::collision::{CollisionQuery, Hull};
@@ -42,11 +45,14 @@ use crate::animation::Attachment;
 use crate::camera::FlyCam;
 use crate::decals::{DecalKind, DecalRequest, trace_stain};
 use crate::effect_material::{EffectMaterial, effect_material};
+use crate::explosion::random_vector;
+use crate::impact_debris::Debris;
 use crate::net::Game;
 use crate::particles::Blast;
 use crate::pcf_particles::{Pcf, PcfSpawn};
 use crate::player::{LocalPlayer, Ticked};
 use crate::surfaces::{MapSurfaces, class_of_prop};
+use crate::trail_sparks::{Burst, Sparks};
 use crate::viewmodel::{VIEW_FOV_DEGREES, VIEW_LAYER, ViewModel};
 use crate::world::MapScoped;
 
@@ -284,13 +290,8 @@ fn sprite_names(effects: &EffectsConfig) -> impl Iterator<Item = &str> {
                 .flat_map(|flash| &flash.sprites),
         )
         .chain([&effects.tracer.sprite])
-        .chain(
-            effects
-                .bullet_impacts
-                .values()
-                .chain([&effects.blood])
-                .flat_map(|impact| &impact.sprites),
-        )
+        .chain(&effects.blood.sprites)
+        .chain([&effects.impact_particles.spark_glow.sprite])
         .chain(effects.weapon_flashes.values().map(|flash| &flash.sprite))
         .map(String::as_str)
 }
@@ -501,17 +502,6 @@ impl Painter<'_, '_> {
         ));
     }
 
-    /// Spray where a bullet or swing struck a surface.
-    fn surface_impact(
-        &mut self,
-        quad: &Handle<Mesh>,
-        impact: &ImpactEffectConfig,
-        at: Vec3,
-        normal: Vec3,
-    ) {
-        self.spray(quad, impact, at, normal);
-    }
-
     /// A flat flash on the surface struck at `at`, facing out along `normal`.
     fn surface_flash(
         &mut self,
@@ -624,9 +614,8 @@ fn spawn_effects(
     mut ticks: MessageReader<Ticked>,
     game: Game,
     local: Option<Res<LocalPlayer>>,
-    surfaces: Res<MapSurfaces>,
     mut blasts: MessageWriter<Blast>,
-    mut decals: MessageWriter<DecalRequest>,
+    mut marks: Marks,
     pcf: Res<Pcf>,
     mut pcf_spawns: MessageWriter<PcfSpawn>,
     mut painter: Painter,
@@ -664,12 +653,10 @@ fn spawn_effects(
         for shot in &events.shots {
             let bullets = fires_bullets(sim, shot.weapon);
             let end = coords::position(shot.trace.end.to_array());
-            let normal = coords::direction(shot.trace.normal.to_array());
             if bullets {
                 let (_, start) = muzzle_of(shot.player);
                 painter.tracer(&quad, &effects.tracer, start, end);
             }
-            let lift = normal * IMPACT_LIFT * coords::METERS_PER_UNIT;
             match shot.trace.struck {
                 Struck::Nothing => {}
                 Struck::Player(_) => {
@@ -680,42 +667,11 @@ fn spawn_effects(
                         &quad,
                         &mut painter,
                         (&pcf, &mut pcf_spawns),
-                        &mut decals,
+                        &mut marks.decals,
                     );
                 }
                 Struck::World | Struck::Prop(_) | Struck::Brush(_) => {
-                    let prop = surfaces.of_shot(sim, &shot.trace);
-                    let class = class_of_prop(prop);
-                    let Some(impact) = effects.bullet_impact(class.name()) else {
-                        continue;
-                    };
-                    let played = pcf.play(
-                        impact.pcf.as_deref(),
-                        &mut pcf_spawns,
-                        shot.trace.end + shot.trace.normal * IMPACT_LIFT,
-                        shot.trace.normal,
-                    );
-                    if !played {
-                        painter.surface_impact(&quad, impact, end + lift, normal);
-                    }
-                    if bullets
-                        && let Some(flash) = sim
-                            .arsenal()
-                            .weapon_name(shot.weapon)
-                            .and_then(|weapon| effects.weapon_flashes.get(weapon))
-                    {
-                        painter.surface_flash(&quad, flash, end + lift, normal);
-                    }
-                    if bullets {
-                        decals.write(DecalRequest {
-                            kind: DecalKind::Bullet(class),
-                            target: shot.trace.struck,
-                            at: shot.trace.end,
-                            normal: shot.trace.normal,
-                            direction: (shot.trace.end - shot.start)
-                                .normalize_or(shot.trace.normal),
-                        });
-                    }
+                    strike_surface(shot, bullets, sim, &quad, &mut painter, &mut marks);
                 }
             }
         }
@@ -733,6 +689,81 @@ fn spawn_effects(
             });
         }
     }
+}
+
+/// What a shot striking a surface leaves there.
+#[derive(bevy::ecs::system::SystemParam)]
+struct Marks<'w> {
+    surfaces: Res<'w, MapSurfaces>,
+    decals: MessageWriter<'w, DecalRequest>,
+    debris: MessageWriter<'w, Debris>,
+    sparks: MessageWriter<'w, Sparks>,
+}
+
+/// What a shot (`bullets`, or a swing) striking the map or a prop leaves: the
+/// surface's code effect, the weapon's own flash, and a bullet's decal.
+fn strike_surface(
+    shot: &ShotEvent,
+    bullets: bool,
+    sim: &Simulation,
+    quad: &Handle<Mesh>,
+    painter: &mut Painter,
+    marks: &mut Marks,
+) {
+    let effects = &sim.data().effects;
+    let class = class_of_prop(marks.surfaces.of_shot(sim, &shot.trace));
+    let Some(impact) = effects.bullet_impact(class.name()) else {
+        return;
+    };
+    let end = coords::position(shot.trace.end.to_array());
+    let normal = coords::direction(shot.trace.normal.to_array());
+    let lifted = end + normal * IMPACT_LIFT * coords::METERS_PER_UNIT;
+    match &impact.effect {
+        SurfaceEffect::None => {}
+        SurfaceEffect::Debris(_) | SurfaceEffect::Dust => {
+            marks.debris.write(Debris {
+                at: shot.trace.end,
+                normal: shot.trace.normal,
+                effect: impact.effect.clone(),
+                color: impact.color,
+            });
+        }
+        SurfaceEffect::Sparks => {
+            marks.sparks.write(Sparks {
+                at: lifted,
+                direction: spark_direction(&mut painter.sprites.rng, effects, shot),
+                burst: Burst::Metal,
+            });
+            let glow = &effects.impact_particles.spark_glow;
+            painter.surface_flash(quad, glow, lifted, normal);
+        }
+    }
+    if !bullets {
+        return;
+    }
+    if let Some(flash) = sim
+        .arsenal()
+        .weapon_name(shot.weapon)
+        .and_then(|weapon| effects.weapon_flashes.get(weapon))
+    {
+        painter.surface_flash(quad, flash, lifted, normal);
+    }
+    marks.decals.write(DecalRequest {
+        kind: DecalKind::Bullet(class),
+        target: shot.trace.struck,
+        at: shot.trace.end,
+        normal: shot.trace.normal,
+        direction: (shot.trace.end - shot.start).normalize_or(shot.trace.normal),
+    });
+}
+
+/// Which way metal's sparks fly from a shot (Source space): its reflection
+/// off the surface, strayed a little on each axis (`PerformCustomEffects`).
+fn spark_direction(rng: &mut Rng, effects: &EffectsConfig, shot: &ShotEvent) -> Vec3 {
+    let incoming = (shot.trace.end - shot.start).normalize_or(-shot.trace.normal);
+    let normal = shot.trace.normal;
+    let reflected = incoming - 2.0 * incoming.dot(normal) * normal;
+    reflected + random_vector(rng, effects.impact_particles.sparks.jitter)
 }
 
 /// A bullet that struck a player.
@@ -994,7 +1025,7 @@ mod tests {
         let data = rl_data::GameData::builtin().expect("builtin data");
         let names: Vec<&str> = sprite_names(&data.effects).collect();
         assert!(names.contains(&"effects/muzzleflash1"));
-        assert!(names.contains(&"effects/fleck_cement1"));
+        assert!(names.contains(&"effects/yellowflare"), "metal's glow");
         assert!(names.contains(&"effects/blood"));
         assert!(data.effects.bullet_impact("metal").is_some());
         assert!(data.effects.bullet_impact("nonsense").is_some(), "default");

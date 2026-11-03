@@ -1,7 +1,10 @@
 //! Playing the game's particle systems on screen.
 //!
-//! [`PcfPlugin`] loads every `particles/*.pcf` of the mounted games into a
-//! [`Library`]. Sending a [`PcfSpawn`] starts a system by name; the plugin
+//! [`PcfPlugin`] loads the `particles/*.pcf` files the mounted game's
+//! `particles/particles_manifest.txt` lists into a [`Library`]; a file it
+//! leaves out is one the game never loads (HL2DM ships `impact_fx.pcf`
+//! unlisted, so its bullet impacts are the code effects of
+//! `impact_debris`). Sending a [`PcfSpawn`] starts a system by name; the plugin
 //! waits for the sprite materials it draws with to load (so sheet-driven
 //! lifetimes are known), steps the simulation each frame and draws it: one
 //! mesh per material and kind (sprites, trails, ropes) per effect, rebuilt
@@ -198,14 +201,53 @@ struct Following {
 /// (it may be one spawned this frame), seconds.
 const FOLLOW_PATIENCE: f32 = 0.25;
 
-/// Looks the mounted games' particle files up once, on entering a map.
+/// Where the game lists the particle files it loads.
+const MANIFEST: &str = "particles/particles_manifest.txt";
+
+/// The particle files a `particles_manifest.txt` lists (lower-cased, a
+/// leading `!` for "preload" dropped), or `None` if it cannot be read.
+fn manifest_files(text: &str) -> Option<Vec<String>> {
+    let document = source_fs::keyvalues::parse(text).ok()?;
+    let block = document
+        .root
+        .iter()
+        .find_map(|pair| pair.value.as_block())?;
+    Some(
+        block
+            .iter()
+            .filter(|pair| pair.key.eq_ignore_ascii_case("file"))
+            .filter_map(|pair| pair.value.as_str())
+            .map(|path| {
+                path.trim()
+                    .trim_start_matches('!')
+                    .replace('\\', "/")
+                    .to_ascii_lowercase()
+            })
+            .collect(),
+    )
+}
+
+/// Looks the mounted games' particle files up once, on entering a map: those
+/// the manifest lists, or every one if there is no manifest.
 fn load_library(vfs: Res<GameVfs>, mut pcf: ResMut<Pcf>) {
     if pcf.loaded {
         return;
     }
     pcf.loaded = true;
+    let listed = vfs
+        .0
+        .read(MANIFEST)
+        .ok()
+        .flatten()
+        .and_then(|bytes| manifest_files(&String::from_utf8_lossy(&bytes)));
     let mut unknown = Vec::new();
     for file in vfs.0.list("particles/*.pcf") {
+        if let Some(listed) = &listed
+            && !listed.contains(&file.path.to_ascii_lowercase())
+        {
+            debug!("{} is not in the particle manifest", file.path);
+            continue;
+        }
         let Ok(Some(bytes)) = vfs.0.read(&file.path) else {
             continue;
         };
@@ -763,6 +805,28 @@ mod tests {
     use source_formats::pcf::ParticleSystem;
 
     use super::*;
+
+    #[test]
+    fn the_manifest_lists_the_files_the_game_loads() {
+        let text = r#"particles_manifest
+{
+	"file"		"particles/error.pcf"
+	"file"		"!particles/Blood_Impact.pcf"
+	// "file" "particles/impact_fx.pcf"
+	"file"		"particles\fire_01.pcf"
+}"#;
+        let files = manifest_files(text).expect("a manifest");
+        assert_eq!(
+            files,
+            [
+                "particles/error.pcf",
+                "particles/blood_impact.pcf",
+                "particles/fire_01.pcf"
+            ]
+        );
+        assert!(!files.iter().any(|file| file.contains("impact_fx")));
+        assert_eq!(manifest_files("}{"), None);
+    }
 
     #[test]
     fn only_loaded_systems_are_available() {

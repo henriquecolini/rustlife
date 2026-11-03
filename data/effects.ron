@@ -1,9 +1,10 @@
 // What shots and blasts look like, read by the client. Sprites are the
 // mounted game's materials (relative to materials/, without extension),
 // drawn on quads facing the camera. Sizes are units. An entry's `pcf` names a
-// particle system of the game's own `particles/*.pcf` files, played in place of
-// the sprites and particles described beside it; those are the fallback when
-// the game has no such system.
+// particle system of the game's own `particles/*.pcf` files (those its
+// particles_manifest.txt lists), played in place of the sprites and particles
+// described beside it; those are the fallback when the game has no such
+// system.
 Effects(
     // A gun going off: one of these at random, briefly, at the muzzle.
     muzzle_flash: (
@@ -20,113 +21,226 @@ Effects(
         length: 140.0,
         speed: 7000.0,
     ),
-    // What a bullet throws off the surface it strikes and the mark it leaves,
-    // by the surface's class (from its $surfaceprop); "default" catches the
-    // rest. Decals are the game's materials, projected onto the surface.
+    // What a bullet or swing throws off the surface it strikes and the mark
+    // it leaves, by the surface's class (from its $surfaceprop); "default"
+    // catches the rest. The effect is the game's own code effect for the
+    // surface's material (`PerformCustomEffects`, client.so 0x616ba0; HL2DM
+    // leaves `cl_new_impact_effects` at 0, so no particle system plays):
+    // `Debris(flecks)` is FX_DebrisFlecks, `Dust` FX_DustImpact and `Sparks`
+    // FX_MetalSpark; their numbers are in `impact_particles` below. Glass,
+    // flesh and water throw nothing. `color` stands in for the struck
+    // texture's reflectivity; the light at the spot darkens it as the game's
+    // GetColorForSurface does (reflectivity x light^(1/2.2)). Decals are the
+    // game's materials, projected onto the surface at their texture's size
+    // times their $decalscale (the shot holes: 64 x 0.10 = 6.4 units).
     bullet_impacts: {
         "default": (
-            sprites: ["effects/fleck_cement1", "effects/fleck_cement2"],
-            size: 1.4,
-            speed: 110.0,
-            particles: 7,
-            duration: 0.35,
-            color: (0.42, 0.38, 0.33),
-            lit: false,
+            effect: Debris(["effects/fleck_cement1", "effects/fleck_cement2"]),
+            color: (0.42, 0.40, 0.37),
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
-            decal_size: 9.0,
             decal_life: 30.0,
-            pcf: Some("impact_concrete"),
         ),
         "concrete": (
-            sprites: ["effects/fleck_cement1", "effects/fleck_cement2"],
-            size: 1.4,
-            speed: 110.0,
-            particles: 7,
-            duration: 0.35,
-            color: (0.42, 0.38, 0.33),
-            lit: false,
+            effect: Debris(["effects/fleck_cement1", "effects/fleck_cement2"]),
+            color: (0.42, 0.40, 0.37),
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
-            decal_size: 9.0,
             decal_life: 30.0,
-            pcf: Some("impact_concrete"),
         ),
+        // Tile throws the cement flecks too: only wood has flecks of its own.
         "tile": (
-            sprites: ["effects/fleck_tile1", "effects/fleck_tile2"],
-            size: 1.4,
-            speed: 105.0,
-            particles: 7,
-            duration: 0.35,
-            color: (0.50, 0.47, 0.42),
-            lit: false,
+            effect: Debris(["effects/fleck_cement1", "effects/fleck_cement2"]),
+            color: (0.50, 0.49, 0.46),
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3", "decals/concrete/shot4", "decals/concrete/shot5"],
-            decal_size: 9.0,
             decal_life: 30.0,
-            pcf: Some("impact_concrete"),
         ),
         "metal": (
-            sprites: ["effects/spark"],
-            size: 1.2,
-            speed: 150.0,
-            particles: 7,
-            duration: 0.22,
-            color: (1.0, 0.45, 0.12),
-            lit: false,
+            effect: Sparks,
+            color: (0.40, 0.40, 0.40),
             decals: ["decals/metal/shot1", "decals/metal/shot2", "decals/metal/shot3", "decals/metal/shot4", "decals/metal/shot5"],
-            decal_size: 8.0,
             decal_life: 30.0,
-            pcf: Some("impact_metal"),
         ),
         "wood": (
-            sprites: ["effects/fleck_wood1", "effects/fleck_wood2"],
-            size: 1.6,
-            speed: 90.0,
-            particles: 6,
-            duration: 0.42,
-            color: (0.38, 0.26, 0.15),
-            lit: false,
+            effect: Debris(["effects/fleck_wood1", "effects/fleck_wood2"]),
+            color: (0.45, 0.34, 0.22),
             decals: ["decals/wood/shot1", "decals/wood/shot2", "decals/wood/shot3", "decals/wood/shot4", "decals/wood/shot5"],
-            decal_size: 9.0,
             decal_life: 30.0,
-            pcf: Some("impact_wood"),
         ),
         "glass": (
-            sprites: ["effects/fleck_glass1", "effects/fleck_glass2", "effects/fleck_glass3"],
-            size: 1.2,
-            speed: 120.0,
-            particles: 8,
-            duration: 0.4,
+            effect: None,
             color: (0.60, 0.62, 0.65),
-            lit: false,
             decals: ["decals/glass/shot1", "decals/glass/shot2", "decals/glass/shot3", "decals/glass/shot4", "decals/glass/shot5"],
-            decal_size: 9.0,
             decal_life: 30.0,
         ),
         "dirt": (
-            sprites: ["effects/fleck_cement1", "effects/fleck_cement2"],
-            size: 1.7,
-            speed: 80.0,
-            particles: 5,
-            duration: 0.45,
-            color: (0.34, 0.28, 0.20),
-            lit: false,
+            effect: Dust,
+            color: (0.36, 0.31, 0.25),
             decals: ["decals/concrete/shot1", "decals/concrete/shot2", "decals/concrete/shot3"],
-            decal_size: 10.0,
             decal_life: 30.0,
-            pcf: Some("impact_dirt"),
         ),
         "water": (
-            sprites: ["effects/splash1", "effects/splash2", "effects/splash3"],
-            size: 1.8,
-            speed: 90.0,
-            particles: 5,
-            duration: 0.35,
+            effect: None,
             color: (0.55, 0.65, 0.72),
-            lit: false,
             decals: [],
-            decal_size: 8.0,
             decal_life: 0.0,
         ),
     },
+    // The numbers of those code effects, from client.so (objdump addresses;
+    // the decompiled C drops float arguments, so those were read from the
+    // instructions). Units, seconds; a size is a half-size, as the engine
+    // draws a particle 2 x size across.
+    impact_particles: (
+        // FX_DebrisFlecks (0x76ddd0): the flecks, a CFleckParticles emitter
+        // whose CParticleCollision is set up with spread 0.6 - 0.2 x scale
+        // (0.4 for a bullet), speeds 64 to 128, gravity 800 and dampen 0.3.
+        // RandomInt(4, 16) of them; each aimed along the normal plus up to
+        // the spread on each axis, a half-size of 1 or 2, thrown at 64 to 128
+        // times (3 - size), turning up to 360 rad/s; it lives 3 s, fading as
+        // 1 - t. A bounce keeps 0.2 to 0.4 of its speed; landing on a floor
+        // (normal z >= 0.5) at 48 units/s or less vertically stops it
+        // (MoveParticle, 0x674860).
+        flecks: (
+            count: (4, 16),
+            spread: 0.4,
+            speed: (64.0, 128.0),
+            size: (1, 2),
+            life: 3.0,
+            gravity: 800.0,
+            bounce: 0.3,
+            bounce_jitter: 0.1,
+            rest_speed: 48.0,
+            roll_speed: 360.0,
+            color_ramp: (0.75, 1.25),
+        ),
+        // FX_DebrisFlecks' dust, plain SimpleParticles from 2 units off the
+        // surface: alpha and size run straight from start to end.
+        debris_dust: [
+            // Two puffs, the second twice as fast and sinking twice as fast.
+            (
+                sprite: "particle/particle_smokegrenade",
+                count: 2,
+                life: (1.0, 1.0),
+                aim: Scatter(0.8),
+                speed: (2.0, 24.0),
+                steps: [1.0, 2.0],
+                vertical: Sink(8.0, 32.0),
+                size: (2, 4),
+                end_size: 8.0,
+                alpha: (100, 200),
+                roll_speed: 1.0,
+                color_ramp: (0.5, 1.25),
+            ),
+            // Four quick dark specks (the game's g_Mat_BloodPuff[0],
+            // effects/blood, tinted to the surface).
+            (
+                sprite: "effects/blood",
+                count: 4,
+                life: (0.25, 0.5),
+                aim: Scatter(0.8),
+                speed: (8.0, 32.0),
+                vertical: Sink(8.0, 64.0),
+                size: (1, 4),
+                end_size: 4.0,
+                alpha: (255, 255),
+                roll_speed: 2.0,
+                color_ramp: (0.5, 1.25),
+            ),
+            // One slow puff hanging at the hole.
+            (
+                sprite: "particle/particle_smokegrenade",
+                count: 1,
+                life: (1.0, 1.5),
+                aim: Scatter(0.8),
+                speed: (2.0, 24.0),
+                vertical: Set(-2.0, 2.0),
+                size: (4, 8),
+                end_size: 4.0,
+                alpha: (100, 200),
+                roll_speed: 2.0,
+                color_ramp: (0.5, 1.25),
+            ),
+        ],
+        // FX_DustImpact (0x76a990): three groups of four CDustParticles,
+        // thrown hard (up to 1500 units/s) and braked to a crawl within half a
+        // second. Each is aimed along the normal pushed 1 to 6 out, strayed up
+        // to 0.2 (the last group: 1), made one long; the first two groups'
+        // speeds are stepped by the game's table 3, 1, 2, 0.
+        dust: [
+            (
+                sprite: "particle/particle_smokegrenade",
+                count: 4,
+                life: (0.5, 1.0),
+                aim: Pushed(scatter: 0.2, push: (1.0, 6.0)),
+                speed: (250.0, 500.0),
+                steps: [3.0, 1.0, 2.0, 0.0],
+                size: (3, 4),
+                size_by_step: true,
+                end_size: 4.0,
+                alpha: (32, 255),
+                roll_speed: 8.0,
+                color_ramp: (0.75, 1.25),
+                dust: true,
+            ),
+            (
+                sprite: "effects/blood",
+                count: 4,
+                life: (0.25, 0.75),
+                aim: Pushed(scatter: 0.2, push: (1.0, 6.0)),
+                speed: (250.0, 500.0),
+                steps: [3.0, 1.0, 2.0, 0.0],
+                size: (2, 4),
+                size_by_step: true,
+                end_size: 2.0,
+                alpha: (255, 255),
+                roll_speed: 2.0,
+                color_ramp: (0.75, 1.25),
+                dust: true,
+            ),
+            (
+                sprite: "particle/particle_smokegrenade",
+                count: 4,
+                life: (0.5, 1.0),
+                aim: Pushed(scatter: 1.0, push: (1.0, 1.0)),
+                speed: (0.0, 50.0),
+                size: (1, 4),
+                end_size: 4.0,
+                alpha: (32, 64),
+                roll_speed: 16.0,
+                color_ramp: (0.75, 1.25),
+                dust: true,
+            ),
+        ],
+        // FX_MetalSpark (0x7b0cf0), thrown along the bullet's reflection off
+        // the surface strayed up to 0.2 on each axis (0x616ef8): a
+        // CTrailParticles emitter with gravity 400, losing 8 x its speed a
+        // second and passing through the map. RandomInt(4, 8) x 2 sparks;
+        // each picks a spread s in 0..2, strays up to s/2 on each axis, flies
+        // at 128 to 512 times (2 - s), lives 0.05 to 0.1 s, 1 to 4 wide, its
+        // streak 0.025 to 0.1 s of its flight long.
+        sparks: (
+            count: (4, 8),
+            jitter: 0.2,
+            spread: (0.0, 2.0),
+            speed: (128.0, 512.0),
+            life: (0.05, 0.1),
+            width: (1.0, 4.0),
+            length: (0.025, 0.1),
+            gravity: 400.0,
+            drag: 8.0,
+        ),
+        // Then an effects/yellowflare quad lying on the surface (FX_AddQuad):
+        // 24 to 28 units (half-size) shrinking to nothing, fading from full,
+        // for a tenth of a second, turned at random. The biases are the
+        // quad's defaults, straight lines.
+        spark_glow: (
+            sprite: "effects/yellowflare",
+            size: (24.0, 28.0),
+            end_size: 0.0,
+            size_bias: 0.5,
+            alpha: (1.0, 0.0),
+            alpha_bias: 0.5,
+            life: 0.1,
+        ),
+    ),
     // A bullet through a player: blood thrown out, and the stain it leaves
     // on the floor or wall behind them.
     blood: (
@@ -138,7 +252,6 @@ Effects(
         color: (0.32, 0.006, 0.004),
         lit: true,
         decals: ["decals/flesh/blood1", "decals/flesh/blood2", "decals/flesh/blood3", "decals/flesh/blood4", "decals/flesh/blood5"],
-        decal_size: 22.0,
         decal_life: 35.0,
         pcf: Some("blood_impact_red_01"),
     ),
