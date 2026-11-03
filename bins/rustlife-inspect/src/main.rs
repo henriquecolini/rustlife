@@ -272,6 +272,13 @@ fn print_sequences(
                 sequence.blends, sequence.group, sequence.parameters, sequence.ranges
             )?;
         }
+        for layer in &sequence.layers {
+            writeln!(
+                out,
+                "    layer sequence {} flags {:#x} cycle {:?}",
+                layer.sequence, layer.flags, layer.cycle
+            )?;
+        }
         for event in &sequence.events {
             writeln!(
                 out,
