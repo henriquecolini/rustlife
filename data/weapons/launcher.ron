@@ -32,7 +32,7 @@ Weapon(
             bounce: None,
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 300.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            explosion: Some((radius: 300.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
             lifetime: 20.0,
             missile: Some((
                 ignite_delay: 0.3,

@@ -497,7 +497,7 @@ impl Simulation {
             self.explode(
                 Some(owner),
                 BlastSource::Weapon(weapon),
-                position,
+                (position, None),
                 &explosion,
                 events,
             );

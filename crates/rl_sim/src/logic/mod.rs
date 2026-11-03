@@ -69,6 +69,8 @@ mod explosion_flags {
     pub(super) const NO_DAMAGE: u32 = 1;
     /// Can go off more than once.
     pub(super) const REPEATABLE: u32 = 2;
+    /// Leaves no scorch mark.
+    pub(super) const NO_DECAL: u32 = 16;
 }
 
 /// What a player did to the map this tick, for the logic.
@@ -95,6 +97,8 @@ pub enum Effect {
         damage: f32,
         /// Its reach, units.
         radius: f32,
+        /// Whether it leaves a scorch mark.
+        scorches: bool,
     },
     /// Move a player to a destination, facing as it faces
     /// (`trigger_teleport`, which ends in `SnapEyeAngles`).
@@ -218,6 +222,7 @@ enum Kind {
         position: Vec3,
         damage: f32,
         radius: f32,
+        scorches: bool,
         repeatable: bool,
         spent: bool,
     },
@@ -983,6 +988,7 @@ fn kind_of(
                     magnitude
                 },
                 radius,
+                scorches: flags & explosion_flags::NO_DECAL == 0,
                 repeatable: flags & explosion_flags::REPEATABLE != 0,
                 spent: false,
             }

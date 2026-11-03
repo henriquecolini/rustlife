@@ -171,6 +171,39 @@ pub struct ExplosionEvent {
     /// The weapon whose projectile burst; `None` for the map's own
     /// explosions.
     pub weapon: Option<WeaponId>,
+    /// Where the client looks for the surface it scorches; `None` if it
+    /// leaves no mark.
+    pub scorch: Option<ScorchTrace>,
+}
+
+/// Where the client looks for the surface a blast scorches. The mark is only
+/// drawn, so the client traces for it itself, as the game's code does.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ScorchTrace {
+    /// From 8 units above the blast to 32 below it (grenades,
+    /// `env_explosion`).
+    Below,
+    /// 60 units on along this unit direction, the projectile's flight (the
+    /// SMG's grenade).
+    Ahead(Vec3),
+}
+
+impl ScorchTrace {
+    /// How a blast of kind `scorch` looks for its mark, given the flight of
+    /// the projectile that burst, if any (without one, a blast that looks
+    /// ahead looks below instead).
+    #[must_use]
+    pub fn of(scorch: rl_data::Scorch, heading: Option<Vec3>) -> Option<Self> {
+        match scorch {
+            rl_data::Scorch::None => None,
+            rl_data::Scorch::Below => Some(Self::Below),
+            rl_data::Scorch::Ahead => Some(
+                heading
+                    .and_then(Vec3::try_normalize)
+                    .map_or(Self::Below, Self::Ahead),
+            ),
+        }
+    }
 }
 
 /// Damage a player took.

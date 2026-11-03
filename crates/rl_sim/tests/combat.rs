@@ -18,7 +18,7 @@ use rl_sim::hazards::Hazard;
 use rl_sim::movement::{Buttons, UserCmd};
 use rl_sim::physics::{BodyId, Breakable, Motion, PropDesc};
 use rl_sim::rules::MatchEvent;
-use rl_sim::simulation::{Life, PlayerId, PropBreak, Simulation, Spawn, TickEvents};
+use rl_sim::simulation::{Life, PlayerId, PropBreak, ScorchTrace, Simulation, Spawn, TickEvents};
 use rl_sim::weapons::WeaponId;
 use source_formats::entities::MapEntity;
 
@@ -511,6 +511,11 @@ fn rockets_burst_on_impact_and_throw_players() {
     let events = arena.idle(40);
     let explosions: Vec<_> = events.iter().flat_map(|e| &e.explosions).collect();
     assert_eq!(explosions.len(), 1);
+    assert_eq!(
+        explosions[0].scorch,
+        Some(ScorchTrace::Below),
+        "an env_explosion scorches below it"
+    );
     assert!(arena.sim.projectiles().is_empty());
     let target = arena.sim.player(arena.target).expect("target");
     assert!(
@@ -665,8 +670,35 @@ fn walls_shelter_from_grenades() {
     // side, and bursts on its fuse.
     arena.throw(Buttons::ATTACK, 30.0, 1);
     let events = arena.idle(200);
-    assert_eq!(events.iter().flat_map(|e| &e.explosions).count(), 1);
+    let blasts: Vec<_> = events.iter().flat_map(|e| &e.explosions).collect();
+    assert_eq!(blasts.len(), 1);
+    assert_eq!(blasts[0].scorch, Some(ScorchTrace::Below), "a grenade's");
     assert_eq!(arena.health(arena.target), 100.0, "sheltered");
+}
+
+#[test]
+fn an_smg_grenade_looks_for_its_scorch_ahead_along_its_flight() {
+    let data = data();
+    let mut arena = Arena::with_world(&data, 2000.0, wall());
+    arena.arm("smg");
+    let arsenal = arena.sim.arsenal().clone();
+    let grenades = arsenal.find_ammo("smg_grenade").expect("ammo");
+    let shooter = arena.shooter;
+    arena
+        .sim
+        .player_mut(shooter)
+        .expect("shooter")
+        .inventory
+        .give_ammo(&arsenal, grenades, 3);
+    arena.hold(Buttons::ATTACK2, 0.0, 1);
+    let events = arena.idle(120);
+    let blasts: Vec<_> = events.iter().flat_map(|e| &e.explosions).collect();
+    assert_eq!(blasts.len(), 1, "it bursts on the wall");
+    let Some(ScorchTrace::Ahead(heading)) = blasts[0].scorch else {
+        panic!("{:?}", blasts[0].scorch);
+    };
+    assert!(heading.is_normalized());
+    assert!(heading.x > 0.5, "on towards the wall: {heading}");
 }
 
 #[test]

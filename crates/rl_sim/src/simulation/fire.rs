@@ -7,7 +7,9 @@ use glam::Vec3;
 use rl_data::{ExplosionConfig, HitscanConfig, MeleeConfig, ProjectileConfig, Shot};
 
 use super::breakables::Blow;
-use super::{BlastSource, ExplosionEvent, PlayerId, ShotEvent, Simulation, TickEvents};
+use super::{
+    BlastSource, ExplosionEvent, PlayerId, ScorchTrace, ShotEvent, Simulation, TickEvents,
+};
 use crate::collision::Hull;
 use crate::combat::hitscan::{self, ShotTrace, Struck};
 use crate::combat::{Cause, Damage, Target, blast};
@@ -556,7 +558,7 @@ impl Simulation {
             self.explode(
                 Some(projectile.owner),
                 BlastSource::Weapon(projectile.weapon),
-                center,
+                (center, Some(projectile.velocity)),
                 explosion,
                 events,
             );
@@ -565,12 +567,13 @@ impl Simulation {
 
     /// A blast at `center` set off by `owner` with `weapon` (neither: the
     /// map's): damages and throws the players it reaches, shoves the props,
-    /// damages the breakables.
+    /// damages the breakables. `heading` is the flight of the projectile that
+    /// burst, if one did, for where it looks for a surface to scorch.
     pub(super) fn explode(
         &mut self,
         owner: Option<PlayerId>,
         source: BlastSource,
-        center: Vec3,
+        (center, heading): (Vec3, Option<Vec3>),
         explosion: &ExplosionConfig,
         events: &mut TickEvents,
     ) {
@@ -583,6 +586,7 @@ impl Simulation {
             position: center,
             radius: explosion.radius,
             weapon,
+            scorch: ScorchTrace::of(explosion.scorch, heading),
         });
         for reach in blast::props(center, explosion, &self.physics, &self.world) {
             if reach.dynamic {

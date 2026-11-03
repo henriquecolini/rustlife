@@ -278,6 +278,7 @@ mod tests {
     use rl_sim::combat::hitscan::{ShotTrace, Struck};
     use rl_sim::combat::{Cause, Damage};
     use rl_sim::physics::BodyId;
+    use rl_sim::simulation::ScorchTrace;
 
     use super::*;
 
@@ -341,6 +342,26 @@ mod tests {
                 position: Vec3::X,
                 speed: 90.0,
             }],
+            explosions: vec![
+                ExplosionEvent {
+                    position: Vec3::new(4.0, 5.0, 6.0),
+                    radius: 250.0,
+                    weapon: Some(WeaponId::from_index(2)),
+                    scorch: Some(ScorchTrace::Ahead(Vec3::X)),
+                },
+                ExplosionEvent {
+                    position: Vec3::ZERO,
+                    radius: 120.0,
+                    weapon: None,
+                    scorch: Some(ScorchTrace::Below),
+                },
+                ExplosionEvent {
+                    position: Vec3::Z,
+                    radius: 100.0,
+                    weapon: None,
+                    scorch: None,
+                },
+            ],
             match_event: Some(MatchEvent::Restarted),
             ..TickEvents::default()
         }

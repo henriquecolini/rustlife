@@ -628,6 +628,28 @@ pub struct ExplosionConfig {
     pub knockback_cap: Option<f32>,
     /// Impulse given to a prop at the centre, kg·units/s.
     pub force: f32,
+    /// The scorch mark it leaves, and where it looks for a surface to leave
+    /// it on.
+    #[serde(default)]
+    pub scorch: Scorch,
+}
+
+/// Where a blast looks for a surface to scorch, as the game's code for each
+/// kind of blast does (server.so).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Scorch {
+    /// It leaves none (the Combine ball's, a crossbow bolt's).
+    #[default]
+    None,
+    /// Along a line from 8 units above the blast to 32 below it: grenades
+    /// (`CBaseGrenade::Explode`, the frag's and the SLAM's) and
+    /// `env_explosion` (the RPG's missile, barrels, the map's own blasts).
+    /// `Scorch` on whatever it meets.
+    Below,
+    /// 60 units on along the projectile's flight (`CGrenadeAR2::Detonate`,
+    /// the SMG's grenade): `Scorch` on the map, `SmallScorch` on anything
+    /// else.
+    Ahead,
 }
 
 impl ExplosionConfig {
@@ -1064,6 +1086,7 @@ mod tests {
             knockback: 529.0,
             knockback_cap: Some(353.0),
             force: 0.0,
+            scorch: Scorch::None,
         };
         assert_eq!(blast.push_speed(1.0), 353.0);
         assert_eq!(blast.push_speed(0.7), 353.0, "still at the cap");
@@ -1084,6 +1107,7 @@ mod tests {
             knockback: 0.0,
             knockback_cap: None,
             force: 0.0,
+            scorch: Scorch::None,
         };
         assert_eq!(blast.scale(0.0), 1.0);
         assert_eq!(blast.scale(50.0), 0.75);

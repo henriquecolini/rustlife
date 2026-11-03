@@ -36,7 +36,7 @@ Weapon(
             bounce: Some(0.2),
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 150.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            explosion: Some((radius: 150.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
             // Out for ten minutes at most.
             lifetime: 600.0,
             body: Some((
@@ -66,7 +66,7 @@ Weapon(
             bounce: Some(0.0),
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 170.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            explosion: Some((radius: 170.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
             lifetime: 600.0,
             body: Some((
                 radius: 2.5,

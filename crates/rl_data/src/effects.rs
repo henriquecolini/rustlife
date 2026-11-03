@@ -34,6 +34,8 @@ pub struct EffectsConfig {
     pub impact_particles: ImpactParticlesConfig,
     /// A bullet striking a player: blood and the stain it leaves.
     pub blood: ImpactEffectConfig,
+    /// The marks blasts leave.
+    pub scorch: ScorchConfig,
     /// A blast.
     pub explosion: ExplosionEffectConfig,
     /// A grenade in flight.
@@ -474,6 +476,36 @@ impl ImpactEffectConfig {
     }
 }
 
+/// The marks blasts leave on what they burst against: the game's `Scorch`
+/// and `SmallScorch` decals (`scripts/decals_subrect.txt`). Each is as large
+/// as its texture times its `$decalscale`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScorchConfig {
+    /// `Scorch`: the mark of most blasts.
+    pub large: Vec<String>,
+    /// `SmallScorch`: an SMG grenade's on anything but the map.
+    pub small: Vec<String>,
+    /// How long a scorch stays, seconds.
+    pub life: f32,
+}
+
+impl ScorchConfig {
+    fn validate(&self, check: &mut Validator) {
+        for (field, decals) in [("scorch.large", &self.large), ("scorch.small", &self.small)] {
+            if decals.is_empty() {
+                check.fail(field, "needs at least one decal");
+            }
+            for (index, decal) in decals.iter().enumerate() {
+                if decal.trim().is_empty() {
+                    check.fail(&format!("{field}[{index}]"), "must name a decal");
+                }
+            }
+        }
+        check.positive("scorch.life", self.life);
+    }
+}
+
 /// What an explosion does to the view. The blast itself is drawn as the
 /// game draws it (see `rl_client::explosion`): its size is the game's, not a
 /// setting.
@@ -556,6 +588,7 @@ impl EffectsConfig {
         }
         self.impact_particles.validate(check);
         self.blood.validate(check, "blood");
+        self.scorch.validate(check);
         for (weapon, flash) in &self.weapon_flashes {
             flash.validate(check, &format!("weapon_flashes.{weapon}"));
         }
@@ -678,6 +711,11 @@ mod tests {
             ]),
             impact_particles: particles(),
             blood: impact(),
+            scorch: ScorchConfig {
+                large: vec!["decals/scorch1".to_owned()],
+                small: vec!["decals/smscorch1".to_owned()],
+                life: 60.0,
+            },
             explosion: ExplosionEffectConfig {
                 shake: 0.6,
                 pcf: None,
@@ -761,12 +799,14 @@ mod tests {
         bad.impact_particles.debris_dust[0].sprite.clear();
         bad.impact_particles.dust[0].alpha = (100, 300);
         bad.impact_particles.sparks.speed = (512.0, 128.0);
+        bad.scorch.small.clear();
         bad.bullet_impacts.get_mut("metal").expect("metal").color = [1.5, 0.0, 0.0];
         let mut check = Validator::default();
         bad.validate(&mut check);
         let problems = check.finish();
         let fields: Vec<&str> = problems.iter().map(|p| p.field.as_str()).collect();
-        assert_eq!(fields.len(), 6, "{fields:?}");
+        assert_eq!(fields.len(), 7, "{fields:?}");
+        assert!(fields.contains(&"scorch.small"));
         assert!(fields.contains(&"bullet_impacts.metal.color[0]"));
         assert!(fields.contains(&"impact_particles.sparks.speed"));
     }

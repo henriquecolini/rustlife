@@ -268,6 +268,20 @@ health left to burn through, less the nearer the blast but at least about a
 second's worth, so chains of barrels go off one after another. A bullet into a
 burning barrel sets it off at once (see [physics.md](physics.md)).
 
+A blast leaves a scorch where its kind of blast looks for one (an
+explosion's `scorch`, read from server.so); the `ExplosionEvent` carries
+how (`ScorchTrace`), and the client traces for the surface itself, since the
+mark is only drawn:
+
+| `scorch` | Blasts | Where it looks | Mark |
+|----------|--------|----------------|------|
+| `Below` | frag and SLAM (`CBaseGrenade::Explode`), RPG missile, barrels and the map's `env_explosion`s (without their no-decal flag) | from 8 units above the blast to 32 below (a grenade starting inside something looks from the blast itself) | "Scorch" |
+| `Ahead` | the SMG's grenade (`CGrenadeAR2::Detonate`) | 60 units on along its flight | "Scorch" on the map, "SmallScorch" on anything else |
+| `None` | Combine ball, crossbow bolt | — | none |
+
+The game moves an `env_explosion` 24 units off the surface its line meets;
+that move is not modelled.
+
 ## Health and armor
 
 `Vitals` holds health and armor (`player.ron`). Damage is split by armor

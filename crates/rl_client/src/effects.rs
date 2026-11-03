@@ -13,7 +13,8 @@
 //!   wood, a dust cloud off dirt, sparks and a glow off metal; see
 //!   `impact_debris` and `trail_sparks`);
 //! - **blood** spray when a bullet strikes a player;
-//! - an **explosion**, which [`crate::particles`] draws.
+//! - an **explosion**, which [`crate::particles`] draws, and the scorch it
+//!   leaves on what it burst against.
 //!
 //! A sprite's frames lie side by side in one image (see
 //! [`rl_assets::SpriteAsset`]); a material shows one by shifting its
@@ -30,13 +31,13 @@ use rl_data::{
     EffectsConfig, ImpactEffectConfig, ImpactFlashConfig, MuzzleFlashConfig, Shot, SurfaceEffect,
     TracerConfig,
 };
-use rl_sim::collision::contents::{MOVEABLE, SOLID, WINDOW};
+use rl_sim::collision::contents::{GRATE, MOVEABLE, SOLID, WINDOW};
 use rl_sim::collision::{CollisionQuery, Hull};
 use rl_sim::combat::hitscan::Struck;
 use rl_sim::movement::view_direction;
 use rl_sim::rng::Rng;
 use rl_sim::scene::Scene as WorldScene;
-use rl_sim::simulation::{PlayerId, ShotEvent, Simulation};
+use rl_sim::simulation::{ExplosionEvent, PlayerId, ScorchTrace, ShotEvent, Simulation};
 use rl_sim::weapons::WeaponId;
 
 use crate::AppState;
@@ -72,6 +73,14 @@ const SPRAY_DRAG: f32 = 2.5;
 const SPRAY_SPREAD: f32 = 0.6;
 /// Most spray particles one hit spawns.
 const MAX_SPRAY: u32 = 16;
+/// How far above a blast its scorch is looked for from, units.
+const SCORCH_ABOVE: f32 = 8.0;
+/// How far below a blast its scorch is looked for, units.
+const SCORCH_BELOW: f32 = 32.0;
+/// How far on along an SMG grenade's flight its scorch is looked for, units.
+const SCORCH_AHEAD: f32 = 60.0;
+/// What a scorch is traced against: the map and props.
+const SCORCH_MASK: u32 = SOLID | WINDOW | GRATE | MOVEABLE;
 /// What blood is traced against behind a wound (`TraceBleed`'s `0x4003`:
 /// the map and props, not players).
 const BLEED_MASK: u32 = SOLID | WINDOW | MOVEABLE;
@@ -712,6 +721,7 @@ fn spawn_effects(
                 radius: explosion.radius,
                 procedural: !played,
             });
+            scorch(sim, explosion, &mut marks.decals);
         }
     }
 }
@@ -790,6 +800,56 @@ fn strike_surface(
         at: shot.trace.end,
         normal: shot.trace.normal,
         direction: (shot.trace.end - shot.start).normalize_or(shot.trace.normal),
+    });
+}
+
+/// Where a blast at `position` looks for the surface it scorches, Source
+/// space: from 8 units above it to 32 below (`CBaseGrenade::Explode`,
+/// `CEnvExplosion::InputExplode`), or 60 units on along a projectile's
+/// flight (`CGrenadeAR2::Detonate`).
+fn scorch_line(position: Vec3, trace: ScorchTrace) -> (Vec3, Vec3) {
+    match trace {
+        ScorchTrace::Below => (
+            position + Vec3::Z * SCORCH_ABOVE,
+            position - Vec3::Z * SCORCH_BELOW,
+        ),
+        ScorchTrace::Ahead(heading) => (position, position + heading * SCORCH_AHEAD),
+    }
+}
+
+/// Asks for the scorch a blast leaves, if it leaves one and its line meets
+/// something: the game's `Scorch`, or `SmallScorch` where an SMG grenade's
+/// line meets anything but the map.
+fn scorch(sim: &Simulation, explosion: &ExplosionEvent, decals: &mut MessageWriter<DecalRequest>) {
+    let Some(kind) = explosion.scorch else {
+        return;
+    };
+    let scene = WorldScene {
+        world: sim.world(),
+        physics: sim.physics(),
+        ignore: None,
+        others: &[],
+    };
+    let (from, to) = scorch_line(explosion.position, kind);
+    let mut trace = scene.trace_hull(from, to, &Hull::POINT, SCORCH_MASK);
+    if trace.start_solid && kind == ScorchTrace::Below {
+        // Started inside something: from the blast itself down instead.
+        let below = explosion.position - Vec3::Z * SCORCH_BELOW;
+        trace = scene.trace_hull(explosion.position, below, &Hull::POINT, SCORCH_MASK);
+    }
+    let Some((at, normal, target)) = stain(&trace) else {
+        return;
+    };
+    let (small, direction) = match kind {
+        ScorchTrace::Below => (false, Vec3::X),
+        ScorchTrace::Ahead(heading) => (target != Struck::World, heading),
+    };
+    decals.write(DecalRequest {
+        kind: DecalKind::Scorch { small },
+        target,
+        at,
+        normal,
+        direction,
     });
 }
 
@@ -1083,6 +1143,19 @@ mod tests {
         }
         assert!(swung(&sim, id("bar")) && swung(&sim, id("stunstick")));
         assert!(!fires_bullets(&sim, id("bar")));
+    }
+
+    #[test]
+    fn a_blast_looks_for_its_scorch_below_it_or_ahead_of_its_flight() {
+        let at = Vec3::new(10.0, 20.0, 30.0);
+        assert_eq!(
+            scorch_line(at, ScorchTrace::Below),
+            (Vec3::new(10.0, 20.0, 38.0), Vec3::new(10.0, 20.0, -2.0))
+        );
+        assert_eq!(
+            scorch_line(at, ScorchTrace::Ahead(Vec3::X)),
+            (at, Vec3::new(70.0, 20.0, 30.0))
+        );
     }
 
     #[test]

@@ -85,6 +85,7 @@ impl MapLogic {
                 position,
                 damage,
                 radius,
+                scorches,
                 repeatable,
                 spent,
             } => match input {
@@ -94,12 +95,14 @@ impl MapLogic {
                             position,
                             damage,
                             radius,
+                            scorches,
                         });
                         if !repeatable {
                             self.parts.nodes[node].kind = Kind::Explosion {
                                 position,
                                 damage,
                                 radius,
+                                scorches,
                                 repeatable,
                                 spent: true,
                             };

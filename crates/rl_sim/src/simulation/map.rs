@@ -14,7 +14,7 @@
 //! pushes them up.
 
 use glam::{Quat, Vec3};
-use rl_data::ExplosionConfig;
+use rl_data::{ExplosionConfig, Scorch};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
@@ -370,6 +370,7 @@ impl Simulation {
                 position,
                 damage,
                 radius,
+                scorches,
             } => {
                 let tuning = &self.data.map_logic.explosion;
                 let explosion = ExplosionConfig {
@@ -378,8 +379,13 @@ impl Simulation {
                     knockback: damage * tuning.knockback_per_damage,
                     knockback_cap: None,
                     force: damage * tuning.force_per_damage,
+                    scorch: if scorches {
+                        Scorch::Below
+                    } else {
+                        Scorch::None
+                    },
                 };
-                self.explode(None, BlastSource::Map, position, &explosion, events);
+                self.explode(None, BlastSource::Map, (position, None), &explosion, events);
             }
             Effect::Teleport {
                 player,

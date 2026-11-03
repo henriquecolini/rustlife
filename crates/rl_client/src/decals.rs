@@ -1,4 +1,4 @@
-//! Bullet and blood decals, projected onto the surfaces they strike.
+//! Bullet, blood and scorch decals, projected onto the surfaces they strike.
 //!
 //! A decal is not a camera-facing or surface-facing quad: it is a small mesh
 //! made by clipping every nearby triangle to the decal's box and projecting
@@ -95,6 +95,11 @@ pub(crate) enum DecalKind {
     Bullet(SurfaceClass),
     /// A blood stain.
     Blood,
+    /// A blast's scorch: `Scorch`, or `SmallScorch` if `small`.
+    Scorch {
+        /// Whether it is the small one.
+        small: bool,
+    },
 }
 
 /// A decal, removed at `until` (seconds since startup).
@@ -264,6 +269,8 @@ fn load_assets(game: Game, mut decals: ResMut<DecalAssets>, asset_server: Res<As
         .values()
         .flat_map(|impact| &impact.decals)
         .chain(&effects.blood.decals)
+        .chain(&effects.scorch.large)
+        .chain(&effects.scorch.small)
     {
         decals.request(name, &asset_server);
     }
@@ -451,6 +458,11 @@ fn spawn_decals(
                 None => continue,
             },
             DecalKind::Blood => (&effects.blood.decals, effects.blood.decal_life),
+            DecalKind::Scorch { small } => {
+                let scorch = &effects.scorch;
+                let names = if small { &scorch.small } else { &scorch.large };
+                (names, scorch.life)
+            }
         };
         if names.is_empty() || life <= 0.0 {
             continue;

@@ -40,7 +40,7 @@ Weapon(
             bounce: Some(0.2),
             fuse: Some(2.5),
             hit_damage: 0.0,
-            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
             lifetime: 3.0,
             body: Some((
                 // The collision model of the game's grenade: a cylinder
@@ -76,7 +76,7 @@ Weapon(
             bounce: Some(0.2),
             fuse: Some(2.5),
             hit_damage: 0.0,
-            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+            explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
             lifetime: 3.0,
             body: Some((
                 radius: 1.75,
@@ -99,7 +99,7 @@ Weapon(
                 bounce: Some(0.2),
                 fuse: Some(2.5),
                 hit_damage: 0.0,
-                explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0)),
+                explosion: Some((radius: 250.0, damage: 150.0, knockback: 529.0, knockback_cap: Some(353.0), force: 30000.0, scorch: Below)),
                 lifetime: 3.0,
                 body: Some((
                     radius: 1.75,

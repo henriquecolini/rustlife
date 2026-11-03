@@ -143,6 +143,7 @@ mod tests {
         knockback: 500.0,
         knockback_cap: None,
         force: 1000.0,
+        scorch: rl_data::Scorch::None,
     };
 
     fn target(index: usize, x: f32) -> Target {

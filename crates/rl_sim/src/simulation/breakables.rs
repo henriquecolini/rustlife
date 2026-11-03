@@ -26,7 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{Quat, Vec3};
-use rl_data::{ExplosionConfig, ImpactOther, PropImpact};
+use rl_data::{ExplosionConfig, ImpactOther, PropImpact, Scorch};
 use serde::{Deserialize, Serialize};
 
 use super::{BlastSource, PlayerId, Simulation, TickEvents};
@@ -617,6 +617,7 @@ impl Simulation {
             knockback: 0.0,
             knockback_cap: None,
             force: 0.0,
+            scorch: Scorch::None,
         };
         for reach in blast::props(center, &heat, &self.physics, &self.world) {
             let catches = self
@@ -676,8 +677,16 @@ impl Simulation {
                 knockback: tuning.explosion_knockback,
                 knockback_cap: None,
                 force: tuning.explosion_force,
+                // A barrel blows up through an env_explosion.
+                scorch: Scorch::Below,
             };
-            self.explode(attacker, BlastSource::Prop, position, &explosion, events);
+            self.explode(
+                attacker,
+                BlastSource::Prop,
+                (position, None),
+                &explosion,
+                events,
+            );
         }
     }
 }

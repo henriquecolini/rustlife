@@ -250,7 +250,7 @@ Combat effects draw the game's own sprite materials, named in
 | Impact debris | a bullet or swing strikes the map or a prop | the game's code effect for the surface class (below): flecks and a little dust off concrete, tile and wood, a dust cloud off dirt, sparks and a glow off metal, nothing off glass, flesh or water |
 | Bullet decal | a bullet or a swing (Crowbar, Stun Stick) strikes a surface | one of the surface class's decal materials, as large as its texture times its `$decalscale` (a shot hole: 64 x 0.10 = 6.4 units), projected onto the triangles around the hit (so it bends around corners and sticks to props) and multiplied into them, or for a material that is not `DecalModulate` (wood) blended over them |
 | Blood | a shot or swing strikes a player | the game's `blood_impact_red_01` (or lit blood sprites) thrown out of the wound, and the game's `TraceBleed`: lines traced 172 units on from the wound along the shot (one for less than 10 damage, two for less than 25, four above, each strayed up to 0.1, 0.2 or 0.3 on each axis), a 32-unit `decals/blood1`-`6` splat wherever one meets the map or a prop, so the blood lands away from where the shot came from |
-| Explosion | something blows up | particles the game makes itself (below) |
+| Explosion | something blows up | particles the game makes itself (below), and a scorch on the floor or wall it burst against: the game's "Scorch" (`decals/scorch1/2`, 128 units across) or an SMG grenade's "SmallScorch" on a prop (`decals/smscorch1-3`, 32), translucent and lit by the lightmap under it, for `scorch.life` seconds ([combat.md](combat.md) says where each blast looks) |
 | Grenade dot | a grenade is in flight | a red dot on its top that flashes with every tick of its fuse and dims between, in step with the tick sound (`grenade.dot_*`) |
 | Grenade trail | a grenade is in flight | a red ribbon of where it has been, turned to face the camera, tapering and fading over `grenade.trail_life` |
 
@@ -350,7 +350,7 @@ player's own volumes.
 | `source_formats/src/visibility.rs` | PVS decompression, faces in their leaves' clusters, and a real map's surfaces, clusters and sky camera (needs a map) |
 | `rl_client/src/grenades.rs` | The model's middle on the body's, the dot riding a turned grenade's top, flashing and dimming, fuses keeping time between snapshots, the trail's taper and fade |
 | `rl_client/src/fog.rs`, `effects.rs` | Fog from entity keys, sprite frames, tracers' stretch and turn, view model points seen by the main camera |
-| `rl_client/src/decals.rs` | Decals projected and clipped, lightmaps carried, `TraceBleed`'s count, stray and reach of blood by damage |
+| `rl_client/src/decals.rs`, `effects.rs` | Decals projected and clipped, lightmaps carried, `TraceBleed`'s count, stray and reach of blood by damage, where a blast looks for its scorch, which shots mark a surface |
 | `rl_client/src/impact_debris.rs`, `trail_sparks.rs` | Each surface's code effect: how many flecks, puffs and sparks, their speeds, sizes and steps, flecks falling, bouncing and coming to rest, dust fading from full, the surface's colour under the light; metal's sparks along the reflection |
 | `rl_client/src/pcf_particles/render.rs` | Only the particle files the game's manifest lists are loaded |
 | `rl_client/src/effect_material.rs` | Fully fogged additive and multiplying effects leaving the frame alone, unfogged ones unchanged, the shader parsing |

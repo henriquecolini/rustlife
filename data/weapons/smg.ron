@@ -41,7 +41,7 @@ Weapon(
             bounce: None,
             fuse: None,
             hit_damage: 0.0,
-            explosion: Some((radius: 250.0, damage: 100.0, knockback: 353.0, knockback_cap: Some(353.0), force: 60000.0)),
+            explosion: Some((radius: 250.0, damage: 100.0, knockback: 353.0, knockback_cap: Some(353.0), force: 60000.0, scorch: Ahead)),
             lifetime: 10.0,
         )),
     )),

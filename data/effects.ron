@@ -261,6 +261,19 @@ Effects(
         decal_life: 35.0,
         pcf: Some("blood_impact_red_01"),
     ),
+    // The marks blasts leave (scripts/decals_subrect.txt): "Scorch", 128
+    // texels with no $decalscale, so 128 units across; "SmallScorch", 32.
+    // Both are translucent LightmappedGeneric decals, lit by the lightmap
+    // under them. Where a blast looks for a surface is the weapon's
+    // `scorch` (server.so): grenades and env_explosion (RPG missiles,
+    // barrels, the map's own blasts) from 8 units above to 32 below it; the
+    // SMG's grenade 60 units on along its flight, leaving "SmallScorch" on
+    // anything but the map. The Combine ball and the crossbow leave none.
+    scorch: (
+        large: ["decals/scorch1", "decals/scorch2"],
+        small: ["decals/smscorch1", "decals/smscorch2", "decals/smscorch3"],
+        life: 60.0,
+    ),
     // A blast is drawn as HL2DM draws it (the client's `explosion` module, from
     // the game's own code: fixed-size puffs of effects/fire_cloud and
     // fire_embers), so only what it does to the view is set here: the view
