@@ -606,6 +606,11 @@ fn bevy_bounds((min, max): ([f32; 3], [f32; 3])) -> (Vec3, Vec3) {
 /// Converts one model mesh (Source space) into a Bevy [`Mesh`], with its
 /// joints and weights when `skinned`.
 ///
+/// A skinned mesh also carries per-joint bounds, so its culling box can follow
+/// the skeleton (see `DynamicSkinnedMeshBounds`) instead of staying where the
+/// bind pose was: a corpse lying on the floor, or a player leaning out, would
+/// otherwise vanish whenever the standing box left the screen.
+///
 /// The mesh stays readable on the CPU after upload: props with baked
 /// lighting draw a vertex-coloured copy of it (see
 /// [`crate::vertex_lighting::vertex_lit_mesh`]).
@@ -630,12 +635,17 @@ fn mesh_of(mesh: &ModelMesh, skinned: bool) -> Mesh {
     if !skinned || mesh.joints.len() != mesh.positions.len() {
         return built;
     }
-    built
+    let mut skinned = built
         .with_inserted_attribute(
             Mesh::ATTRIBUTE_JOINT_INDEX,
             VertexAttributeValues::Uint16x4(mesh.joints.clone()),
         )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, mesh.weights.clone())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, mesh.weights.clone());
+    if let Err(error) = skinned.generate_skinned_mesh_bounds() {
+        // Culled by its bind-pose box, like an unskinned mesh.
+        tracing::debug!(%error, "model mesh has no per-joint bounds");
+    }
+    skinned
 }
 
 #[cfg(test)]
@@ -706,5 +716,25 @@ mod tests {
         let skinned = mesh_of(&source, true);
         assert!(skinned.attribute(Mesh::ATTRIBUTE_JOINT_INDEX).is_some());
         assert!(skinned.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT).is_some());
+    }
+
+    #[test]
+    fn skinned_meshes_carry_bounds_for_each_joint_they_use() {
+        let source = ModelMesh {
+            material: 0,
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            normals: vec![[0.0, 0.0, 1.0]; 3],
+            uvs: vec![[0.0; 2]; 3],
+            vertex_ids: vec![0, 1, 2],
+            joints: vec![[0, 0, 0, 0], [2, 0, 0, 0], [2, 0, 0, 0]],
+            weights: vec![[1.0, 0.0, 0.0, 0.0]; 3],
+        };
+        assert!(mesh_of(&source, false).skinned_mesh_bounds().is_none());
+        let bounds = mesh_of(&source, true)
+            .skinned_mesh_bounds()
+            .cloned()
+            .expect("skinned meshes get per-joint bounds");
+        let joints: Vec<u16> = bounds.iter().map(|(joint, _)| joint.0).collect();
+        assert_eq!(joints, [0, 2]);
     }
 }

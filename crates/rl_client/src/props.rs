@@ -34,7 +34,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{DynamicSkinnedMeshBounds, RenderLayers};
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::prelude::*;
 use rl_assets::coords;
@@ -68,6 +68,10 @@ pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
+        // Skinned parts are culled by a box that follows their bones, not by
+        // their bind pose: a ragdoll falls far outside the standing pose's box
+        // and would disappear whenever that box left the screen.
+        app.register_required_components::<SkinnedMesh, DynamicSkinnedMeshBounds>();
         app.init_resource::<PropsSpawned>()
             .init_resource::<ModelHandles>()
             .add_systems(OnEnter(AppState::InGame), reset)
@@ -627,5 +631,17 @@ mod tests {
         assert_eq!(transform.translation, prop.translation);
         assert_eq!(transform.rotation, prop.rotation);
         assert_eq!(transform.scale, Vec3::splat(2.0));
+    }
+
+    #[test]
+    fn skinned_parts_are_culled_by_bounds_that_follow_their_bones() {
+        let mut app = App::new();
+        app.add_plugins(PropsPlugin);
+        let part = app.world_mut().spawn(SkinnedMesh::default()).id();
+        assert!(
+            app.world()
+                .entity(part)
+                .contains::<DynamicSkinnedMeshBounds>()
+        );
     }
 }
