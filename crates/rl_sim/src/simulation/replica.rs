@@ -123,6 +123,11 @@ impl Simulation {
         }
     }
 
+    /// Notes which props the server says are on fire.
+    pub fn set_burning_props(&mut self, burning: &std::collections::BTreeSet<BodyId>) {
+        self.breakables.mark_burning(burning);
+    }
+
     /// Runs one of a player's commands ahead of the server: their movement
     /// and the weapon in hand. Nothing else happens — nobody is hurt, no
     /// prop is pushed, the Manipulator is left to the server — and the

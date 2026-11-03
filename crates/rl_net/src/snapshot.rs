@@ -105,6 +105,9 @@ pub struct WorldState {
     pub props: BTreeMap<BodyId, BodyPose>,
     /// Every prop that has broken.
     pub broken: BTreeSet<BodyId>,
+    /// Every prop on fire: clients draw the flames for as long as it is
+    /// listed, whenever they joined.
+    pub burning: BTreeSet<BodyId>,
     /// Whether each pickup is there to take.
     pub pickups: Vec<bool>,
     /// Projectiles in flight.
@@ -150,6 +153,8 @@ pub struct Snapshot {
     /// Every prop that is broken, if that changed since the baseline (props
     /// that respawn leave the set).
     pub broken: Option<Vec<BodyId>>,
+    /// Every prop on fire, if that changed since the baseline.
+    pub burning: Option<Vec<BodyId>>,
     /// Pickups that were taken or came back: `(index, there)`.
     pub pickups: Vec<(u16, bool)>,
     /// The projectiles in flight, if they changed.
@@ -205,6 +210,7 @@ impl WorldState {
                 .filter_map(|body| Some((body, physics.pose(body)?)))
                 .collect(),
             broken: physics.broken().collect(),
+            burning: sim.burning_props().collect(),
             pickups: sim
                 .pickups()
                 .iter()
@@ -270,6 +276,9 @@ impl WorldState {
         let broken = baseline
             .is_none_or(|base| base.broken != self.broken)
             .then(|| self.broken.iter().copied().collect());
+        let burning = baseline
+            .is_none_or(|base| base.burning != self.burning)
+            .then(|| self.burning.iter().copied().collect());
         let pickups = self
             .pickups
             .iter()
@@ -288,6 +297,7 @@ impl WorldState {
             gone,
             props,
             broken,
+            burning,
             pickups,
             projectiles: baseline
                 .is_none_or(|base| base.projectiles != self.projectiles)
@@ -366,6 +376,10 @@ impl WorldState {
             Some(all) => all.iter().copied().collect(),
             None => base.map(|base| base.broken.clone()).unwrap_or_default(),
         };
+        let burning: BTreeSet<BodyId> = match &snapshot.burning {
+            Some(all) => all.iter().copied().collect(),
+            None => base.map(|base| base.burning.clone()).unwrap_or_default(),
+        };
         // A broken prop is gone from the world, so from its poses.
         props.retain(|body, _| !broken.contains(body));
         let mut pickups = base.map(|base| base.pickups.clone()).unwrap_or_default();
@@ -381,6 +395,7 @@ impl WorldState {
             players,
             props,
             broken,
+            burning,
             pickups,
             projectiles: snapshot
                 .projectiles
@@ -449,6 +464,7 @@ impl WorldState {
             sim.set_logic_state(&self.logic);
         }
         sim.set_broken_props(&self.broken);
+        sim.set_burning_props(&self.burning);
         // Only props that moved are placed: placing one makes collision
         // look at it again.
         let moved: Vec<(BodyId, BodyPose)> = self
@@ -556,6 +572,68 @@ mod tests {
         for _ in 0..ticks {
             sim.tick(&[(player, cmd)]);
         }
+    }
+
+    #[test]
+    fn burning_props_reach_the_replica_even_if_it_joins_late_and_stop_when_they_do() {
+        use rl_sim::physics::Breakable;
+
+        let data = rl_data::GameData::builtin().expect("builtin");
+        let world = WorldBuilder::new()
+            .solid_box(
+                Vec3::new(-2048.0, -2048.0, -64.0),
+                Vec3::new(2048.0, 2048.0, 0.0),
+            )
+            .build();
+        let barrel = PropDesc {
+            pieces: vec![ConvexHull::from_box(Vec3::splat(-8.0), Vec3::splat(8.0))],
+            origin: Vec3::new(300.0, 0.0, 8.0),
+            rotation: Quat::IDENTITY,
+            motion: BodyMotion::Dynamic,
+            mass: 10.0,
+            material: *data.physics.materials.get("wood"),
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            debris: false,
+            start_asleep: true,
+            grabbable: true,
+            free_on_grab: false,
+            breakable: Some(Breakable {
+                health: 10.0,
+                bullets: 1.0,
+                club: 1.0,
+                explosive: 1.0,
+                explosion: None,
+                gibs: Vec::new(),
+                pieces: Vec::new(),
+                gib_count: 0,
+                respawn: None,
+                damage_table: None,
+            }),
+            surface: String::new(),
+        };
+        let mut replica = Simulation::new(Arc::new(world), &data);
+        let body = replica.add_prop(&barrel);
+        let initial = initial_props(&replica);
+
+        let out = WorldState::capture(&replica, None);
+        assert!(out.burning.is_empty());
+        let mut lit = out.clone();
+        lit.burning.insert(body);
+
+        let delta = lit.diff(Some(&out), &initial, 0, 0, Vec::new());
+        assert_eq!(delta.burning, Some(vec![body]));
+        let rebuilt = WorldState::apply(Some(&out), &delta, &initial).expect("delta");
+        assert_eq!(rebuilt, lit);
+        let full = lit.diff(None, &initial, 0, 0, Vec::new());
+        assert_eq!(full.burning, Some(vec![body]), "a late joiner is told");
+        let again = lit.diff(Some(&lit), &initial, 0, 0, Vec::new());
+        assert_eq!(again.burning, None, "and nobody is told twice");
+
+        rebuilt.restore(&mut replica);
+        assert_eq!(replica.burning_props().collect::<Vec<_>>(), [body]);
+        out.restore(&mut replica);
+        assert_eq!(replica.burning_props().count(), 0, "it knows it ended");
     }
 
     #[test]

@@ -1097,10 +1097,12 @@ fn a_pistol_takes_three_shots_the_second_lights_the_barrel_the_third_sets_it_off
     // Restored to 20 and taking that bullet's 8: 12 bites, 2.3 s.
     assert!((ignition.fuse - 2.3).abs() < 1e-3, "{}", ignition.fuse);
     assert!(breaks(&second).is_empty(), "it burns for a while first");
+    assert_eq!(arena.sim.burning_props().collect::<Vec<_>>(), [barrel]);
     let third = shoot(&mut arena);
     let broke = breaks(&third);
     assert_eq!(broke.len(), 1, "a burning barrel shot goes off at once");
     assert!(broke[0].exploded);
+    assert_eq!(arena.sim.burning_props().count(), 0, "and burns no more");
 }
 
 #[test]

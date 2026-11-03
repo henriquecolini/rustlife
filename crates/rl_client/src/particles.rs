@@ -3,15 +3,17 @@
 //!
 //! A blast's own puffs are [`crate::explosion`]'s (the engine's explosion
 //! rebuilt from its code); this module shakes the view and whitens the screen
-//! for those near one, and hands the blast over. A prop on fire gives off
-//! flames and smoke that grow as its fuse burns down, drawn as soft sprites
-//! made from textures generated here: fire and flash are added to what is
-//! behind them, smoke is blended over it. Every particle is a quad facing the
-//! camera whose size and colour change over its life (colours are HDR-ish:
-//! values above one burn to white). [`crate::effects`] asks for a `Blast`;
-//! how hard it shakes is `effects.ron`'s `explosion`.
+//! for those near one, and hands the blast over. A prop on fire plays the
+//! game's own burning system on it for as long as the server says it burns;
+//! without the game's, it gives off flames and smoke made here that grow as it
+//! burns, drawn as soft sprites made from textures generated here: fire and
+//! flash are added to what is behind them, smoke is blended over it. Every
+//! particle is a quad facing the camera whose size and colour change over its
+//! life (colours are HDR-ish: values above one burn to white).
+//! [`crate::effects`] asks for a `Blast`; how hard it shakes is `effects.ron`'s
+//! `explosion`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -26,8 +28,7 @@ use crate::camera::FlyCam;
 use crate::effect_material::{EffectMaterial, effect_material};
 use crate::explosion::Explosion;
 use crate::net::Game;
-use crate::pcf_particles::{Pcf, PcfSpawn};
-use crate::player::Ticked;
+use crate::pcf_particles::{Follow, Pcf, PcfSpawn, PcfStop};
 use crate::world::MapScoped;
 
 /// Most particles alive at once; blasts ask for no more than fit.
@@ -556,55 +557,92 @@ fn spawn_particle(
     ));
 }
 
-/// The props that are on fire: when each caught, when its fuse is spent
-/// (seconds since startup), and whether the game's own fire system is
-/// playing on it (so the flames made here are not).
+/// The props drawn on fire: when each caught (seconds since startup), and
+/// whether the game's own fire system is playing on it (so the flames made
+/// here are not).
 #[derive(Resource, Debug, Default)]
-struct Burning(HashMap<BodyId, (f32, f32, bool)>);
+struct Burning(HashMap<BodyId, (f32, bool)>);
 
-/// The game's particle system for a prop on fire (the size HL2DM's
-/// `env_fire` entities use for a barrel).
-const FIRE_SYSTEM: &str = "env_fire_medium";
+/// The game's particle system for a prop on fire: what client.so's
+/// `C_EntityFlame::CreateEffect` plays, following the prop. It holds both the
+/// smoke and the flames. (client.so's `env_fire_*` are the `env_fire` entity's,
+/// by its size.)
+const FIRE_SYSTEM: &str = "burning_character";
+/// The smoke played with it. The game has none but `burning_character`'s own,
+/// whose opacity grows from nothing over the 1 to 4 s after it starts: a barrel
+/// is gone by then, so it is all but invisible. This is `fire_01.pcf`'s.
+const FIRE_SMOKE_SYSTEM: &str = "smoke_burning_engine_01";
+/// How long its particles live against the game's: its root system's are the
+/// smoke, its children's the flames, which vanish a bit faster.
+const FIRE_LIFE_SCALE: (f32, f32) = (1.0, 0.7);
 /// How often a burning prop gives off a puff of flame, seconds.
 const FLAME_INTERVAL: f32 = 0.03;
+/// Seconds the flames made here take to grow to their fiercest: how long a
+/// full barrel burns.
+const FLAME_GROWS_FOR: f32 = 3.9;
 
 /// How fierce a fire is `progress` (`0..=1`) of the way to its fuse's end.
 fn fierceness(progress: f32) -> f32 {
     0.7 + 0.8 * progress.clamp(0.0, 1.0)
 }
 
-/// Notes the props set on fire; stops noting them once they break.
+/// Which props have caught and which have gone out since `known`, given what
+/// burns `now`. Each list is in id order, as these go to effects.
+fn fire_changes(
+    known: &HashMap<BodyId, (f32, bool)>,
+    now: &BTreeSet<BodyId>,
+) -> (Vec<BodyId>, Vec<BodyId>) {
+    let caught = now
+        .iter()
+        .copied()
+        .filter(|body| !known.contains_key(body))
+        .collect();
+    let mut out: Vec<BodyId> = known
+        .keys()
+        .copied()
+        .filter(|body| !now.contains(body))
+        .collect();
+    out.sort();
+    (caught, out)
+}
+
+/// Starts fire on the props the server says have caught, and ends it on those
+/// that no longer burn.
 fn note_fires(
-    mut ticks: MessageReader<Ticked>,
     time: Res<Time>,
     game: Game,
     mut burning: ResMut<Burning>,
     pcf: Res<Pcf>,
     mut fires: MessageWriter<PcfSpawn>,
+    mut stops: MessageWriter<PcfStop>,
 ) {
-    let now = time.elapsed_secs();
-    for Ticked(events) in ticks.read() {
-        for ignition in &events.prop_ignitions {
-            let lasts = ignition.fuse + 0.5;
-            let at = game
-                .sim()
-                .and_then(|sim| sim.physics().center_of_mass(ignition.body));
-            // The game's own fire where it has one, standing on the prop.
-            let played = at.is_some_and(|at| {
-                pcf.play_for(
-                    Some(FIRE_SYSTEM),
-                    &mut fires,
-                    Vec3::from(at.to_array()),
-                    lasts,
-                )
-            });
-            burning.0.insert(ignition.body, (now, now + lasts, played));
-        }
+    let Some(sim) = game.sim() else {
+        return;
+    };
+    let now: BTreeSet<BodyId> = sim.burning_props().collect();
+    let (caught, out) = fire_changes(&burning.0, &now);
+    for body in caught {
+        let at = sim.physics().center_of_mass(body).unwrap_or_default();
+        // The smoke first: drawn in order, it stays behind the flames.
+        pcf.play_on(
+            FIRE_SMOKE_SYSTEM,
+            &mut fires,
+            Follow::Body(body),
+            at,
+            (1.0, 1.0),
+        );
+        let own = pcf.play_on(
+            FIRE_SYSTEM,
+            &mut fires,
+            Follow::Body(body),
+            at,
+            FIRE_LIFE_SCALE,
+        );
+        burning.0.insert(body, (time.elapsed_secs(), own));
     }
-    if let Some(sim) = game.sim() {
-        burning
-            .0
-            .retain(|&body, &mut (_, until, _)| until > now && !sim.physics().is_broken(body));
+    for body in out {
+        burning.0.remove(&body);
+        stops.write(PcfStop(Follow::Body(body)));
     }
 }
 
@@ -632,7 +670,7 @@ fn burn_props(
     let rng = rng.get_or_insert_with(|| Rng::seeded(&[0x0066_6c61_6d65]));
     let now = time.elapsed_secs();
     let mut room = MAX_PARTICLES.saturating_sub(live.iter().count());
-    for (&body, &(since_lit, until, own_fire)) in &burning.0 {
+    for (&body, &(since_lit, own_fire)) in &burning.0 {
         if own_fire {
             continue;
         }
@@ -640,7 +678,7 @@ fn burn_props(
             continue;
         };
         let at = coords::position(center.to_array());
-        let progress = (now - since_lit) / (until - since_lit).max(f32::EPSILON);
+        let progress = (now - since_lit) / FLAME_GROWS_FOR;
         for spec in flame_particles(rng, puffs.min(3), fierceness(progress)) {
             if room == 0 {
                 return;
@@ -740,6 +778,28 @@ mod tests {
 
     fn count(specs: &[Spec], kind: Kind) -> usize {
         specs.iter().filter(|spec| spec.kind == kind).count()
+    }
+
+    #[test]
+    fn fires_start_once_and_end_when_the_server_stops_listing_them() {
+        let body = |id| BodyId::from_index(id);
+        let mut known = HashMap::new();
+        let now = BTreeSet::from([body(2), body(1)]);
+        assert_eq!(fire_changes(&known, &now), (vec![body(1), body(2)], vec![]));
+        known.insert(body(1), (0.0, true));
+        known.insert(body(2), (0.0, true));
+        assert_eq!(
+            fire_changes(&known, &now),
+            (vec![], vec![]),
+            "still burning"
+        );
+        let now = BTreeSet::from([body(2), body(3)]);
+        assert_eq!(fire_changes(&known, &now), (vec![body(3)], vec![body(1)]));
+        assert_eq!(
+            fire_changes(&known, &BTreeSet::new()).1,
+            vec![body(1), body(2)],
+            "every fire ends: none loops forever"
+        );
     }
 
     #[test]

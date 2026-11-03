@@ -270,6 +270,7 @@ mod tests {
                 },
             )]),
             broken: std::collections::BTreeSet::new(),
+            burning: std::collections::BTreeSet::new(),
             pickups: Vec::new(),
             projectiles: Vec::new(),
             grenades: Vec::new(),

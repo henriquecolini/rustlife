@@ -10,4 +10,4 @@ mod render;
 pub mod sim;
 
 pub(crate) use render::Pcf;
-pub use render::{PcfPlugin, PcfSpawn};
+pub use render::{Follow, PcfPlugin, PcfSpawn, PcfStop};

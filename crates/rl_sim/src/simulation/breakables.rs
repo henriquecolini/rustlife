@@ -23,7 +23,7 @@
 //! the props that blast breaks: a barrel shot by a player is that player's
 //! kill.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{Quat, Vec3};
 use rl_data::{ExplosionConfig, ImpactOther, PropImpact};
@@ -232,6 +232,22 @@ impl Breakables {
         }
     }
 
+    /// The props burning now.
+    fn burning(&self) -> impl Iterator<Item = BodyId> + '_ {
+        self.props
+            .iter()
+            .filter(|(_, state)| state.flame.is_some() && !state.broken)
+            .map(|(&body, _)| body)
+    }
+
+    /// Notes which props burn, as the server said: a replica's flames only
+    /// show that they do, they never bite.
+    pub(super) fn mark_burning(&mut self, burning: &BTreeSet<BodyId>) {
+        for (body, state) in &mut self.props {
+            state.flame = burning.contains(body).then_some(0.0);
+        }
+    }
+
     /// How `body` breaks, broken or not.
     pub(super) fn spec(&self, body: BodyId) -> Option<&Breakable> {
         self.props.get(&body).map(|state| &state.spec)
@@ -351,6 +367,11 @@ impl Simulation {
             let attacker = self.thrower_of(touch.prop);
             self.hit_prop(touch.prop, 1.0, Blow::Slam, attacker);
         }
+    }
+
+    /// The props on fire now, on the server or, as it last said, a replica.
+    pub fn burning_props(&self) -> impl Iterator<Item = BodyId> + '_ {
+        self.breakables.burning()
     }
 
     /// How a prop breaks, if it can (also after it has broken): what it

@@ -717,6 +717,13 @@ pub struct Instance {
     waiting: Vec<(f32, Arc<SystemDef>)>,
     children: Vec<Instance>,
     stopped: bool,
+    /// Half the size of the model it burns on, if the game gave one: where
+    /// "on the model" initializers scatter particles. Children share it.
+    pub model_half: Option<Vec3>,
+    /// Multiplier on the life of each particle it emits...
+    life_scale: f32,
+    /// ...and on those of its children.
+    child_life_scale: f32,
 }
 
 impl Instance {
@@ -750,6 +757,9 @@ impl Instance {
             waiting,
             children: Vec::new(),
             stopped: false,
+            model_half: None,
+            life_scale: 1.0,
+            child_life_scale: 1.0,
         };
         for _ in 0..instance.def.initial_particles {
             instance.create(0.0);
@@ -786,6 +796,16 @@ impl Instance {
     #[must_use]
     pub fn age(&self) -> f32 {
         self.age
+    }
+
+    /// Makes each particle it emits from now on live `own` times as long, and
+    /// each one its children (all of them, down) emit `children` times.
+    pub fn set_life_scale(&mut self, own: f32, children: f32) {
+        self.life_scale = own;
+        self.child_life_scale = children;
+        for child in &mut self.children {
+            child.set_life_scale(children, children);
+        }
     }
 
     /// Stops it emitting; what is alive plays out.
@@ -863,6 +883,7 @@ impl Instance {
                     child.points.push(*point);
                 }
             }
+            child.model_half = self.model_half;
             child.update(library, dt, world);
         }
         self.children.retain(|c| !c.finished());
@@ -874,7 +895,8 @@ impl Instance {
             if self.waiting[i].0 <= 0.0 {
                 let (_, def) = self.waiting.remove(i);
                 let child_seed = seed ^ (u64::from(self.created) << 20) ^ i as u64;
-                if let Some(child) = library.spawn(&def.name, &self.points, child_seed) {
+                if let Some(mut child) = library.spawn(&def.name, &self.points, child_seed) {
+                    child.set_life_scale(self.child_life_scale, self.child_life_scale);
                     self.children.push(child);
                 }
             } else {
@@ -948,6 +970,7 @@ impl Instance {
         for init in &def.initializers {
             self.initialize(init, &mut p, creation_time);
         }
+        p.life *= self.life_scale;
         p.radius0 = p.radius;
         p.color0 = p.color;
         p.alpha0 = p.alpha;
@@ -1136,7 +1159,8 @@ impl Instance {
                 p.position = start.position.lerp(end.position, t) + dir * reach * self.rng.unit();
             }
             Init::PositionOnModel => {
-                p.position = self.point(cp_index).position;
+                let spread = self.model_half.unwrap_or(Vec3::ZERO);
+                p.position = self.point(cp_index).position + self.rand_vec(-spread, spread);
             }
             Init::VelocityNoise => {
                 let cp = self.point(init.int("Control Point Number", 0));
@@ -1771,6 +1795,97 @@ mod tests {
             .spawn(&name, &[ControlPoint::at(Vec3::ZERO)], 1)
             .unwrap();
         (library, instance)
+    }
+
+    /// A system emitting 100 particles a second that live `life` seconds.
+    fn stream(life: f32) -> ParticleSystem {
+        let mut system = burst(0.0, life);
+        system.emitters = vec![op(
+            "emit_continuously",
+            &[("emission_rate", Value::Float(100.0))],
+        )];
+        system
+    }
+
+    #[test]
+    fn a_followed_control_point_emits_from_where_it_is_and_what_it_emitted_stays_behind() {
+        let mut system = stream(10.0);
+        system
+            .initializers
+            .push(op("Position Within Sphere Random", &[]));
+        let (library, mut s) = run(system);
+        s.update(&library, 0.1, &EmptyWorld);
+        let early = s.particles().len();
+        assert!(early > 0);
+        s.points[0].move_to(Vec3::new(500.0, 0.0, 0.0));
+        s.update(&library, 0.1, &EmptyWorld);
+        let (behind, ahead): (Vec<_>, Vec<_>) =
+            s.particles().iter().partition(|p| p.position.x < 250.0);
+        assert_eq!(behind.len(), early, "what it emitted stays where it was");
+        assert!(
+            !ahead.is_empty(),
+            "it goes on emitting from where it is now"
+        );
+    }
+
+    #[test]
+    fn stopping_ends_a_system_that_would_otherwise_loop_forever() {
+        let (library, mut s) = run(stream(0.5));
+        s.update(&library, 5.0, &EmptyWorld);
+        assert!(!s.finished(), "it loops");
+        s.stop();
+        s.update(&library, 0.6, &EmptyWorld);
+        assert!(s.finished());
+    }
+
+    #[test]
+    fn a_life_scale_shortens_a_systems_particles_and_its_childrens_apart() {
+        let mut parent = stream(1.0);
+        parent.name = "parent".into();
+        parent.children = vec![source_formats::pcf::Child {
+            name: "child".into(),
+            delay: 0.0,
+        }];
+        let mut child = stream(1.0);
+        child.name = "child".into();
+        let mut library = Library::new();
+        assert!(library.add(&[parent, child]).is_empty());
+        let mut s = library
+            .spawn("parent", &[ControlPoint::at(Vec3::ZERO)], 1)
+            .unwrap();
+        s.set_life_scale(1.0, 0.7);
+        s.update(&library, 0.1, &EmptyWorld);
+        assert!(s.particles().iter().all(|p| (p.life - 1.0).abs() < 1e-5));
+        let children = s.children()[0].particles();
+        assert!(!children.is_empty());
+        assert!(children.iter().all(|p| (p.life - 0.7).abs() < 1e-5));
+    }
+
+    #[test]
+    fn particles_on_a_model_scatter_within_it() {
+        let mut system = stream(10.0);
+        system
+            .initializers
+            .push(op("Position on Model Random", &[]));
+        let (library, mut s) = run(system.clone());
+        s.update(&library, 0.2, &EmptyWorld);
+        assert!(
+            s.particles().iter().all(|p| p.position == Vec3::ZERO),
+            "with no model, at the control point"
+        );
+        let (library, mut s) = run(system);
+        let half = Vec3::new(4.0, 8.0, 24.0);
+        s.model_half = Some(half);
+        s.update(&library, 0.2, &EmptyWorld);
+        let highest = s
+            .particles()
+            .iter()
+            .map(|p| p.position.z)
+            .fold(0.0, f32::max);
+        assert!(highest > 6.0, "{highest}");
+        for p in s.particles() {
+            assert!(p.position.abs().cmple(half).all(), "{}", p.position);
+        }
     }
 
     #[test]

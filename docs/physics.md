@@ -262,8 +262,10 @@ reads `fire_interactions`, whose `flammable`, `explosive_resist` and
 
 Whoever first lit it is credited with the blast and its kills, so
 barrels set off by other barrels chain, each credited to the first
-shooter. The server sends `PropIgnite` when a barrel catches fire so
-clients can draw the flames (`rl_client::particles`).
+shooter. The server sends `PropIgnite` when a barrel catches fire and lists
+what burns in each snapshot's `burning` set (so late joiners see fires and
+everyone knows when one ends), and clients draw the flames for as long as a prop
+is listed, on the prop as they draw it (`rl_client::particles`).
 
 ## The Manipulator
 

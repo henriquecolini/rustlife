@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use rl_assets::{SOURCE, SpriteAsset, coords};
 use rl_sim::collision::CollisionWorld;
 use rl_sim::collision::contents::SOLID;
+use rl_sim::physics::BodyId;
 
 use super::draw::{self, Facing, Quad, RopePoint, View};
 use super::sim::{
@@ -23,7 +24,7 @@ use super::sim::{
 };
 use crate::camera::FlyCam;
 use crate::effect_material::{EffectMaterial, effect_material};
-use crate::net::Game;
+use crate::net::{Drawn, Game};
 use crate::world::MapScoped;
 use crate::{AppState, GameVfs};
 
@@ -39,10 +40,17 @@ pub struct PcfPlugin;
 impl Plugin for PcfPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<PcfSpawn>()
+            .add_message::<PcfStop>()
             .init_resource::<Pcf>()
             .add_systems(
                 Update,
-                (load_library, play_scripted, start_effects, play_effects)
+                (
+                    load_library,
+                    play_scripted,
+                    start_effects,
+                    follow_targets,
+                    play_effects,
+                )
                     .chain()
                     .after(crate::camera::CameraPlaced)
                     .run_if(in_state(AppState::InGame)),
@@ -62,7 +70,26 @@ pub struct PcfSpawn {
     /// Seconds after which it stops emitting (what is alive plays out), for
     /// a looping system such as a fire; `None` lets it run its course.
     pub lifetime: Option<f32>,
+    /// What it stays on, if anything: it emits from where that is each frame,
+    /// while what it has emitted stays behind (so a moving fire trails), and
+    /// stops emitting once that is gone.
+    pub follow: Option<Follow>,
+    /// Multipliers on how long its particles live, and its children's.
+    pub life_scale: (f32, f32),
 }
+
+/// What a particle system stays on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Follow {
+    /// A prop, at its centre where it is drawn this frame.
+    Body(BodyId),
+    /// An entity, at its [`Transform`].
+    Entity(Entity),
+}
+
+/// Makes the systems staying on this stop emitting: what is alive plays out.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct PcfStop(pub Follow);
 
 /// The loaded systems and the materials they draw with.
 #[derive(Resource, Default)]
@@ -81,23 +108,28 @@ impl Pcf {
         self.library.get(name).is_some()
     }
 
-    /// Plays the looping system `name` at `position` (Source units), facing
-    /// up, for `lifetime` seconds, if there is one; says whether it did.
-    pub(crate) fn play_for(
+    /// Plays the looping system `name` on `follow`, starting from `position`
+    /// (Source units), facing up, until told to stop or `follow` is gone, its
+    /// particles living `life_scale` times as long (and its children's, the
+    /// second); says whether there is such a system.
+    pub(crate) fn play_on(
         &self,
-        name: Option<&str>,
+        name: &str,
         spawns: &mut MessageWriter<PcfSpawn>,
+        follow: Follow,
         position: Vec3,
-        lifetime: f32,
+        life_scale: (f32, f32),
     ) -> bool {
-        let Some(name) = name.filter(|name| self.has(name)) else {
+        if !self.has(name) {
             return false;
-        };
+        }
         spawns.write(PcfSpawn {
             name: name.to_owned(),
             position,
             normal: Vec3::Z,
-            lifetime: Some(lifetime),
+            lifetime: None,
+            follow: Some(follow),
+            life_scale,
         });
         true
     }
@@ -120,6 +152,8 @@ impl Pcf {
             position,
             normal,
             lifetime: None,
+            follow: None,
+            life_scale: (1.0, 1.0),
         });
         true
     }
@@ -139,9 +173,23 @@ struct PcfEffect {
     instance: Instance,
     /// When to stop emitting, in the instance's age.
     stop_after: Option<f32>,
+    /// What it stays on, until that is gone or it is told to stop.
+    follow: Option<Following>,
     /// One drawing entity per `material|kind`.
     layers: HashMap<String, (Entity, Handle<Mesh>)>,
 }
+
+/// What an effect stays on.
+#[derive(Debug, Clone, Copy)]
+struct Following {
+    target: Follow,
+    /// For a prop, where its centre is from its model's origin, in its frame.
+    center: Vec3,
+}
+
+/// How long after an effect starts a missing entity it follows may yet appear
+/// (it may be one spawned this frame), seconds.
+const FOLLOW_PATIENCE: f32 = 0.25;
 
 /// Looks the mounted games' particle files up once, on entering a map.
 fn load_library(vfs: Res<GameVfs>, mut pcf: ResMut<Pcf>) {
@@ -209,6 +257,8 @@ fn play_scripted(
         position,
         normal,
         lifetime: None,
+        follow: None,
+        life_scale: (1.0, 1.0),
     });
 }
 
@@ -233,6 +283,7 @@ fn start_effects(
     assets: Res<AssetServer>,
     sprites: Res<Assets<SpriteAsset>>,
     time: Res<Time>,
+    game: Game,
     live: Query<(), With<PcfEffect>>,
 ) {
     pcf.pending
@@ -262,11 +313,14 @@ fn start_effects(
             warn!("no particle system called {}", request.name);
             continue;
         };
+        let mut instance = instance;
+        instance.set_life_scale(request.life_scale.0, request.life_scale.1);
         room -= 1;
         commands.spawn((
             PcfEffect {
                 instance,
                 stop_after: request.lifetime,
+                follow: request.follow.map(|target| following(target, &game)),
                 layers: HashMap::new(),
             },
             Transform::IDENTITY,
@@ -275,6 +329,93 @@ fn start_effects(
         ));
     }
     pcf.pending = waiting;
+}
+
+/// What it takes to stay on `target`.
+fn following(target: Follow, game: &Game) -> Following {
+    let center = match target {
+        Follow::Body(body) => game
+            .sim()
+            .map(rl_sim::simulation::Simulation::physics)
+            .and_then(|physics| Some((physics.pose(body)?, physics.center_of_mass(body)?)))
+            .map_or(Vec3::ZERO, |(pose, center)| {
+                pose.rotation.inverse() * (center - pose.position)
+            }),
+        Follow::Entity(_) => Vec3::ZERO,
+    };
+    Following { target, center }
+}
+
+/// Moves every effect that stays on something to where that is drawn this
+/// frame; one told to stop, or with nothing left to stay on, stops emitting.
+fn follow_targets(
+    mut stops: MessageReader<PcfStop>,
+    drawn: Res<Drawn>,
+    game: Game,
+    time: Res<Time<Fixed>>,
+    transforms: Query<&Transform, Without<PcfEffect>>,
+    mut effects: Query<&mut PcfEffect>,
+) {
+    let stopped: Vec<Follow> = stops.read().map(|stop| stop.0).collect();
+    for mut effect in &mut effects {
+        let effect = &mut *effect;
+        let Some(following) = effect.follow else {
+            continue;
+        };
+        let at = match following.target {
+            Follow::Body(body) => {
+                let half = game.sim().and_then(|sim| sim.physics().bounds(body));
+                effect.instance.model_half = half.map(|(low, high)| (high - low) / 2.0);
+                body_center(
+                    body,
+                    following.center,
+                    &drawn,
+                    &game,
+                    time.overstep_fraction(),
+                )
+            }
+            Follow::Entity(entity) => transforms
+                .get(entity)
+                .ok()
+                .map(|transform| Vec3::from(coords::to_source_position(transform.translation))),
+        };
+        if stopped.contains(&following.target) {
+            effect.instance.stop();
+            effect.follow = None;
+            continue;
+        }
+        match at {
+            Some(at) => {
+                if let Some(point) = effect.instance.points.first_mut() {
+                    point.move_to(at);
+                }
+            }
+            None if effect.instance.age() >= FOLLOW_PATIENCE
+                || matches!(following.target, Follow::Body(_)) =>
+            {
+                effect.instance.stop();
+                effect.follow = None;
+            }
+            None => {}
+        }
+    }
+}
+
+/// Where a prop's centre is drawn this frame, or `None` if it has broken. A
+/// prop fixed in place has no interpolated pose: it stays where it is.
+fn body_center(body: BodyId, center: Vec3, drawn: &Drawn, game: &Game, alpha: f32) -> Option<Vec3> {
+    let physics = game.sim().map(rl_sim::simulation::Simulation::physics);
+    if physics.is_some_and(|physics| physics.is_broken(body)) {
+        return None;
+    }
+    let held = game
+        .session()
+        .zip(drawn.0.as_ref())
+        .and_then(|(session, world)| session.held_pose(body, world, alpha));
+    let pose = held
+        .or_else(|| drawn.0.as_ref()?.props.get(&body).copied())
+        .or_else(|| physics?.pose(body))?;
+    Some(pose.position + pose.rotation * center)
 }
 
 /// What a layer draws.
@@ -326,6 +467,7 @@ fn play_effects(
             instance,
             stop_after,
             layers: layer_entities,
+            ..
         } = &mut *effect;
         if stop_after.is_some_and(|after| instance.age() >= after) {
             instance.stop();
