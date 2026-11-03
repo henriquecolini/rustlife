@@ -421,6 +421,18 @@ impl Inventory {
         self.reload
     }
 
+    /// A round-by-round reload is under way: each step's animation is
+    /// followed at once by the next step's (or, cut short, by the shot), so
+    /// a view holds it rather than going back to idle in between.
+    #[must_use]
+    pub fn in_stepped_reload(&self) -> bool {
+        matches!(self.phase, Phase::Reloading(_))
+            && matches!(
+                self.reload,
+                ReloadStep::Start | ReloadStep::Round | ReloadStep::LastRound
+            )
+    }
+
     /// How many reload steps have begun, wrapping: a view compares it with
     /// what it saw to notice a new step.
     #[must_use]

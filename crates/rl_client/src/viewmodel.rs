@@ -492,17 +492,21 @@ fn inventory_activity(
 
 /// What the view model does once the sequence playing ends: the next of
 /// those queued, the next charge being brought up after a throw, or the
-/// idle, faded in over the end of the last (a weapon drawn back stays so).
+/// idle, faded in over the end of the last. A weapon drawn back stays so,
+/// and so does one between the steps of a round-by-round reload (`held`):
+/// the next step's animation follows straight on, and fading towards the
+/// idle in between would make every step look like one more shell.
 fn follow_up(
     view: &mut ViewModel,
     animated: &Animated,
     player: &mut SequencePlayer,
     act: &impl Fn(&'static str) -> &'static str,
     slam: bool,
+    held: bool,
 ) {
     let sequences = &animated.animation.sequences;
     let idle = player.current().is_none() || player.ends_within(sequences, player.fade);
-    if !idle || view.primed.is_some() {
+    if !idle || view.primed.is_some() || held {
         return;
     }
     if !view.queue.is_empty() {
@@ -633,7 +637,15 @@ pub(crate) fn animate_view_model(
         }
         return;
     }
-    follow_up(&mut view, animated, &mut player, &act, slam.is_some());
+    let stepping = inventory.is_some_and(Inventory::in_stepped_reload);
+    follow_up(
+        &mut view,
+        animated,
+        &mut player,
+        &act,
+        slam.is_some(),
+        stepping,
+    );
 }
 
 /// Keeps the view model lit where the player's eyes are.

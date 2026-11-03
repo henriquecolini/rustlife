@@ -477,7 +477,45 @@ fn a_shotgun_reload_plays_one_insert_per_shell_and_counts_each_as_it_ends() {
         expected.extend((start..6).map(|clip| (ReloadStep::Round, Some(clip))));
         expected.push((ReloadStep::Finish, Some(6)));
         assert_eq!(steps, expected, "{fired} shells short");
+        // Over once the finish begins: the view may go back to idle.
+        assert!(!inventory.in_stepped_reload());
     }
+}
+
+#[test]
+fn a_stepped_reload_is_under_way_from_its_start_to_its_finish() {
+    let arsenal = arsenal();
+    let mut inventory = shotgun_short_of(&arsenal, 2);
+    assert!(!inventory.in_stepped_reload());
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    // Every tick of the start and both shells, the step boundaries too.
+    for tick in 0..(1.25 / DT) as usize {
+        assert!(inventory.in_stepped_reload(), "tick {tick}");
+        inventory.tick(&arsenal, &holding(Buttons::NONE), DT);
+    }
+    wait(&mut inventory, &arsenal, 0.1);
+    assert_eq!(inventory.reload_step(), ReloadStep::Finish);
+    assert!(!inventory.in_stepped_reload());
+    // A whole-clip reload has no steps to hold between.
+    let mut smg = with_weapon(&arsenal, "smg", 100);
+    click(&mut smg, &arsenal, Buttons::ATTACK);
+    wait(&mut smg, &arsenal, 0.5);
+    smg.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    assert!(matches!(smg.phase(), Phase::Reloading(_)));
+    assert!(!smg.in_stepped_reload());
+}
+
+#[test]
+fn a_shell_cut_short_by_the_trigger_is_still_held_until_the_shot() {
+    let arsenal = arsenal();
+    let mut inventory = shotgun_short_of(&arsenal, 2);
+    inventory.tick(&arsenal, &holding(Buttons::RELOAD), DT);
+    wait(&mut inventory, &arsenal, 0.6);
+    inventory.tick(&arsenal, &holding(Buttons::ATTACK), DT);
+    assert_eq!(inventory.reload_step(), ReloadStep::LastRound);
+    assert!(inventory.in_stepped_reload());
+    ticks_until_fired(&mut inventory, &arsenal);
+    assert!(!inventory.in_stepped_reload());
 }
 
 #[test]
