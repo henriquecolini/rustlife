@@ -261,12 +261,37 @@ fn parse_teleport(text: &str) -> Result<([f32; 3], (f32, f32)), String> {
     }
 }
 
+/// Hosting or joining, and who the player is, as the command line says.
+fn net_settings(cli: &Cli, data: &GameData) -> Result<NetSettings> {
+    let network = match cli.connect.as_deref() {
+        Some(text) => Network::Join(
+            rl_client::menu::resolve(text, data.net.port).map_err(anyhow::Error::msg)?,
+        ),
+        None => Network::Host {
+            port: cli.listen.then(|| cli.port.unwrap_or(data.net.port)),
+        },
+    };
+    Ok(NetSettings {
+        network,
+        name: cli.name.clone(),
+        conditions: cli.net_sim.unwrap_or(NetConditions::NONE),
+        dummies: cli.dummies,
+        dummy_script: rl_server::DummyScript {
+            weapon: cli.dummy_weapon.clone(),
+            look: cli.dummy_look.unwrap_or_default(),
+            buttons: cli.dummy_do.unwrap_or_default().buttons,
+            forward: cli.dummy_do.unwrap_or_default().forward,
+        },
+    })
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // Logging is set up by Bevy's `LogPlugin`; `RUST_LOG` still applies.
     let mut config = cli.content.load_config()?;
     cli.content.apply(&mut config.content);
     let mut data = GameData::load(cli.data_dir.as_deref())?;
+    let net = net_settings(&cli, &data)?;
     let vfs = Arc::new(Vfs::new());
     let content = Content::mount(config, cli.content.config_path(), &vfs);
     let grab_at = (cli.grab_prop || cli.carry_prop).then_some(LOAD_SECS);
@@ -326,26 +351,6 @@ fn main() -> Result<()> {
         path,
         warmup_secs: shot_secs,
     });
-    let network = match cli.connect.as_deref() {
-        Some(text) => Network::Join(
-            rl_client::menu::resolve(text, data.net.port).map_err(anyhow::Error::msg)?,
-        ),
-        None => Network::Host {
-            port: cli.listen.then(|| cli.port.unwrap_or(data.net.port)),
-        },
-    };
-    let net = NetSettings {
-        network,
-        name: cli.name,
-        conditions: cli.net_sim.unwrap_or(NetConditions::NONE),
-        dummies: cli.dummies,
-        dummy_script: rl_server::DummyScript {
-            weapon: cli.dummy_weapon,
-            look: cli.dummy_look.unwrap_or_default(),
-            buttons: cli.dummy_do.unwrap_or_default().buttons,
-            forward: cli.dummy_do.unwrap_or_default().forward,
-        },
-    };
     rl_client::run(
         vfs,
         ClientOptions {
@@ -359,6 +364,9 @@ fn main() -> Result<()> {
             net,
             log_fps: cli.log_fps,
             silent,
+            canvas: None,
+            async_content: false,
+            scale_factor: None,
         },
     );
     Ok(())

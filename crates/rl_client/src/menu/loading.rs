@@ -13,6 +13,7 @@ impl Plugin for LoadingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::Connecting), connecting)
             .add_systems(OnEnter(AppState::ChangingMap), changing_map)
+            .add_systems(OnEnter(AppState::Preparing), preparing)
             .add_systems(Update, spin);
     }
 }
@@ -34,6 +35,15 @@ fn changing_map(commands: Commands, fonts: Res<Fonts>, map: Res<CurrentMap>) {
         commands,
         &fonts,
         AppState::ChangingMap,
+        &format!("Loading {}", map.0),
+    );
+}
+
+fn preparing(commands: Commands, fonts: Res<Fonts>, map: Res<CurrentMap>) {
+    screen(
+        commands,
+        &fonts,
+        AppState::Preparing,
         &format!("Loading {}", map.0),
     );
 }

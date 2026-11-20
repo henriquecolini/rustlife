@@ -7,6 +7,9 @@
 //! * `web-test` runs the browser tests of `rl_web` in headless Chrome (needs
 //!   `wasm-bindgen-test-runner` and a matching `chromedriver`); `ci` runs it
 //!   too when both are installed.
+//! * `web-build` builds the browser version into `dist/web` (needs
+//!   `wasm-bindgen`, at the version in `Cargo.lock`), and `web-serve` serves
+//!   that folder on localhost.
 //! * `content-tests` runs the `#[ignore]`d tests that need a real game install.
 //! * `check-assets` verifies that no Valve content is tracked by git.
 //!
@@ -43,10 +46,14 @@ fn main() -> ExitCode {
     let result = match task.as_str() {
         "ci" => ci(),
         "web-test" => web_test(),
+        "web-build" => web_build(),
+        "web-serve" => web_serve(),
         "content-tests" => content_tests(),
         "check-assets" => check_assets(),
         _ => {
-            eprintln!("usage: cargo xtask <ci | web-test | content-tests | check-assets>");
+            eprintln!(
+                "usage: cargo xtask <ci | web-test | web-build | web-serve | content-tests | check-assets>"
+            );
             return ExitCode::FAILURE;
         }
     };
@@ -180,6 +187,161 @@ fn web_test() -> TaskResult {
         ],
         &[],
     )
+}
+
+/// The cargo profile the browser build uses (see the workspace `Cargo.toml`).
+const WEB_PROFILE: &str = "web";
+
+/// Builds the browser version into `dist/web`: the wasm module and its
+/// JavaScript bindings under `pkg/`, and the page around them.
+fn web_build() -> TaskResult {
+    if !has_rust_target(WASM_TARGET) {
+        return Err(format!(
+            "{WASM_TARGET} is not installed (rustup target add {WASM_TARGET})"
+        ));
+    }
+    let root = workspace_root()?;
+    let wanted = locked_version("wasm-bindgen")?;
+    let found = Command::new("wasm-bindgen")
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .ok_or("`wasm-bindgen` is not installed (cargo binstall wasm-bindgen-cli)")?;
+    if found.split_whitespace().nth(1) != Some(wanted.as_str()) {
+        return Err(format!(
+            "wasm-bindgen is {}, but Cargo.lock needs {wanted}: cargo binstall wasm-bindgen-cli@{wanted}",
+            found.trim()
+        ));
+    }
+    cargo(
+        &[
+            "build",
+            "--target",
+            WASM_TARGET,
+            "--profile",
+            WEB_PROFILE,
+            "-p",
+            "rl_web",
+        ],
+        &[],
+    )?;
+    let dist = root.join("dist/web");
+    let wasm = root
+        .join("target")
+        .join(WASM_TARGET)
+        .join(WEB_PROFILE)
+        .join("rl_web.wasm");
+    let status = Command::new("wasm-bindgen")
+        .args(["--target", "web", "--no-typescript", "--out-dir"])
+        .arg(dist.join("pkg"))
+        .arg(&wasm)
+        .status()
+        .map_err(|e| format!("failed to run wasm-bindgen: {e}"))?;
+    if !status.success() {
+        return Err("wasm-bindgen failed".into());
+    }
+    for entry in std::fs::read_dir(root.join("crates/rl_web/web")).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        std::fs::copy(entry.path(), dist.join(entry.file_name())).map_err(|e| e.to_string())?;
+    }
+    let size = std::fs::metadata(dist.join("pkg/rl_web_bg.wasm")).map_or(0, |m| m.len());
+    println!(
+        "xtask: built {} ({:.1} MB of wasm)",
+        dist.display(),
+        size as f64 / 1_048_576.0
+    );
+    Ok(())
+}
+
+/// The version of crate `name` that `Cargo.lock` pins.
+fn locked_version(name: &str) -> Result<String, String> {
+    let lock = std::fs::read_to_string(workspace_root()?.join("Cargo.lock"))
+        .map_err(|e| format!("cannot read Cargo.lock: {e}"))?;
+    let marker = format!("name = \"{name}\"\nversion = \"");
+    let start = lock
+        .find(&marker)
+        .ok_or_else(|| format!("{name} is not in Cargo.lock"))?
+        + marker.len();
+    lock[start..]
+        .split('"')
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("cannot read {name}'s version from Cargo.lock"))
+}
+
+/// Serves `dist/web` on `http://localhost:8080` until stopped. Localhost is a
+/// secure context, so WebGPU and the browser's file system work there.
+fn web_serve() -> TaskResult {
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    let root = workspace_root()?.join("dist/web");
+    if !root.is_dir() {
+        return Err("dist/web does not exist: run `cargo xtask web-build` first".into());
+    }
+    let port = env::args().nth(2).unwrap_or_else(|| "8080".into());
+    let listener = TcpListener::bind(format!("127.0.0.1:{port}")).map_err(|e| e.to_string())?;
+    println!(
+        "xtask: serving {} at http://localhost:{port}/ (Ctrl+C to stop)",
+        root.display()
+    );
+    for stream in listener.incoming().flatten() {
+        let root = root.clone();
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            let mut request = [0u8; 4096];
+            let Ok(read) = Read::read(&mut stream, &mut request) else {
+                return;
+            };
+            let head = String::from_utf8_lossy(&request[..read]);
+            let target = head
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/")
+                .split(['?', '#'])
+                .next()
+                .unwrap_or("/");
+            let relative = target.trim_start_matches('/');
+            let relative = if relative.is_empty() {
+                "index.html"
+            } else {
+                relative
+            };
+            // Nothing outside the folder, whatever the request says.
+            let safe = !relative
+                .split('/')
+                .any(|part| part == ".." || part.is_empty());
+            let body = safe
+                .then(|| std::fs::read(root.join(relative)).ok())
+                .flatten();
+            let (status, content_type, body) = match body {
+                Some(body) => ("200 OK", content_type(relative), body),
+                None => ("404 Not Found", "text/plain", b"not found".to_vec()),
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+                 Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(&body);
+        });
+    }
+    Ok(())
+}
+
+fn content_type(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "wasm" => "application/wasm",
+        "css" => "text/css; charset=utf-8",
+        "json" | "webmanifest" => "application/json",
+        "png" => "image/png",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
 }
 
 fn has_browser_test_tools() -> bool {

@@ -32,13 +32,14 @@ use rl_net::client::{ClientConfig, ClientEvent, NetClient, Session, Vote};
 use rl_net::conditioner::NetConditions;
 use rl_net::interpolation::Interpolated;
 use rl_net::protocol::Welcome;
-use rl_server::{MapLoader, Server, ServerOptions};
+use rl_server::{MapLoadError, MapLoader, Server, ServerOptions};
 use rl_sim::physics::BodyId;
 use rl_sim::simulation::{PlayerId, Simulation};
 use source_formats::entities::MapEntity;
 
 use crate::content::Content;
 use crate::player::{Gameplay, Movement, Ticked};
+use crate::prepare::{AsyncContent, Fetched, Fetcher};
 use crate::{AppState, CurrentMap, GameVfs};
 
 /// How the client plays.
@@ -263,6 +264,7 @@ fn host(
     gameplay: Res<Gameplay>,
     content: Res<Content>,
     connection: Option<Res<Connection>>,
+    async_content: Res<AsyncContent>,
     mut status: ResMut<NetStatus>,
 ) {
     let Network::Host { port } = settings.network else {
@@ -283,12 +285,7 @@ fn host(
     };
     let listen = port.map(|port| SocketAddr::from(([0, 0, 0, 0], port)));
     let games = content.mounted_ids();
-    let loader = {
-        let (vfs, gameplay) = (vfs.0.clone(), data.clone());
-        MapLoader::new(move |name| {
-            rl_level::load(&vfs, name, &gameplay).map_err(|error| error.to_string())
-        })
-    };
+    let loader = map_loader(&vfs.0, &data, *async_content);
     let options = ServerOptions {
         data: data.clone(),
         games: games.clone(),
@@ -313,6 +310,32 @@ fn host(
     commands.insert_resource(Host(server));
     commands.insert_resource(HostedLevel(level));
     commands.insert_resource(Connection(client));
+}
+
+/// How the hosted server loads the map players vote for. With content that
+/// arrives asynchronously the first ask starts fetching its files and is
+/// answered "not yet"; the server asks again until they are resident.
+fn map_loader(vfs: &Arc<source_fs::Vfs>, data: &GameData, content: AsyncContent) -> MapLoader {
+    let (vfs, gameplay) = (Arc::clone(vfs), data.clone());
+    if !content.0 {
+        return MapLoader::new(move |name| {
+            rl_level::load(&vfs, name, &gameplay).map_err(|error| error.to_string())
+        });
+    }
+    let fetcher = Fetcher::new(Arc::clone(&vfs), gameplay.clone());
+    MapLoader::with_pending(move |name| match fetcher.request(name) {
+        Fetched::Pending => Err(MapLoadError::Pending),
+        Fetched::Failed(reason) => {
+            fetcher.reset();
+            Err(MapLoadError::Failed(reason))
+        }
+        Fetched::Ready => {
+            let level = rl_level::load(&vfs, name, &gameplay)
+                .map_err(|error| MapLoadError::Failed(error.to_string()));
+            fetcher.reset();
+            level
+        }
+    })
 }
 
 /// Leaving a map: disconnects, and shuts the hosted server down.

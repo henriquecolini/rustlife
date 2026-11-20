@@ -686,11 +686,7 @@ mod tests {
         app.add_plugins(TimePlugin)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(1)))
             .insert_resource(Settings(config.settings.clone()))
-            .insert_resource(Content {
-                config,
-                path: Some(path.clone()),
-                games: Vec::new(),
-            })
+            .insert_resource(Content::unmounted(config, Some(path.clone())))
             .insert_resource(Silent)
             .add_systems(Update, save_later);
         app.update();

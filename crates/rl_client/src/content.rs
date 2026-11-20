@@ -41,6 +41,9 @@ pub struct Content {
     pub path: Option<PathBuf>,
     /// One entry per known game.
     pub games: Vec<GameStatus>,
+    /// The platform mounts the games itself (the browser, from its own
+    /// storage), so they are never mounted again from the configuration.
+    fixed: bool,
 }
 
 impl Content {
@@ -53,13 +56,54 @@ impl Content {
             config,
             path,
             games: Vec::new(),
+            fixed: false,
         };
         content.remount(vfs);
         content
     }
 
+    /// Content with nothing mounted yet: the configuration alone, for tests
+    /// of what the menus do to it.
+    #[must_use]
+    pub fn unmounted(config: UserConfig, path: Option<PathBuf>) -> Self {
+        Self {
+            config,
+            path,
+            games: Vec::new(),
+            fixed: false,
+        }
+    }
+
+    /// Content the platform has already mounted: `mounted` games are listed
+    /// as available from `location`, and the rest as not found. Mounting is
+    /// never repeated from the configuration, which could not find them.
+    #[must_use]
+    pub fn premounted(config: UserConfig, mounted: &[&str], location: &str) -> Self {
+        let games = KNOWN_GAMES
+            .iter()
+            .map(|game| GameStatus {
+                game: *game,
+                enabled: mounted.contains(&game.id),
+                state: if mounted.contains(&game.id) {
+                    Ok(PathBuf::from(location))
+                } else {
+                    Err("not imported".to_owned())
+                },
+            })
+            .collect();
+        Self {
+            config,
+            path: None,
+            games,
+            fixed: true,
+        }
+    }
+
     /// Mounts the games again after the configuration changed.
     pub fn remount(&mut self, vfs: &Vfs) {
+        if self.fixed {
+            return;
+        }
         vfs.clear();
         let mounts = mount_games(vfs, &self.config.content.plans(None));
         self.games = KNOWN_GAMES

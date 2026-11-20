@@ -85,6 +85,7 @@ vmdl = "0.2"
 vmt-parser = "0.2"
 vtf = "0.4"
 # The browser bridge (only built for wasm32).
+console_error_panic_hook = "0.1"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -98,6 +99,12 @@ wesl = { version = "0.6", default-features = false }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
+
+# A copy of vmdl with its one panic (an unimplemented animation block) turned
+# into an error; see vendor/vmdl/README.md. A browser build cannot recover
+# from a panic.
+[patch.crates-io]
+vmdl = { path = "vendor/vmdl" }
 
 [workspace.lints.rust]
 missing_docs = "warn"
@@ -168,6 +175,13 @@ lto = "thin"
 codegen-units = 1
 # Shipped binaries carry no symbol table or debug info: it is most of their
 # size, and players have no use for it. Debug a `release` build instead.
+strip = true
+
+# The browser build. Optimised for speed like `release`; no symbol or debug
+# information, since the page downloads the whole binary.
+[profile.web]
+inherits = "release"
+debug = false
 strip = true
 
 [profile.release.build-override]

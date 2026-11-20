@@ -72,6 +72,7 @@ pub mod pcf_particles;
 mod physcannon_impact;
 pub mod player;
 pub mod player_anim;
+pub mod prepare;
 pub mod props;
 pub mod ragdolls;
 mod screen_fade;
@@ -101,6 +102,9 @@ pub enum AppState {
     /// The server moved a running game to another map: for a moment the old
     /// map is unloaded, then [`AppState::InGame`] loads [`CurrentMap`].
     ChangingMap,
+    /// Fetching [`CurrentMap`]'s files before playing it, when the game's
+    /// content arrives asynchronously (a browser). Never entered otherwise.
+    Preparing,
 }
 
 /// The map to load on entering [`AppState::InGame`], without path or extension.
@@ -142,6 +146,60 @@ pub struct ClientOptions {
     /// (`--silent`). The settings themselves are left alone, so a silent
     /// run never saves its silence to the config.
     pub silent: bool,
+    /// The page element (a CSS selector such as `#game`) to draw into, in a
+    /// browser; `None` elsewhere.
+    pub canvas: Option<String>,
+    /// The game's files arrive asynchronously (a browser), so a map's files
+    /// are fetched before it is entered.
+    pub async_content: bool,
+    /// Draw at this many pixels per logical pixel instead of the display's
+    /// own ratio: a phone's screen has three, which costs the GPU nine times
+    /// a 1x screen's pixels. `None` keeps the display's.
+    pub scale_factor: Option<f32>,
+}
+
+impl ClientOptions {
+    /// Options to start at the menu with `content` and `data`, with nothing
+    /// scripted: what an interactive run needs, for callers that do not build
+    /// them from a command line.
+    #[must_use]
+    pub fn interactive(content: content::Content, data: GameData, net: NetSettings) -> Self {
+        Self {
+            content,
+            menu: None,
+            map: None,
+            spawn: None,
+            capture: None,
+            script: None,
+            data,
+            net,
+            log_fps: false,
+            silent: false,
+            canvas: None,
+            async_content: false,
+            scale_factor: None,
+        }
+    }
+}
+
+/// The game's window, as the video settings and the platform ask.
+fn primary_window(options: &ClientOptions, video: &rl_config::VideoSettings) -> Window {
+    let resolution: bevy::window::WindowResolution = video.resolution.into();
+    Window {
+        title: "rustlife".to_owned(),
+        resolution: match options.scale_factor {
+            Some(factor) => resolution.with_scale_factor_override(factor),
+            None => resolution,
+        },
+        mode: settings::window_mode(video),
+        present_mode: settings::present_mode(video),
+        // In a browser the game fills its canvas, which follows the page,
+        // and keeps keys such as Tab and the arrows from scrolling it.
+        fit_canvas_to_parent: options.canvas.is_some(),
+        canvas: options.canvas.clone(),
+        prevent_default_event_handling: true,
+        ..default()
+    }
 }
 
 /// Builds and runs the client over the content mounted in `vfs`.
@@ -155,27 +213,27 @@ pub struct ClientOptions {
 pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     let start = match (&options.net.network, &options.map) {
         (net::Network::Join(_), _) => AppState::Connecting,
-        (net::Network::Host { .. }, Some(_)) => AppState::InGame,
+        (net::Network::Host { .. }, Some(_)) => {
+            prepare::state_for_game(prepare::AsyncContent(options.async_content))
+        }
         (net::Network::Host { .. }, None) => AppState::MainMenu,
     };
     let mut app = App::new();
     app.insert_resource(GameVfs(vfs.clone()));
     let settings = Settings(options.content.config.settings.clone());
     let video = settings.video.clone();
+    let window = primary_window(&options, &video);
     app.insert_resource(options.content);
     app.insert_resource(settings);
     app.add_plugins(SourceAssetPlugin::new(vfs));
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "rustlife".to_owned(),
-            resolution: video.resolution.into(),
-            mode: settings::window_mode(&video),
-            present_mode: settings::present_mode(&video),
-            ..default()
-        }),
+        primary_window: Some(window),
         ..default()
     }));
     app.add_plugins(SourceLoadersPlugin);
+    app.add_plugins(prepare::PreparePlugin {
+        content: prepare::AsyncContent(options.async_content),
+    });
     app.add_plugins((UiPlugin, EffectMaterialPlugin));
     app.insert_resource(CurrentMap(options.map.unwrap_or_default()));
     app.insert_state(start);

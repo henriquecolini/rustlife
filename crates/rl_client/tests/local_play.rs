@@ -83,11 +83,7 @@ fn client(spawn: usize, dummies: usize) -> Option<App> {
     app.init_asset::<EffectMaterial>();
     app.add_plugins(SourceLoadersPlugin);
     app.insert_resource(CurrentMap("dm_lockdown".into()));
-    app.insert_resource(Content {
-        config: UserConfig::default(),
-        path: None,
-        games: Vec::new(),
-    });
+    app.insert_resource(Content::unmounted(UserConfig::default(), None));
     app.insert_resource(Settings(rl_config::Settings::default()));
     app.init_resource::<Menu>();
     app.init_resource::<Bindings>();

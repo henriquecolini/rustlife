@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0e0e10">
+<title>rustlife</title>
+<style>
+  :root {
+    --bg: #f4f4f5; --fg: #18181b; --muted: #62626b; --card: #ffffff; --line: #d8d8de;
+    --accent: #1d5fd1; --accent-fg: #ffffff; --bad: #b3261e; --ok: #137a2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0e10; --fg: #ececf0; --muted: #9a9aa5; --card: #19191d; --line: #2d2d34;
+      --accent: #5b9bff; --accent-fg: #07101f; --bad: #ff7b72; --ok: #5bd37a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.45 -apple-system, system-ui, sans-serif;
+    -webkit-text-size-adjust: 100%; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  }
+  /* The game fills the page; the menu sits on top until it starts. */
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: none; touch-action: none; outline: none; }
+  body.playing #game { display: block; }
+  body.playing #shell { display: none; }
+  #loading {
+    position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--fg); font-size: 18px;
+  }
+  #shell {
+    min-height: 100%; display: flex; align-items: center; justify-content: center;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+             max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  .card {
+    width: 100%; max-width: 460px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 20px;
+  }
+  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.01em; }
+  h2 { margin: 18px 0 6px; font-size: 15px; }
+  p { margin: 8px 0; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .error { color: var(--bad); }
+  button, select, input[type=text] {
+    font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; min-height: 48px; width: 100%; margin: 6px 0;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+  button.link { background: none; border: none; color: var(--muted); text-decoration: underline; min-height: 40px; }
+  button:disabled { opacity: 0.5; }
+  label.group { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  label.group input { margin-top: 4px; width: 20px; height: 20px; flex: none; }
+  label.group span { flex: 1; }
+  progress { width: 100%; height: 14px; margin: 10px 0; }
+  [hidden] { display: none !important; }
+  #debug { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; font: 12px ui-monospace, Menlo, monospace; }
+  #debug-bar { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 4px 8px;
+               background: rgba(0,0,0,.6); color: #fff; }
+  #debug-bar span { flex: 1; }
+  #debug button { width: auto; min-height: 32px; margin: 0; padding: 4px 12px; background: #333; color: #fff; border-color: #555; }
+  #debug-log { margin: 0; max-height: 45vh; overflow: auto; padding: 6px 8px; background: rgba(0,0,0,.85); color: #ddd;
+               white-space: pre-wrap; word-break: break-word; user-select: text; -webkit-user-select: text; }
+  #fatal {
+    position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.88); color: #fff; padding: 24px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center;
+  }
+  #fatal pre { max-width: 100%; max-height: 40vh; overflow: auto; text-align: left; font-size: 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="game" tabindex="0"></canvas>
+
+<main id="shell">
+  <div class="card">
+    <h1>rustlife</h1>
+    <p class="muted" id="tagline">A multiplayer shooter that plays on your own copy of Half-Life 2: Deathmatch.</p>
+    <p id="message" class="muted">Loading…</p>
+
+    <section id="unsupported" hidden>
+      <p class="error" id="unsupported-text"></p>
+    </section>
+
+    <section id="import" hidden>
+      <h2>Bring your game files</h2>
+      <p class="muted">rustlife contains no game content. Choose the folder where Half-Life 2: Deathmatch is installed (the one that contains <b>hl2mp</b>); the files it needs are copied into this browser once, and stay on this device.</p>
+      <button class="primary" id="choose">Choose install folder</button>
+      <div id="plan" hidden>
+        <h2>What will be copied</h2>
+        <div id="groups"></div>
+        <p class="muted" id="plan-total"></p>
+        <button class="primary" id="start-import">Copy files</button>
+      </div>
+      <div id="progress" hidden>
+        <progress id="bar" max="1" value="0"></progress>
+        <p class="muted" id="progress-text"></p>
+      </div>
+    </section>
+
+    <section id="play" hidden>
+      <h2>Play</h2>
+      <label class="muted" for="player-name">Your name</label>
+      <input type="text" id="player-name" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label class="muted" for="map">Map</label>
+      <select id="map"></select>
+      <button class="primary" id="start">Play</button>
+      <button class="link" id="remove">Remove the copied game files</button>
+      <p class="muted" id="storage"></p>
+    </section>
+  </div>
+</main>
+
+<div id="loading" hidden><span id="loading-text">Loading…</span></div>
+
+<div id="fatal" hidden>
+  <h2>Something went wrong</h2>
+  <pre id="fatal-text"></pre>
+  <button class="primary" id="reload" style="max-width:260px">Reload</button>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

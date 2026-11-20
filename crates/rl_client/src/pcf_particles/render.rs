@@ -202,11 +202,11 @@ struct Following {
 const FOLLOW_PATIENCE: f32 = 0.25;
 
 /// Where the game lists the particle files it loads.
-const MANIFEST: &str = "particles/particles_manifest.txt";
+pub(crate) const MANIFEST: &str = "particles/particles_manifest.txt";
 
 /// The particle files a `particles_manifest.txt` lists (lower-cased, a
 /// leading `!` for "preload" dropped), or `None` if it cannot be read.
-fn manifest_files(text: &str) -> Option<Vec<String>> {
+pub(crate) fn manifest_files(text: &str) -> Option<Vec<String>> {
     let document = source_fs::keyvalues::parse(text).ok()?;
     let block = document
         .root

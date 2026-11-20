@@ -5572,8 +5572,16 @@ dependencies = [
 name = "rl_web"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
+ "futures-lite",
  "js-sys",
  "proptest",
+ "rl_client",
+ "rl_config",
+ "rl_data",
+ "rl_level",
+ "rl_net",
+ "rl_server",
  "ron",
  "serde",
  "source_fs",
@@ -6682,8 +6690,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vmdl"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da2f6b8c22da8937403a5da864e7ea390f30cd40b7a077079e40279aa6a4f553"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.2",

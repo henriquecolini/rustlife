@@ -412,9 +412,8 @@ pub(crate) fn start_hosted(
         .resource_mut::<NetStatus>()
         .clone_from(&NetStatus::Idle);
     world.resource_mut::<Menu>().close();
-    world
-        .resource_mut::<NextState<AppState>>()
-        .set(AppState::InGame);
+    let state = crate::prepare::state_for_game(*world.resource::<crate::prepare::AsyncContent>());
+    world.resource_mut::<NextState<AppState>>().set(state);
 }
 
 /// Quits to the desktop.

@@ -312,6 +312,7 @@ mod tests {
             ("hl2mp/bin/server.so", 18_000_000),
             ("hl2mp/bin/linux64/client.so", 18_000_000),
             ("hl2mp/hl2mp.log", 10),
+            ("hl2/scripts/game_sounds_manifest.txt", 300),
             ("hl2/hl2_textures_dir.vpk", 400),
             ("hl2/hl2_textures_000.vpk", 100_000_000),
             ("hl2/hl2_misc_dir.vpk", 300),
@@ -426,6 +427,7 @@ mod tests {
             "hl2mp/gameinfo.txt",
             "hl2mp/maps/dm_lockdown.bsp",
             "hl2mp/hl2mp_pak_000.vpk",
+            "hl2/scripts/game_sounds_manifest.txt",
             "hl2/hl2_textures_000.vpk",
             "hl2/hl2_misc_dir.vpk",
             "hl2/hl2_sound_misc_000.vpk",
@@ -480,6 +482,7 @@ mod tests {
         let picked = candidates(&[
             ("hl2mp/gameinfo.txt", 1),
             ("hl2mp/maps/a.bsp", 1),
+            ("hl2/scripts/a.txt", 1),
             ("hl2/hl2_misc_dir.vpk", 1),
             ("hl2/hl2_sound_misc_dir.vpk", 1),
         ]);

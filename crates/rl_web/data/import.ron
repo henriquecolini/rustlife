@@ -23,6 +23,16 @@
             exclude: ["hl2mp/bin/**", "hl2mp/**.so", "hl2mp/**.dll", "hl2mp/**.dylib", "hl2mp/**.log"],
         ),
         (
+            id: "scripts",
+            title: "Half-Life 2 scripts",
+            required: true,
+            default_on: true,
+            // About 2 MB: sound scripts, surface properties and the like,
+            // which sit loose in the install next to the VPKs.
+            include: ["hl2/scripts/**", "hl2/sound/**"],
+            exclude: [],
+        ),
+        (
             id: "textures",
             title: "Textures",
             required: true,

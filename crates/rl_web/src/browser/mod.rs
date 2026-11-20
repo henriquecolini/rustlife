@@ -5,12 +5,16 @@
 //! the logic around it: an [`OpfsTree`] for `source_fs` to mount, the folder
 //! [`intake`], the resumable [`copy`] and [`mount_installed`].
 
+mod boot;
 mod copy;
 mod error;
 mod intake;
 mod mount;
 mod storage;
 
+pub use boot::{
+    choose_folder, import_game, list_maps, play, probe_file, remove_game, start, status,
+};
 pub use copy::{Progress, run_import};
 pub use error::BrowserError;
 pub use intake::{PickedFolder, pick_folder};

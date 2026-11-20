@@ -11,3 +11,4 @@ pub mod sim;
 
 pub(crate) use render::Pcf;
 pub use render::{Follow, PcfPlugin, PcfSpawn, PcfStop};
+pub(crate) use render::{MANIFEST as PARTICLE_MANIFEST, manifest_files as particle_manifest_files};

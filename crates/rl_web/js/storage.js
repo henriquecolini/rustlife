@@ -243,7 +243,10 @@ function inputPicker() {
  */
 export async function pickFolder() {
   let picked;
-  if (window.showDirectoryPicker) {
+  // `?picker=input` forces the plain folder input, which every browser has and
+  // which automated tests can drive; the directory picker is Chrome's.
+  const forceInput = new URLSearchParams(location.search).get("picker") === "input";
+  if (window.showDirectoryPicker && !forceInput) {
     try {
       const handle = await window.showDirectoryPicker();
       picked = [];
