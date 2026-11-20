@@ -9,6 +9,7 @@
 )]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use glam::{Quat, Vec3};
@@ -16,7 +17,7 @@ use rl_data::GameData;
 use rl_level::{Level, LevelProp};
 use rl_net::client::{ClientConfig, ClientEvent, NetClient};
 use rl_net::conditioner::NetConditions;
-use rl_server::{MapLoader, Server, ServerOptions};
+use rl_server::{MapLoadError, MapLoader, Server, ServerOptions};
 use rl_sim::collision::contents::SOLID;
 use rl_sim::collision::{ConvexHull, WorldBuilder};
 use rl_sim::combat::hitscan::Struck;
@@ -1026,11 +1027,71 @@ fn a_game_over_udp_shared_with_an_in_process_player() {
 
 #[test]
 fn players_vote_for_the_next_map_and_move_to_it() {
+    let loader_data = data();
+    let loader = MapLoader::new(move |name| Ok(named_level(&loader_data, name, 0xabcd)));
+    vote_for_the_next_map(loader);
+}
+
+/// A loader whose map arrives late (as content does in a browser): the server
+/// asks again on later ticks and changes map once it is there.
+#[test]
+fn a_map_change_waits_for_a_loader_that_is_not_ready() {
+    let loader_data = data();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let loader = MapLoader::with_pending(move |name| {
+        if counted.fetch_add(1, Ordering::Relaxed) < 30 {
+            Err(MapLoadError::Pending)
+        } else {
+            Ok(named_level(&loader_data, name, 0xabcd))
+        }
+    });
+    vote_for_the_next_map(loader);
+    assert!(
+        calls.load(Ordering::Relaxed) > 30,
+        "the server kept asking until the map was ready"
+    );
+}
+
+#[test]
+fn a_loader_that_fails_leaves_the_server_on_its_map() {
     let mut data = data();
     data.rules.time_limit = 1.0;
     data.rules.intermission = 2.0;
-    let loader_data = data.clone();
-    let loader = MapLoader::new(move |name| Ok(named_level(&loader_data, name, 0xabcd)));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let loader = MapLoader::with_pending(move |_| {
+        counted.fetch_add(1, Ordering::Relaxed);
+        Err(MapLoadError::Failed("no such map".to_owned()))
+    });
+    let maps = vec!["test_arena".to_owned(), "other_arena".to_owned()];
+    let mut game = Game::with_maps(data.clone(), maps, Some(loader));
+    let alice = game.join("Alice", "0ms", local_hash(&data));
+    for _ in 0..200 {
+        game.step_with(|_, _| Some(UserCmd::default()));
+        if game.clients[alice].vote().is_some() {
+            break;
+        }
+    }
+    game.clients[alice].cast_vote(0);
+    for _ in 0..600 {
+        game.step_with(|_, _| Some(UserCmd::default()));
+        if calls.load(Ordering::Relaxed) > 0 {
+            break;
+        }
+    }
+    assert_eq!(calls.load(Ordering::Relaxed), 1, "the server tried the map");
+    // Staying put, and not asking again every tick, which a pending loader
+    // would be asked.
+    game.run(20, UserCmd::default());
+    assert_eq!(calls.load(Ordering::Relaxed), 1, "a failure is not retried");
+    assert_eq!(game.server.map().name, "test_arena");
+}
+
+fn vote_for_the_next_map(loader: MapLoader) {
+    let mut data = data();
+    data.rules.time_limit = 1.0;
+    data.rules.intermission = 2.0;
     let maps = vec!["test_arena".to_owned(), "other_arena".to_owned()];
     let mut game = Game::with_maps(data.clone(), maps, Some(loader));
     let alice = game.join("Alice", "0ms", local_hash(&data));

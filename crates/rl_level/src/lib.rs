@@ -68,7 +68,24 @@ pub enum LevelError {
         #[source]
         source: BspError,
     },
+    /// Files the map needs exist but are not in memory yet, because the
+    /// content arrives asynchronously (a browser). Make them resident and
+    /// load again; [`load_async`] does both.
+    #[error("map {map} is waiting for {} files", paths.len())]
+    NotResident {
+        /// The map's name.
+        map: String,
+        /// The files that were missing, in path order.
+        paths: Vec<String>,
+    },
 }
+
+/// How many times [`load_async`] fetches missing files and tries again.
+///
+/// A level needs its map, then its models, then each model's collision (known
+/// only once the model is read): a handful of rounds, never dozens. The bound
+/// turns a loader that never converges into an error instead of a hang.
+const MAX_FETCH_ROUNDS: usize = 8;
 
 /// A solid prop of a level and the body it gets.
 #[derive(Debug, Clone)]
@@ -169,6 +186,57 @@ pub fn checksum(bsp: &[u8]) -> u32 {
 /// Fails if the map is missing or unreadable, or has no collision model.
 /// A prop whose model cannot be read is logged and left without a body.
 pub fn load(vfs: &Vfs, name: &str, data: &GameData) -> Result<Level, LevelError> {
+    // Anything missed before now is somebody else's.
+    vfs.take_misses();
+    let result = load_files(vfs, name, data);
+    let paths = vfs.take_misses();
+    if paths.is_empty() {
+        result
+    } else {
+        // Missing files are skipped as "not found" deep inside the load, so
+        // even a load that succeeded may have gone without some; it is only
+        // trustworthy when nothing was missing.
+        Err(LevelError::NotResident {
+            map: name.to_owned(),
+            paths,
+        })
+    }
+}
+
+/// Like [`load`], for content that arrives asynchronously: fetches the files
+/// the load found missing, and loads again, until it has them all. Every file
+/// of the map ends up resident (the map itself pinned), so later synchronous
+/// reads of it succeed.
+///
+/// # Errors
+///
+/// As [`load`]; [`LevelError::NotResident`] only if the files would not come
+/// after several rounds of fetching.
+pub async fn load_async(vfs: &Vfs, name: &str, data: &GameData) -> Result<Level, LevelError> {
+    let map_file = format!("maps/{name}.bsp");
+    vfs.make_resident(&[map_file], true)
+        .await
+        .map_err(|source| LevelError::Io {
+            map: name.to_owned(),
+            source,
+        })?;
+    for _ in 0..MAX_FETCH_ROUNDS {
+        match load(vfs, name, data) {
+            Err(LevelError::NotResident { paths, .. }) => {
+                vfs.make_resident(&paths, false)
+                    .await
+                    .map_err(|source| LevelError::Io {
+                        map: name.to_owned(),
+                        source,
+                    })?;
+            }
+            finished => return finished,
+        }
+    }
+    load(vfs, name, data)
+}
+
+fn load_files(vfs: &Vfs, name: &str, data: &GameData) -> Result<Level, LevelError> {
     let physics = &data.physics;
     let path = format!("maps/{name}.bsp");
     let bytes = vfs

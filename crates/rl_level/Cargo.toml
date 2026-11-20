@@ -20,6 +20,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+futures-lite.workspace = true
 source_formats = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 

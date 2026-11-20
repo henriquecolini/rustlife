@@ -41,14 +41,15 @@ impl VfsAssetReader {
     }
 }
 
-// The VFS answers every query synchronously (reads are from memory-mapped or
-// already-open archives), so these `async fn` bodies contain no `.await`. The
-// `async fn` signature is nonetheless the form `AssetReader` documents and
-// requires, so the lint against "pointless" async does not apply here.
+// Reads go through [`Vfs::read_async`], which waits for content that arrives
+// asynchronously (the browser's storage) and is ready at once for files on
+// disk. Listing and the directory check are answered from the mounts' indexes,
+// so those bodies contain no `.await`; the `async fn` signature is the form
+// `AssetReader` requires, so the lint against "pointless" async does not apply.
 #[allow(clippy::unused_async_trait_impl)]
 impl AssetReader for VfsAssetReader {
     async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        match self.vfs.read(&Self::vfs_path(path)) {
+        match self.vfs.read_async(&Self::vfs_path(path)).await {
             Ok(Some(bytes)) => Ok(VecReader::new(bytes)),
             Ok(None) => Err(AssetReaderError::NotFound(path.to_path_buf())),
             Err(error) => Err(AssetReaderError::Io(Arc::new(io::Error::other(

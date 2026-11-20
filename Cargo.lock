@@ -5485,6 +5485,7 @@ name = "rl_level"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "futures-lite",
  "glam",
  "rl_data",
  "rl_sim",
@@ -5927,6 +5928,8 @@ name = "source_fs"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "futures-lite",
+ "futures-util",
  "proptest",
  "serde",
  "tempfile",

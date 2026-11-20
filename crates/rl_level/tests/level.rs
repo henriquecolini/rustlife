@@ -18,7 +18,8 @@ use source_formats::entities::MapEntity;
 use source_formats::phy;
 use source_formats::propdata::PropDataTable;
 use source_formats::props::{PropKind, PropPlacement, PropSolid};
-use source_fs::{LooseDirectory, MountOrigin, Vfs};
+use source_fs::remote::{DirectoryTree, RemoteFiles, mount_remote_game};
+use source_fs::{ByteSource, LooseDirectory, MemorySource, MountOrigin, Vfs};
 
 fn data() -> GameData {
     GameData::builtin().expect("builtin data")
@@ -356,6 +357,106 @@ fn a_broken_map_is_an_error_not_a_panic() {
     let error = rl_level::load(&vfs, "dm_broken", &data).expect_err("broken");
     std::fs::remove_dir_all(&dir).ok();
     assert!(matches!(error, LevelError::Bsp { .. }), "{error}");
+}
+
+/// A filesystem whose only file is `maps/<name>.bsp` holding `bytes`, served
+/// the way the browser serves content: fetched asynchronously, never at once.
+fn remote_map(name: &str, bytes: &[u8]) -> Vfs {
+    let source: Arc<dyn ByteSource> = Arc::new(MemorySource::new(name, bytes.to_vec()));
+    let vfs = Vfs::new();
+    vfs.mount_back(
+        RemoteFiles::new("test", [(format!("maps/{name}.bsp"), source)], 1 << 20),
+        MountOrigin::Custom,
+    );
+    vfs
+}
+
+#[test]
+fn a_map_that_is_not_resident_is_reported_with_the_files_it_waits_for() {
+    let data = data();
+    let vfs = remote_map("dm_remote", b"VBSP but not really");
+    let error = rl_level::load(&vfs, "dm_remote", &data).expect_err("not resident");
+    assert!(
+        matches!(&error, LevelError::NotResident { map, paths }
+            if map == "dm_remote" && paths == &["maps/dm_remote.bsp"]),
+        "{error}"
+    );
+    assert_eq!(error.to_string(), "map dm_remote is waiting for 1 files");
+    // Reporting is not sticky: nothing is left over to confuse the next load.
+    assert!(vfs.take_misses().is_empty());
+}
+
+#[test]
+fn loading_asynchronously_fetches_the_map_and_then_reports_what_is_in_it() {
+    let data = data();
+    let vfs = remote_map("dm_remote", b"VBSP but not really");
+    let error = futures_lite::future::block_on(rl_level::load_async(&vfs, "dm_remote", &data))
+        .expect_err("junk map");
+    // The fetch worked: what is left is the map being unreadable, not absent.
+    assert!(matches!(error, LevelError::Bsp { .. }), "{error}");
+    // And the map is now readable without waiting.
+    assert!(vfs.read("maps/dm_remote.bsp").expect("resident").is_some());
+}
+
+#[test]
+fn a_map_missing_from_remote_content_is_not_found_not_pending() {
+    let data = data();
+    let vfs = remote_map("dm_remote", b"x");
+    let error = futures_lite::future::block_on(rl_level::load_async(&vfs, "dm_nowhere", &data))
+        .expect_err("missing");
+    assert!(matches!(error, LevelError::NotFound { .. }), "{error}");
+}
+
+/// Every stock map loads through asynchronous mounts of the install exactly
+/// as it does through the ordinary ones: the same checksum, props, bodies,
+/// spawns and entities.
+#[test]
+#[ignore = "requires an HL2DM install; set RUSTLIFE_TEST_GAME_DIR"]
+fn stock_maps_load_the_same_through_asynchronous_content() {
+    let Ok(dir) = std::env::var("RUSTLIFE_TEST_GAME_DIR") else {
+        return;
+    };
+    let native = source_fs::content::mount_game(&source_fs::content::ContentOptions {
+        game_dir: Some(dir.clone().into()),
+        ..Default::default()
+    })
+    .expect("mount the game");
+    let remote = Vfs::new();
+    let tree = DirectoryTree::open(std::path::Path::new(&dir)).expect("index the install");
+    let mounted = futures_lite::future::block_on(mount_remote_game(
+        &remote,
+        &tree,
+        "hl2mp",
+        source_fs::remote::DEFAULT_RESIDENT_BUDGET,
+    ))
+    .expect("mount the install asynchronously");
+    eprintln!("mounted {} remote mounts", mounted.mounts);
+    let data = data();
+    for map in ["dm_lockdown", "dm_steamlab", "dm_overwatch"] {
+        let expected = rl_level::load(&native.vfs, map, &data).expect("native load");
+        let started = std::time::Instant::now();
+        let level = futures_lite::future::block_on(rl_level::load_async(&remote, map, &data))
+            .expect("asynchronous load");
+        eprintln!("{map}: loaded asynchronously in {:?}", started.elapsed());
+        assert_eq!(level.checksum, expected.checksum, "{map}");
+        assert_eq!(level.props.len(), expected.props.len(), "{map}");
+        assert_eq!(level.spawns.len(), expected.spawns.len(), "{map}");
+        assert_eq!(level.entities.len(), expected.entities.len(), "{map}");
+        assert_eq!(
+            level.pickup_descs.len(),
+            expected.pickup_descs.len(),
+            "{map}"
+        );
+        let bodies = |level: &Level| {
+            level
+                .props
+                .iter()
+                .filter(|prop| prop.desc.is_some())
+                .count()
+        };
+        assert_eq!(bodies(&level), bodies(&expected), "{map}");
+        assert_eq!(level.origin, expected.origin, "{map}");
+    }
 }
 
 /// Loads every stock map from the install at `RUSTLIFE_TEST_GAME_DIR`,

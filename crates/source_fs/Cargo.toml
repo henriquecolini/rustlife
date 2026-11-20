@@ -17,12 +17,14 @@ testing = []
 
 [dependencies]
 crc32fast.workspace = true
+futures-util.workspace = true
 serde = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+futures-lite.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 

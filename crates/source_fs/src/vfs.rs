@@ -1,11 +1,11 @@
 //! The layered virtual filesystem.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::mount::Mount;
 use crate::path::{Glob, normalize};
 
@@ -97,6 +97,9 @@ struct Mounted {
 pub struct Vfs {
     mounts: RwLock<Vec<Mounted>>,
     next_id: AtomicU64,
+    /// Files [`Vfs::read`] wanted but a mount had not made resident, since
+    /// the last [`Vfs::take_misses`].
+    misses: Mutex<BTreeSet<String>>,
 }
 
 impl Vfs {
@@ -192,9 +195,66 @@ impl Vfs {
     pub fn read(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let path = normalize(path);
         match self.find(&path) {
-            Some(mounted) => mounted.mount.read(&path),
+            Some(mounted) => {
+                let result = mounted.mount.read(&path);
+                if let Err(Error::NotResident { path }) = &result {
+                    self.misses
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(path.clone());
+                }
+                result
+            }
             None => Ok(None),
         }
+    }
+
+    /// Reads the file at `path` without blocking, or `Ok(None)` if no mount
+    /// has it. Unlike [`Vfs::read`] this works for content that arrives
+    /// asynchronously; the file is not kept in memory (see
+    /// [`Vfs::make_resident`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Vfs::read`], except never [`Error::NotResident`].
+    pub async fn read_async(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let path = normalize(path);
+        match self.find(&path) {
+            Some(mounted) => mounted.mount.read_async(&path).await,
+            None => Ok(None),
+        }
+    }
+
+    /// Makes each of `paths` readable by [`Vfs::read`] without waiting,
+    /// fetching them all at once. Files no mount has are ignored. With
+    /// `pinned` they are never dropped to make room for others.
+    ///
+    /// Mounts that read synchronously already have everything, so this does
+    /// nothing for them.
+    ///
+    /// # Errors
+    ///
+    /// The first error a mount reports fetching a file; the others are still
+    /// fetched.
+    pub async fn make_resident<S: AsRef<str>>(&self, paths: &[S], pinned: bool) -> Result<()> {
+        let fetches = paths.iter().filter_map(|path| {
+            let path = normalize(path.as_ref());
+            let mounted = self.find(&path)?;
+            Some(async move { mounted.mount.make_resident(&path, pinned).await })
+        });
+        futures_util::future::join_all(fetches)
+            .await
+            .into_iter()
+            .collect()
+    }
+
+    /// The files [`Vfs::read`] found missing from memory since the last call
+    /// (so callers can fetch them and try again), in path order, and forgets
+    /// them. Always empty when every mount reads synchronously.
+    pub fn take_misses(&self) -> Vec<String> {
+        std::mem::take(&mut *self.misses.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_iter()
+            .collect()
     }
 
     /// Reads a file as UTF-8 text, replacing invalid sequences. Content text
@@ -368,6 +428,58 @@ mod tests {
         let vfs = Vfs::new();
         vfs.mount_back(Latin1, MountOrigin::BaseGame);
         assert_eq!(vfs.read_string("x").unwrap().unwrap(), "c\u{fffd}");
+    }
+
+    #[test]
+    fn mounts_that_read_synchronously_need_no_fetching() {
+        let vfs = Vfs::new();
+        vfs.mount_back(MemoryMount::new(&[("a.txt", "A")]), MountOrigin::BaseGame);
+        let read = futures_lite::future::block_on(vfs.read_async("A.TXT")).unwrap();
+        assert_eq!(read.unwrap(), b"A");
+        assert_eq!(
+            futures_lite::future::block_on(vfs.read_async("none.txt")).unwrap(),
+            None
+        );
+        // Making files resident is a no-op, and nothing is ever reported
+        // missing.
+        futures_lite::future::block_on(vfs.make_resident(&["a.txt", "none.txt"], true)).unwrap();
+        assert_eq!(vfs.read("a.txt").unwrap().unwrap(), b"A");
+        assert!(vfs.take_misses().is_empty());
+    }
+
+    #[test]
+    fn a_failed_fetch_is_reported_but_the_others_still_arrive() {
+        /// A mount that cannot fetch `bad.txt` but can fetch `good.txt`.
+        #[derive(Debug)]
+        struct Flaky;
+        impl Mount for Flaky {
+            fn read(&self, _: &str) -> Result<Option<Vec<u8>>> {
+                Ok(None)
+            }
+            fn make_resident<'a>(
+                &'a self,
+                path: &'a str,
+                _: bool,
+            ) -> crate::BoxFuture<'a, Result<()>> {
+                Box::pin(std::future::ready(if path == "bad.txt" {
+                    Err(Error::NotResident { path: path.into() })
+                } else {
+                    Ok(())
+                }))
+            }
+            fn contains(&self, _: &str) -> bool {
+                true
+            }
+            fn for_each_file(&self, _: &mut dyn FnMut(&str)) {}
+            fn describe(&self) -> String {
+                "flaky".into()
+            }
+        }
+        let vfs = Vfs::new();
+        vfs.mount_back(Flaky, MountOrigin::BaseGame);
+        let result =
+            futures_lite::future::block_on(vfs.make_resident(&["bad.txt", "good.txt"], false));
+        assert!(result.is_err());
     }
 
     #[test]

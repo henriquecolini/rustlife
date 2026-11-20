@@ -331,7 +331,7 @@ fn mount_vpk(vfs: &Vfs, path: &Path, origin: &MountOrigin) {
 
 /// Whether a file is the entry point of a VPK set: a `*_dir.vpk`, or a
 /// standalone `.vpk` that is not one of the numbered data archives.
-fn is_mountable_vpk(path: &Path) -> bool {
+pub(crate) fn is_mountable_vpk(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };

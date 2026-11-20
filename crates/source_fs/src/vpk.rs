@@ -75,21 +75,203 @@ impl VpkEntry {
     }
 }
 
+/// The parsed directory of a VPK set: where every file is, with no I/O.
+///
+/// Shared by the readers that supply the bytes ([`VpkArchive`] from disk,
+/// [`crate::remote::RemoteVpk`] from any [`crate::ByteSource`]).
+#[derive(Debug)]
+pub(crate) struct VpkIndex {
+    dir_path: PathBuf,
+    /// Raw tree bytes; entries reference their preload data by range.
+    tree: Box<[u8]>,
+    /// Absolute offset in the directory file where embedded file data starts.
+    embedded_data_offset: u64,
+    entries: HashMap<String, VpkEntry>,
+}
+
+/// What the start of a directory file says about its own size.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VpkHeader {
+    header_len: u32,
+    tree_size: u32,
+}
+
+impl VpkHeader {
+    /// The longest header (version 2): enough bytes to read before parsing.
+    pub(crate) const MAX_LEN: usize = HEADER_LEN_V2 as usize;
+
+    /// Parses the header at the start of `bytes`, which may be longer.
+    pub(crate) fn parse(dir_path: &Path, bytes: &[u8]) -> Result<Self> {
+        let invalid = |reason: String| Error::InvalidVpk {
+            path: dir_path.to_path_buf(),
+            reason,
+        };
+        let mut reader = ByteReader::new(bytes);
+        let signature = reader
+            .u32()
+            .ok_or_else(|| invalid("file too short".into()))?;
+        if signature != SIGNATURE {
+            return Err(invalid(format!("bad signature {signature:#010x}")));
+        }
+        let version = reader
+            .u32()
+            .ok_or_else(|| invalid("truncated header".into()))?;
+        let tree_size = reader
+            .u32()
+            .ok_or_else(|| invalid("truncated header".into()))?;
+        let header_len = match version {
+            1 => HEADER_LEN_V1,
+            2 => {
+                // The v2 extension describes trailing checksum/signature
+                // sections, which a read-only loader can ignore.
+                reader
+                    .bytes(16)
+                    .ok_or_else(|| invalid("truncated v2 header".into()))?;
+                HEADER_LEN_V2
+            }
+            other => return Err(invalid(format!("unsupported version {other}"))),
+        };
+        Ok(Self {
+            header_len,
+            tree_size,
+        })
+    }
+
+    /// Length of the header plus the tree: how many bytes from the start of
+    /// the directory file [`VpkIndex::parse`] needs.
+    pub(crate) fn parse_len(self) -> u64 {
+        u64::from(self.header_len) + u64::from(self.tree_size)
+    }
+}
+
+impl VpkIndex {
+    /// Parses a directory file's header and tree. `bytes` must hold at least
+    /// [`VpkHeader::parse_len`] bytes; any data after them is ignored.
+    pub(crate) fn parse(dir_path: PathBuf, bytes: &[u8]) -> Result<Self> {
+        let header = VpkHeader::parse(&dir_path, bytes)?;
+        let invalid = |reason: String| Error::InvalidVpk {
+            path: dir_path.clone(),
+            reason,
+        };
+        let tree_start = header.header_len as usize;
+        let tree_end = tree_start
+            .checked_add(header.tree_size as usize)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| {
+                invalid(format!(
+                    "tree size {} exceeds file length",
+                    header.tree_size
+                ))
+            })?;
+        let tree: Box<[u8]> = bytes[tree_start..tree_end].into();
+        let entries = parse_tree(&tree).map_err(|offset| {
+            invalid(format!("malformed tree near byte {}", tree_start + offset))
+        })?;
+        Ok(Self {
+            dir_path,
+            tree,
+            embedded_data_offset: u64::from(header.header_len) + u64::from(header.tree_size),
+            entries,
+        })
+    }
+
+    pub(crate) fn dir_path(&self) -> &Path {
+        &self.dir_path
+    }
+
+    pub(crate) fn entry(&self, path: &str) -> Option<&VpkEntry> {
+        self.entries.get(path)
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &String> {
+        self.entries.keys()
+    }
+
+    pub(crate) fn contains(&self, path: &str) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    /// Where the part of `entry` that is not preload lies: its archive index,
+    /// the absolute offset within that archive's file, and its length. `None`
+    /// when the whole file is preload.
+    pub(crate) fn remainder(&self, entry: &VpkEntry) -> Option<(u16, u64, usize)> {
+        if entry.length == 0 {
+            return None;
+        }
+        let base = if entry.archive_index == DIR_ARCHIVE_INDEX {
+            self.embedded_data_offset
+        } else {
+            0
+        };
+        Some((
+            entry.archive_index,
+            base + u64::from(entry.offset),
+            entry.length as usize,
+        ))
+    }
+
+    /// The whole file: its preload bytes followed by `remainder` (what was
+    /// read at [`VpkIndex::remainder`]).
+    ///
+    /// In debug builds the CRC32 is verified, catching truncated downloads and
+    /// reader bugs early; release builds skip it for load speed.
+    pub(crate) fn assemble(
+        &self,
+        path: &str,
+        entry: &VpkEntry,
+        remainder: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        let preload = &self.tree[entry.preload.clone()];
+        let mut data = if preload.is_empty() {
+            remainder
+        } else {
+            let mut data = Vec::with_capacity(preload.len() + remainder.len());
+            data.extend_from_slice(preload);
+            data.extend_from_slice(&remainder);
+            data
+        };
+        data.shrink_to_fit();
+        if cfg!(debug_assertions) {
+            let actual = crc32fast::hash(&data);
+            if actual != entry.crc {
+                return Err(Error::ChecksumMismatch {
+                    archive: self.dir_path.clone(),
+                    virtual_path: path.to_owned(),
+                    expected: entry.crc,
+                    actual,
+                });
+            }
+        }
+        Ok(data)
+    }
+
+    /// The error for an entry whose archive is not available.
+    pub(crate) fn missing_archive(&self, entry: &VpkEntry) -> Error {
+        Error::InvalidVpk {
+            path: self.dir_path.clone(),
+            reason: format!(
+                "entry references archive {}, which is not available (a standalone VPK has no \
+                 numbered archives, or it was not imported)",
+                entry.archive_index
+            ),
+        }
+    }
+}
+
 /// An opened VPK set, usable as a [`Mount`].
 ///
 /// Opening reads only the directory file; data archives are opened lazily on
 /// first access and kept open for positional reads from any thread.
 #[derive(Debug)]
 pub struct VpkArchive {
-    dir_path: PathBuf,
+    index: VpkIndex,
     /// Path prefix for numbered archives: `<dir>/<stem>_`; `None` for a
     /// standalone VPK that has no numbered archives.
     archive_stem: Option<PathBuf>,
-    /// Raw tree bytes; entries reference their preload data by range.
-    tree: Box<[u8]>,
-    /// Absolute offset in the directory file where embedded file data starts.
-    embedded_data_offset: u64,
-    entries: HashMap<String, VpkEntry>,
     archives: Mutex<HashMap<u16, Arc<File>>>,
 }
 
@@ -116,59 +298,14 @@ impl VpkArchive {
     ///
     /// Fails if the directory is malformed.
     pub fn from_dir_bytes(dir_path: PathBuf, bytes: &[u8]) -> Result<Self> {
-        let invalid = |reason: String| Error::InvalidVpk {
-            path: dir_path.clone(),
-            reason,
-        };
-        let mut reader = ByteReader::new(bytes);
-
-        let signature = reader
-            .u32()
-            .ok_or_else(|| invalid("file too short".into()))?;
-        if signature != SIGNATURE {
-            return Err(invalid(format!("bad signature {signature:#010x}")));
-        }
-        let version = reader
-            .u32()
-            .ok_or_else(|| invalid("truncated header".into()))?;
-        let tree_size = reader
-            .u32()
-            .ok_or_else(|| invalid("truncated header".into()))?;
-        let header_len = match version {
-            1 => HEADER_LEN_V1,
-            2 => {
-                // The v2 extension describes trailing checksum/signature
-                // sections, which a read-only loader can ignore.
-                reader
-                    .bytes(16)
-                    .ok_or_else(|| invalid("truncated v2 header".into()))?;
-                HEADER_LEN_V2
-            }
-            other => return Err(invalid(format!("unsupported version {other}"))),
-        };
-
-        let tree_start = header_len as usize;
-        let tree_end = tree_start
-            .checked_add(tree_size as usize)
-            .filter(|&end| end <= bytes.len())
-            .ok_or_else(|| invalid(format!("tree size {tree_size} exceeds file length")))?;
-        let tree: Box<[u8]> = bytes[tree_start..tree_end].into();
-        let entries = parse_tree(&tree).map_err(|offset| {
-            invalid(format!("malformed tree near byte {}", tree_start + offset))
-        })?;
-
         let archive_stem = dir_path
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_suffix("_dir.vpk"))
             .map(|stem| dir_path.with_file_name(format!("{stem}_")));
-
         Ok(Self {
-            dir_path,
+            index: VpkIndex::parse(dir_path, bytes)?,
             archive_stem,
-            tree,
-            embedded_data_offset: u64::from(header_len) + u64::from(tree_size),
-            entries,
             archives: Mutex::new(HashMap::new()),
         })
     }
@@ -176,86 +313,63 @@ impl VpkArchive {
     /// Path of the directory file.
     #[must_use]
     pub fn dir_path(&self) -> &Path {
-        &self.dir_path
+        self.index.dir_path()
     }
 
     /// Number of files in the archive.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.index.len()
     }
 
     /// Whether the archive contains no files.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.index.len() == 0
     }
 
     /// Looks up the entry for a canonical path.
     #[must_use]
     pub fn entry(&self, path: &str) -> Option<&VpkEntry> {
-        self.entries.get(path)
+        self.index.entry(path)
     }
 
     /// Reads a file's full contents.
-    ///
-    /// In debug builds the CRC32 is verified, catching truncated downloads and
-    /// reader bugs early; release builds skip it for load speed.
     fn read_entry(&self, path: &str, entry: &VpkEntry) -> Result<Vec<u8>> {
         let size = usize::try_from(entry.size()).map_err(|_| Error::InvalidVpk {
-            path: self.dir_path.clone(),
+            path: self.index.dir_path().to_path_buf(),
             reason: format!("{path} is too large to load"),
         })?;
-        let mut data = Vec::with_capacity(size);
-        data.extend_from_slice(&self.tree[entry.preload.clone()]);
-
-        if entry.length > 0 {
-            let (file, base, file_path) = if entry.archive_index == DIR_ARCHIVE_INDEX {
-                (
-                    self.open_dir_file()?,
-                    self.embedded_data_offset,
-                    self.dir_path.clone(),
-                )
+        let mut remainder = Vec::new();
+        if let Some((archive, offset, len)) = self.index.remainder(entry) {
+            let (file, file_path) = if archive == DIR_ARCHIVE_INDEX {
+                (self.open_dir_file()?, self.index.dir_path().to_path_buf())
             } else {
-                let (file, file_path) = self.open_archive(entry.archive_index)?;
-                (file, 0, file_path)
+                self.open_archive(entry)?
             };
-            let start = data.len();
-            data.resize(size, 0);
-            read_exact_at(&file, &mut data[start..], base + u64::from(entry.offset))
-                .map_err(|e| Error::io(file_path, e))?;
+            remainder.resize(len, 0);
+            read_exact_at(&file, &mut remainder, offset).map_err(|e| Error::io(file_path, e))?;
         }
-
-        if cfg!(debug_assertions) {
-            let actual = crc32fast::hash(&data);
-            if actual != entry.crc {
-                return Err(Error::ChecksumMismatch {
-                    archive: self.dir_path.clone(),
-                    virtual_path: path.to_owned(),
-                    expected: entry.crc,
-                    actual,
-                });
-            }
-        }
-        Ok(data)
+        debug_assert!(
+            size >= remainder.len(),
+            "a file is at least as large as its remainder"
+        );
+        self.index.assemble(path, entry, remainder)
     }
 
     fn open_dir_file(&self) -> Result<Arc<File>> {
-        self.cached_file(DIR_ARCHIVE_INDEX, &self.dir_path)
+        self.cached_file(DIR_ARCHIVE_INDEX, self.index.dir_path())
     }
 
-    fn open_archive(&self, index: u16) -> Result<(Arc<File>, PathBuf)> {
+    fn open_archive(&self, entry: &VpkEntry) -> Result<(Arc<File>, PathBuf)> {
         let stem = self
             .archive_stem
             .as_ref()
-            .ok_or_else(|| Error::InvalidVpk {
-                path: self.dir_path.clone(),
-                reason: format!("entry references archive {index} but this is a standalone VPK"),
-            })?;
+            .ok_or_else(|| self.index.missing_archive(entry))?;
         let mut path = stem.clone().into_os_string();
-        path.push(format!("{index:03}.vpk"));
+        path.push(format!("{:03}.vpk", entry.archive_index));
         let path = PathBuf::from(path);
-        Ok((self.cached_file(index, &path)?, path))
+        Ok((self.cached_file(entry.archive_index, &path)?, path))
     }
 
     fn cached_file(&self, key: u16, path: &Path) -> Result<Arc<File>> {
@@ -273,24 +387,24 @@ impl VpkArchive {
 
 impl Mount for VpkArchive {
     fn read(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        match self.entries.get(path) {
+        match self.index.entry(path) {
             Some(entry) => self.read_entry(path, entry).map(Some),
             None => Ok(None),
         }
     }
 
     fn contains(&self, path: &str) -> bool {
-        self.entries.contains_key(path)
+        self.index.contains(path)
     }
 
     fn for_each_file(&self, visit: &mut dyn FnMut(&str)) {
-        for path in self.entries.keys() {
+        for path in self.index.paths() {
             visit(path);
         }
     }
 
     fn describe(&self) -> String {
-        self.dir_path.display().to_string()
+        self.index.dir_path().display().to_string()
     }
 }
 

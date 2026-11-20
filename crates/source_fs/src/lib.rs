@@ -35,6 +35,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod byte_source;
 pub mod content;
 pub mod error;
 pub mod gameinfo;
@@ -44,6 +45,8 @@ pub mod keyvalues;
 pub mod loose;
 pub mod mount;
 pub mod path;
+pub mod remote;
+pub mod resident;
 pub mod steam;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -51,9 +54,11 @@ pub mod vfs;
 pub mod vpk;
 pub mod zip_mount;
 
+pub use byte_source::{BoxFuture, ByteSource, FileSource, MemorySource};
 pub use error::{Error, Result};
 pub use loose::LooseDirectory;
 pub use mount::Mount;
+pub use resident::ResidentCache;
 pub use vfs::{ListedFile, MountId, MountInfo, MountOrigin, Vfs};
 pub use vpk::VpkArchive;
 pub use zip_mount::ZipMount;

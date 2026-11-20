@@ -77,6 +77,15 @@ pub enum Error {
         source: zip::result::ZipError,
     },
 
+    /// The file exists but is not in memory, and this mount can only fetch it
+    /// asynchronously. Make it resident first (`Vfs::make_resident`), then
+    /// read again.
+    #[error("{path} is not loaded yet")]
+    NotResident {
+        /// Virtual path of the file.
+        path: String,
+    },
+
     /// No installation of the requested game could be located.
     #[error("{0}")]
     GameNotFound(String),

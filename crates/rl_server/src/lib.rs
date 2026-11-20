@@ -165,11 +165,37 @@ pub struct ServerOptions {
 #[derive(Clone)]
 pub struct MapLoader(Arc<LoadFn>);
 
-type LoadFn = dyn Fn(&str) -> Result<Level, String> + Send + Sync;
+type LoadFn = dyn Fn(&str) -> Result<Level, MapLoadError> + Send + Sync;
+
+/// Why a [`MapLoader`] did not produce a map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapLoadError {
+    /// Not yet: the map's files are still arriving (a browser fetches content
+    /// asynchronously). The server asks again on a later tick, so the loader
+    /// should answer cheaply until it is ready.
+    Pending,
+    /// It cannot be loaded; the reason is logged and the server stays put.
+    Failed(String),
+}
+
+impl From<String> for MapLoadError {
+    fn from(reason: String) -> Self {
+        Self::Failed(reason)
+    }
+}
 
 impl MapLoader {
-    /// A loader running `load`.
+    /// A loader running `load`, which either has the map or says why not.
     pub fn new(load: impl Fn(&str) -> Result<Level, String> + Send + Sync + 'static) -> Self {
+        Self(Arc::new(move |name| {
+            load(name).map_err(MapLoadError::Failed)
+        }))
+    }
+
+    /// A loader that may also answer [`MapLoadError::Pending`].
+    pub fn with_pending(
+        load: impl Fn(&str) -> Result<Level, MapLoadError> + Send + Sync + 'static,
+    ) -> Self {
         Self(Arc::new(load))
     }
 }
@@ -274,6 +300,8 @@ pub struct Server {
     dummy_script: DummyScript,
     maps: Vec<String>,
     loader: Option<MapLoader>,
+    /// A map the loader asked to wait for, tried again each tick.
+    pending_map: Option<String>,
     /// The vote for the next map, while the scoreboard is up.
     vote: Option<Vote>,
     /// Where the level placed its moving props.
@@ -323,6 +351,7 @@ impl Server {
             dummy_script: options.dummy_script,
             maps: options.maps,
             loader: options.loader,
+            pending_map: None,
             vote: None,
             data_files,
             tick_interval: Duration::from_secs_f32(options.data.simulation.tick_interval()),
@@ -536,11 +565,20 @@ impl Server {
         };
         let level = match (loader.0)(name) {
             Ok(level) => level,
-            Err(error) => {
+            Err(MapLoadError::Pending) => {
+                if self.pending_map.as_deref() != Some(name) {
+                    tracing::info!(map = name, "waiting for the next map's files");
+                }
+                self.pending_map = Some(name.to_owned());
+                return;
+            }
+            Err(MapLoadError::Failed(error)) => {
                 tracing::warn!(map = name, %error, "cannot load the next map; staying put");
+                self.pending_map = None;
                 return;
             }
         };
+        self.pending_map = None;
         tracing::info!(map = name, "changing map");
         let mut built = level.simulation(&self.data);
         self.initial = snapshot::initial_props(&built.simulation);
@@ -725,6 +763,9 @@ impl Server {
     /// One tick: every player's waiting commands within their credits, the
     /// simulation, then snapshots.
     fn tick(&mut self) -> TickEvents {
+        if let Some(name) = self.pending_map.take() {
+            self.change_map(&name);
+        }
         let backlog = self.data.net.command_backlog;
         let mut commands = Vec::new();
         for client in self.clients.values_mut() {

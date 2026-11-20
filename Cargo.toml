@@ -49,6 +49,8 @@ bevy_transform = "0.20"
 # revision rather than a crates.io release.
 box3d-rust = { git = "https://github.com/larsbrubaker/box3d-rust", rev = "f2ca61e39b653d1b13945d13ebd15478d5fa4661" }
 futures-lite = "2"
+# `join_all`, to fetch many files at once.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 # Vector maths for the simulation; the same major version Bevy uses, so sim
 # values cross into rendering without conversion.
 glam = "0.33"
