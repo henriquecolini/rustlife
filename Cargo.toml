@@ -23,6 +23,7 @@ rl_level = { path = "crates/rl_level" }
 rl_net = { path = "crates/rl_net" }
 rl_server = { path = "crates/rl_server" }
 rl_sim = { path = "crates/rl_sim" }
+rl_web = { path = "crates/rl_web" }
 source_formats = { path = "crates/source_formats" }
 source_fs = { path = "crates/source_fs" }
 
@@ -83,6 +84,11 @@ vbsp = "0.9"
 vmdl = "0.2"
 vmt-parser = "0.2"
 vtf = "0.4"
+# The browser bridge (only built for wasm32).
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
 # `std::time` for browsers, where `SystemTime::now` panics; plain `std` re-exports
 # elsewhere.
 web-time = "1"

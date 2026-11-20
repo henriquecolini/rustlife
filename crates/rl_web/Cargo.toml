@@ -1,0 +1,37 @@
+[package]
+name = "rl_web"
+description = "The browser build: importing the player's game files into the browser's storage and booting rustlife in a page."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+# `cdylib` is what wasm-bindgen turns into the page's module; `rlib` lets the
+# platform-neutral parts be tested natively.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ron.workspace = true
+serde.workspace = true
+source_fs.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+source_fs = { workspace = true, features = ["testing"] }
+wasm-bindgen-test.workspace = true
+
+[lints]
+workspace = true

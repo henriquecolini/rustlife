@@ -9,3 +9,5 @@ dev = "run -p rustlife --features bevy/dynamic_linking"
 # matching cargo features are enabled in the crates that depend on it.
 [target.wasm32-unknown-unknown]
 rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+# Tests of the browser code run in a real browser (`cargo xtask web-test`).
+runner = "wasm-bindgen-test-runner"

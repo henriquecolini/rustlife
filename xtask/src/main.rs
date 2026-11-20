@@ -4,6 +4,9 @@
 //!   formatting, clippy (warnings are errors), tests, documentation, dependency
 //!   audit (when `cargo-deny` is installed), a type-check for the browser
 //!   target (when it is installed) and the content-free check.
+//! * `web-test` runs the browser tests of `rl_web` in headless Chrome (needs
+//!   `wasm-bindgen-test-runner` and a matching `chromedriver`); `ci` runs it
+//!   too when both are installed.
 //! * `content-tests` runs the `#[ignore]`d tests that need a real game install.
 //! * `check-assets` verifies that no Valve content is tracked by git.
 //!
@@ -39,10 +42,11 @@ fn main() -> ExitCode {
     let task = env::args().nth(1).unwrap_or_default();
     let result = match task.as_str() {
         "ci" => ci(),
+        "web-test" => web_test(),
         "content-tests" => content_tests(),
         "check-assets" => check_assets(),
         _ => {
-            eprintln!("usage: cargo xtask <ci | content-tests | check-assets>");
+            eprintln!("usage: cargo xtask <ci | web-test | content-tests | check-assets>");
             return ExitCode::FAILURE;
         }
     };
@@ -72,6 +76,7 @@ const WASM_CRATES: &[&str] = &[
     "rl_net",
     "rl_server",
     "rl_sim",
+    "rl_web",
     "source_formats",
     "source_fs",
 ];
@@ -103,6 +108,13 @@ fn ci() -> TaskResult {
         );
     }
     wasm_check()?;
+    if has_browser_test_tools() {
+        web_test()?;
+    } else {
+        eprintln!(
+            "xtask: wasm-bindgen-test-runner or chromedriver not installed; skipping the browser tests"
+        );
+    }
     check_assets()?;
     println!("xtask: all CI checks passed");
     Ok(())
@@ -123,7 +135,62 @@ fn wasm_check() -> TaskResult {
     for name in WASM_CRATES {
         args.extend(["-p", name]);
     }
-    cargo(&args, &[])
+    cargo(&args, &[])?;
+    // Code that only exists for the browser is not seen by the ordinary
+    // clippy run, so lint it for its own target.
+    cargo(
+        &[
+            "clippy",
+            "--target",
+            WASM_TARGET,
+            "-p",
+            "rl_web",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        &[],
+    )
+}
+
+/// Runs the browser tests of the web build in headless Chrome.
+fn web_test() -> TaskResult {
+    if !has_rust_target(WASM_TARGET) {
+        return Err(format!(
+            "{WASM_TARGET} is not installed (rustup target add {WASM_TARGET})"
+        ));
+    }
+    if !has_browser_test_tools() {
+        return Err(
+            "the browser tests need `wasm-bindgen-test-runner` (cargo binstall wasm-bindgen-cli, \
+             at the version in Cargo.lock) and a `chromedriver` matching Chrome on the PATH"
+                .into(),
+        );
+    }
+    cargo(
+        &[
+            "test",
+            "--target",
+            WASM_TARGET,
+            "-p",
+            "rl_web",
+            "--test",
+            "browser",
+        ],
+        &[],
+    )
+}
+
+fn has_browser_test_tools() -> bool {
+    ["wasm-bindgen-test-runner", "chromedriver"]
+        .iter()
+        .all(|tool| {
+            Command::new(tool)
+                .arg("--version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        })
 }
 
 fn content_tests() -> TaskResult {

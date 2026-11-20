@@ -88,12 +88,9 @@ impl VpkBuilder {
         self
     }
 
-    /// Writes the archive into `dir` and returns the directory file's path.
-    ///
-    /// # Errors
-    ///
-    /// Propagates I/O errors from writing the files.
-    pub fn write(self, dir: &Path, stem: &str) -> io::Result<PathBuf> {
+    /// Builds the archive in memory.
+    #[must_use]
+    pub fn build(self) -> BuiltVpk {
         let mut grouped = GroupedFiles::new();
         for (path, file) in &self.files {
             let (directory, name) = path.rsplit_once('/').unwrap_or((" ", path.as_str()));
@@ -149,16 +146,43 @@ impl VpkBuilder {
             dir_file.extend_from_slice(&[0; 12]);
         }
         dir_file.extend_from_slice(&tree);
-
-        let dir_path = dir.join(format!("{stem}_dir.vpk"));
         if self.embed_in_dir {
             dir_file.extend_from_slice(&data);
-        } else {
-            fs::write(dir.join(format!("{stem}_000.vpk")), &data)?;
+            return BuiltVpk {
+                dir: dir_file,
+                archive: None,
+            };
         }
-        fs::write(&dir_path, dir_file)?;
+        BuiltVpk {
+            dir: dir_file,
+            archive: Some(data),
+        }
+    }
+
+    /// Writes the archive into `dir` and returns the directory file's path.
+    ///
+    /// # Errors
+    ///
+    /// Propagates I/O errors from writing the files.
+    pub fn write(self, dir: &Path, stem: &str) -> io::Result<PathBuf> {
+        let built = self.build();
+        let dir_path = dir.join(format!("{stem}_dir.vpk"));
+        if let Some(archive) = &built.archive {
+            fs::write(dir.join(format!("{stem}_000.vpk")), archive)?;
+        }
+        fs::write(&dir_path, &built.dir)?;
         Ok(dir_path)
     }
+}
+
+/// A VPK set built in memory by [`VpkBuilder::build`].
+#[derive(Debug, Clone)]
+pub struct BuiltVpk {
+    /// The directory file (`<stem>_dir.vpk`).
+    pub dir: Vec<u8>,
+    /// The data archive (`<stem>_000.vpk`), or `None` when the data is
+    /// embedded in the directory file.
+    pub archive: Option<Vec<u8>>,
 }
 
 fn push_cstr(buffer: &mut Vec<u8>, text: &str) {

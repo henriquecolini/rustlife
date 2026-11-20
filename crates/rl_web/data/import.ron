@@ -1,0 +1,71 @@
+// What the browser build copies from the player's Half-Life 2: Deathmatch
+// install into the browser's private storage, once.
+//
+// A file is imported if the first group (in this order) whose `include`
+// patterns match it does not also `exclude` it. Patterns are source_fs globs
+// over the path inside the install folder, case-insensitive: `*` stays within
+// a folder, `**` crosses folders. Files no group claims are left out.
+//
+// `required` groups are always imported. The others are offered, and
+// `default_on` says whether they start ticked. Sizes are the stock install's.
+(
+    // The mod folder that holds `gameinfo.txt`; its presence is how the
+    // install folder is recognised among whatever the player picked.
+    mod_dir: "hl2mp",
+    groups: [
+        (
+            id: "game",
+            title: "Half-Life 2: Deathmatch maps, scripts and models",
+            required: true,
+            default_on: true,
+            // About 330 MB. The mod's own binaries are for the desktop game.
+            include: ["hl2mp/**"],
+            exclude: ["hl2mp/bin/**", "hl2mp/**.so", "hl2mp/**.dll", "hl2mp/**.dylib", "hl2mp/**.log"],
+        ),
+        (
+            id: "textures",
+            title: "Textures",
+            required: true,
+            default_on: true,
+            // About 1.2 GB.
+            include: ["hl2/hl2_textures_*.vpk"],
+            exclude: [],
+        ),
+        (
+            id: "models",
+            title: "Models, materials and scripts",
+            required: true,
+            default_on: true,
+            // About 0.45 GB.
+            include: ["hl2/hl2_misc_*.vpk"],
+            exclude: [],
+        ),
+        (
+            id: "sounds",
+            title: "Sounds and music",
+            required: true,
+            default_on: true,
+            // About 0.4 GB.
+            include: ["hl2/hl2_sound_misc_*.vpk"],
+            exclude: [],
+        ),
+        (
+            id: "combined",
+            title: "Combined content packs",
+            required: false,
+            default_on: true,
+            // Tiny; present in some installs.
+            include: ["hl2_complete/**"],
+            exclude: [],
+        ),
+        (
+            id: "voice",
+            title: "English voice-over (not used in deathmatch)",
+            required: false,
+            default_on: false,
+            // About 0.57 GB.
+            include: ["hl2/hl2_sound_vo_english_*.vpk"],
+            exclude: [],
+        ),
+    ],
+)
