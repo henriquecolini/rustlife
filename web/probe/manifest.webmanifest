@@ -1,0 +1,10 @@
+{
+  "name": "rustlife probe",
+  "short_name": "probe",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#111111",
+  "theme_color": "#111111"
+}
