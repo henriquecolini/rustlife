@@ -1,5 +1,6 @@
-# Publishes web/probe to GitHub Pages: the throwaway feasibility pages that
-# run on the phone (see web/probe/README.md). Contains no game content.
+# Builds the browser version of rustlife and publishes it, with the phone
+# feasibility probe under /probe/, to GitHub Pages. The site contains no game
+# content: the player brings their own files (see docs/web.md).
 #
 # Actions are pinned to commits, not tags, so a moved tag cannot change what
 # runs here. The comment names the release each commit is.
@@ -9,14 +10,19 @@ on:
   push:
     branches: [main]
     paths:
-      - "web/probe/**"
+      - "crates/**"
+      - "vendor/**"
+      - "data/**"
+      - "web/**"
+      - "xtask/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deployment at a time; a newer push replaces a queued older one.
 concurrency:
@@ -24,24 +30,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Lets the page show which build it is, so a cached copy on the phone
-      # is easy to spot.
-      - name: Stamp the build
-        run: sed -i "s/__BUILD__/${GITHUB_SHA::7}/" web/probe/index.html
+      - name: Install the WebAssembly target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
+          rustup default stable
+
+      # wasm-bindgen's command-line tool must match the library version that
+      # Cargo.lock pins; `xtask web-build` checks it too.
+      - name: Find the wasm-bindgen version
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ {getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          echo "WASM_BINDGEN_VERSION=$version" >> "$GITHUB_ENV"
+
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: wasm-bindgen@${{ env.WASM_BINDGEN_VERSION }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build the page
+        run: cargo run --package xtask -- web-build
+
+      - name: Add the probe and stamp the build
+        run: |
+          mkdir -p dist/web/probe
+          cp -r web/probe/. dist/web/probe/
+          # Lets a page show which build it is, so a cached copy on a phone is
+          # easy to spot.
+          sed -i "s/__BUILD__/${GITHUB_SHA::7}/" dist/web/index.html dist/web/probe/index.html
 
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: web/probe
+          path: dist/web
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

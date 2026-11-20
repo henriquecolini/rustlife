@@ -48,7 +48,8 @@ if (debug) {
     if (!log.hidden) { log.textContent = logLines.join("\n"); log.scrollTop = log.scrollHeight; }
   };
   panel.querySelector("#debug-copy").onclick = async () => {
-    const text = `${panel.querySelector("#debug-stats").textContent}\n${navigator.userAgent}\n${logLines.join("\n")}`;
+    const build = document.querySelector('meta[name="build"]')?.content;
+    const text = `build ${build}\n${panel.querySelector("#debug-stats").textContent}\n${navigator.userAgent}\n${logLines.join("\n")}`;
     try { await navigator.clipboard.writeText(text); } catch { log.hidden = false; log.textContent = text; }
   };
   const tick = () => { frames += 1; requestAnimationFrame(tick); };
