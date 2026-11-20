@@ -27,6 +27,47 @@ function plain(args) {
   return [text, ...rest.map(String)].join(" ");
 }
 
+// What the browser says about a shader or pipeline that does not validate.
+// The game's own log only has wgpu's summary ("Fragment module is invalid");
+// Safari reports the reason on the shader module (WebKit bug 316293) and never
+// passes it on to the pipeline, so ask each module for its messages and keep
+// the failures. Must run before the game creates its device.
+const gpuErrors = [];
+
+function noteGpuError(text) {
+  if (gpuErrors.length < 40) gpuErrors.push(text);
+  console.error(`GPU: ${text}`);
+}
+
+function hookGpuErrors() {
+  if (!window.GPUAdapter || !window.GPUDevice) return;
+
+  const requestDevice = GPUAdapter.prototype.requestDevice;
+  GPUAdapter.prototype.requestDevice = async function (...args) {
+    const device = await requestDevice.apply(this, args);
+    device.addEventListener("uncapturederror", (event) => {
+      noteGpuError(`uncaptured: ${event.error?.message ?? event.error}`);
+    });
+    return device;
+  };
+
+  const createShaderModule = GPUDevice.prototype.createShaderModule;
+  GPUDevice.prototype.createShaderModule = function (descriptor) {
+    const module = createShaderModule.call(this, descriptor);
+    const label = descriptor?.label || "(unlabelled)";
+    const code = String(descriptor?.code ?? "");
+    module.getCompilationInfo?.().then((info) => {
+      for (const m of info.messages) {
+        if (m.type !== "error") continue;
+        // The line of source the message points at, so the construct is named.
+        const line = code.split("\n")[Math.max(0, m.lineNum - 1)]?.trim().slice(0, 160) ?? "";
+        noteGpuError(`shader "${label}" ${m.lineNum}:${m.linePos}: ${m.message}\n    > ${line}`);
+      }
+    }, () => {});
+    return module;
+  };
+}
+
 if (debug) {
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     const original = console[level];
@@ -36,6 +77,7 @@ if (debug) {
       original.apply(console, args);
     };
   }
+  hookGpuErrors();
   const panel = document.createElement("div");
   panel.id = "debug";
   panel.innerHTML = `<div id="debug-bar"><span id="debug-stats"></span>
@@ -49,7 +91,9 @@ if (debug) {
   };
   panel.querySelector("#debug-copy").onclick = async () => {
     const build = document.querySelector('meta[name="build"]')?.content;
-    const text = `build ${build}\n${panel.querySelector("#debug-stats").textContent}\n${navigator.userAgent}\n${logLines.join("\n")}`;
+    // GPU errors first: the log is capped and a warning storm can push them out.
+    const gpu = gpuErrors.length ? `GPU errors:\n${gpuErrors.join("\n")}\n\n` : "";
+    const text = `build ${build}\n${panel.querySelector("#debug-stats").textContent}\n${navigator.userAgent}\n${gpu}${logLines.join("\n")}`;
     try { await navigator.clipboard.writeText(text); } catch { log.hidden = false; log.textContent = text; }
   };
   const tick = () => { frames += 1; requestAnimationFrame(tick); };
