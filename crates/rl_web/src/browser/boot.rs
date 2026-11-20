@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use js_sys::{Array, Function, Object, Reflect};
-use rl_client::ClientOptions;
 use rl_client::content::Content;
 use rl_client::net::{NetSettings, Network};
+use rl_client::{ClientOptions, PlatformOptions};
 use rl_config::{Antialiasing, Quality, UserConfig};
 use rl_data::GameData;
 use rl_net::conditioner::NetConditions;
@@ -224,14 +224,20 @@ pub async fn list_maps() -> Result<Vec<String>, JsValue> {
 }
 
 /// Starts the game on `map`, drawing into the canvas `canvas` (a CSS
-/// selector). Resolves once the game is running; it then keeps running by
+/// selector). `decode_textures` runs the way a phone does, with textures
+/// decoded rather than block-compressed. Resolves once the game is running; it then keeps running by
 /// itself.
 ///
 /// # Errors
 ///
 /// Fails if the game is not imported, or the map's files cannot be fetched.
 #[wasm_bindgen]
-pub async fn play(canvas: String, map: String, player_name: String) -> Result<(), JsValue> {
+pub async fn play(
+    canvas: String,
+    map: String,
+    player_name: String,
+    decode_textures: bool,
+) -> Result<(), JsValue> {
     let vfs = mounted().await?;
     let data = GameData::builtin().map_err(fail)?;
     // What the client reads at startup must be in memory before it starts;
@@ -249,9 +255,12 @@ pub async fn play(canvas: String, map: String, player_name: String) -> Result<()
     };
     let mut options = ClientOptions::interactive(content, data, net);
     options.map = Some(map);
-    options.canvas = Some(canvas);
-    options.async_content = true;
-    options.scale_factor = Some(render_scale());
+    options.platform = PlatformOptions {
+        canvas: Some(canvas),
+        async_content: true,
+        scale_factor: Some(render_scale()),
+        decode_textures,
+    };
     // `run` returns at once in a browser: the app is driven by the page.
     let _ = rl_client::run(vfs, options);
     Ok(())
@@ -310,4 +319,12 @@ pub async fn probe_file(path: String) -> Result<String, JsValue> {
     Ok(format!(
         "{path}: from {origin:?}; synchronous read: {synchronous}; asynchronous read: {asynchronous}"
     ))
+}
+
+/// Bytes of texture data the game has loaded so far, for the debug panel:
+/// what the textures ask of the GPU's memory.
+#[wasm_bindgen(js_name = textureBytes)]
+#[must_use]
+pub fn texture_bytes() -> f64 {
+    rl_assets::loaded_texture_bytes() as f64
 }

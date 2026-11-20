@@ -5576,6 +5576,7 @@ dependencies = [
  "futures-lite",
  "js-sys",
  "proptest",
+ "rl_assets",
  "rl_client",
  "rl_config",
  "rl_data",

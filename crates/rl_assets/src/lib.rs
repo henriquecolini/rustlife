@@ -50,6 +50,7 @@ pub use sound::{SoundAsset, SoundLoadError, SoundLoader};
 pub use source::{SOURCE, SourceAssetPlugin, VfsAssetReader};
 pub use source_formats::props::PropKind;
 pub use sprite::{SizeLimits, SpriteAsset, SpriteLoadError, SpriteLoader};
+pub use texture::loaded_texture_bytes;
 pub use texture::{TextureDetail, VtfLoadError, VtfLoader};
 pub use vertex_lighting::{VertexLightingAsset, VhvLoadError, VhvLoader};
 
@@ -92,7 +93,8 @@ impl Plugin for SourceLoadersPlugin {
         let bc = app
             .world()
             .get_resource::<bevy_image::CompressedImageFormatSupport>()
-            .is_some_and(|support| support.0.contains(bevy_image::CompressedImageFormats::BC));
+            .is_some_and(|support| support.0.contains(bevy_image::CompressedImageFormats::BC))
+            && app.world().get_resource::<DecodeTextures>().is_none();
         if let Some(flag) = app.world().get_resource::<BlockCompression>() {
             flag.0.store(bc, Ordering::Relaxed);
         }
@@ -107,6 +109,12 @@ impl Plugin for SourceLoadersPlugin {
         );
     }
 }
+
+/// Insert before [`SourceLoadersPlugin`] to decode every texture to RGBA8
+/// even where the GPU samples block-compressed ones: what a phone's GPU, which
+/// cannot, needs, for trying that path on a desktop.
+#[derive(bevy_ecs::resource::Resource)]
+pub struct DecodeTextures;
 
 /// Whether the texture loader uploads BC textures, shared with it.
 #[derive(bevy_ecs::resource::Resource)]

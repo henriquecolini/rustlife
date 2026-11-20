@@ -14,6 +14,7 @@ mod storage;
 
 pub use boot::{
     choose_folder, import_game, list_maps, play, probe_file, remove_game, start, status,
+    texture_bytes,
 };
 pub use copy::{Progress, run_import};
 pub use error::BrowserError;

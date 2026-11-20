@@ -364,9 +364,7 @@ fn main() -> Result<()> {
             net,
             log_fps: cli.log_fps,
             silent,
-            canvas: None,
-            async_content: false,
-            scale_factor: None,
+            platform: rl_client::PlatformOptions::default(),
         },
     );
     Ok(())

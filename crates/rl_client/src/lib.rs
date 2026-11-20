@@ -146,6 +146,15 @@ pub struct ClientOptions {
     /// (`--silent`). The settings themselves are left alone, so a silent
     /// run never saves its silence to the config.
     pub silent: bool,
+    /// What differs on a platform that is not a desktop; the defaults are
+    /// the desktop's.
+    pub platform: PlatformOptions,
+}
+
+/// What differs when the client does not run as a desktop program: in a
+/// browser, in practice.
+#[derive(Debug, Clone, Default)]
+pub struct PlatformOptions {
     /// The page element (a CSS selector such as `#game`) to draw into, in a
     /// browser; `None` elsewhere.
     pub canvas: Option<String>,
@@ -156,6 +165,10 @@ pub struct ClientOptions {
     /// own ratio: a phone's screen has three, which costs the GPU nine times
     /// a 1x screen's pixels. `None` keeps the display's.
     pub scale_factor: Option<f32>,
+    /// Decode textures to plain RGBA8 even where the GPU could keep them
+    /// block-compressed: how a phone's GPU, which cannot sample BC, runs. For
+    /// testing that path on a desktop.
+    pub decode_textures: bool,
 }
 
 impl ClientOptions {
@@ -175,9 +188,7 @@ impl ClientOptions {
             net,
             log_fps: false,
             silent: false,
-            canvas: None,
-            async_content: false,
-            scale_factor: None,
+            platform: PlatformOptions::default(),
         }
     }
 }
@@ -187,7 +198,7 @@ fn primary_window(options: &ClientOptions, video: &rl_config::VideoSettings) -> 
     let resolution: bevy::window::WindowResolution = video.resolution.into();
     Window {
         title: "rustlife".to_owned(),
-        resolution: match options.scale_factor {
+        resolution: match options.platform.scale_factor {
             Some(factor) => resolution.with_scale_factor_override(factor),
             None => resolution,
         },
@@ -195,8 +206,8 @@ fn primary_window(options: &ClientOptions, video: &rl_config::VideoSettings) -> 
         present_mode: settings::present_mode(video),
         // In a browser the game fills its canvas, which follows the page,
         // and keeps keys such as Tab and the arrows from scrolling it.
-        fit_canvas_to_parent: options.canvas.is_some(),
-        canvas: options.canvas.clone(),
+        fit_canvas_to_parent: options.platform.canvas.is_some(),
+        canvas: options.platform.canvas.clone(),
         prevent_default_event_handling: true,
         ..default()
     }
@@ -214,7 +225,7 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
     let start = match (&options.net.network, &options.map) {
         (net::Network::Join(_), _) => AppState::Connecting,
         (net::Network::Host { .. }, Some(_)) => {
-            prepare::state_for_game(prepare::AsyncContent(options.async_content))
+            prepare::state_for_game(prepare::AsyncContent(options.platform.async_content))
         }
         (net::Network::Host { .. }, None) => AppState::MainMenu,
     };
@@ -230,9 +241,12 @@ pub fn run(vfs: Arc<Vfs>, options: ClientOptions) -> AppExit {
         primary_window: Some(window),
         ..default()
     }));
+    if options.platform.decode_textures {
+        app.insert_resource(rl_assets::DecodeTextures);
+    }
     app.add_plugins(SourceLoadersPlugin);
     app.add_plugins(prepare::PreparePlugin {
-        content: prepare::AsyncContent(options.async_content),
+        content: prepare::AsyncContent(options.platform.async_content),
     });
     app.add_plugins((UiPlugin, EffectMaterialPlugin));
     app.insert_resource(CurrentMap(options.map.unwrap_or_default()));

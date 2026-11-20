@@ -2,7 +2,7 @@
 // files, starts the game. The work happens in the Rust module (`rl_web`);
 // this file only draws the menu and passes what the player chooses.
 
-import init, { status, chooseFolder, importGame, listMaps, removeGame, play, probeFile } from "./pkg/rl_web.js";
+import init, { status, chooseFolder, importGame, listMaps, removeGame, play, probeFile, textureBytes } from "./pkg/rl_web.js";
 
 // For developers: `rustlife.probeFile("scripts/x.txt")` in the console.
 window.rustlife = { probeFile };
@@ -57,7 +57,8 @@ if (debug) {
   setInterval(() => {
     fps = frames; frames = 0;
     const heap = wasmMemory ? Math.round(wasmMemory.buffer.byteLength / 1048576) + " MB wasm" : "";
-    panel.querySelector("#debug-stats").textContent = `${fps} fps · ${heap}`;
+    const textures = Math.round(textureBytes() / 1048576);
+    panel.querySelector("#debug-stats").textContent = `${fps} fps · ${heap} · ${textures} MB textures`;
     if (!log.hidden) { log.textContent = logLines.join("\n"); log.scrollTop = log.scrollHeight; }
   }, 1000);
 }
@@ -228,7 +229,9 @@ $("start").onclick = async () => {
   $("loading-text").textContent = `Loading ${map}…`;
   $("loading").hidden = false;
   try {
-    await play("#game", map, name);
+    // `?textures=rgba8` decodes textures as a phone must, to try that path.
+    const decode = new URLSearchParams(location.search).get("textures") === "rgba8";
+    await play("#game", map, name, decode);
   } catch (error) {
     document.body.classList.remove("playing");
     $("loading").hidden = true;

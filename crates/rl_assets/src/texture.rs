@@ -6,7 +6,7 @@
 //! GPUs without BC support, is decoded to RGBA8 with a generated mip chain.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 
 use bevy_asset::io::Reader;
 use bevy_asset::{AssetLoader, LoadContext, RenderAssetUsages};
@@ -64,6 +64,18 @@ impl TextureDetail {
     }
 }
 
+/// Bytes of texture data the loader has produced since the program started.
+static LOADED_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Bytes of texture data loaded so far (mips included, dropped ones not): a
+/// measure of how much GPU memory the textures ask for, for diagnostics and
+/// for judging a map against a device's budget. Textures unloaded again are
+/// not subtracted.
+#[must_use]
+pub fn loaded_texture_bytes() -> u64 {
+    LOADED_BYTES.load(Ordering::Relaxed)
+}
+
 /// Loads a `.vtf` file into an [`Image`]: block-compressed when the GPU
 /// samples BC formats (`bc`), else decoded RGBA8.
 #[derive(Default, TypePath)]
@@ -88,12 +100,18 @@ impl AssetLoader for VtfLoader {
     ) -> Result<Image, VtfLoadError> {
         let mut bytes = Vec::new();
         AsyncReadExt::read_to_end(reader, &mut bytes).await?;
-        if self.bc.load(Ordering::Relaxed)
+        let image = if self.bc.load(Ordering::Relaxed)
             && let Some(texture) = vtf::compressed(&bytes)
         {
-            return Ok(image_from_blocks(texture, &self.detail));
-        }
-        Ok(image_from_decoded(vtf::decode(&bytes)?, &self.detail))
+            image_from_blocks(texture, &self.detail)
+        } else {
+            image_from_decoded(vtf::decode(&bytes)?, &self.detail)
+        };
+        LOADED_BYTES.fetch_add(
+            image.data.as_ref().map_or(0, Vec::len) as u64,
+            Ordering::Relaxed,
+        );
+        Ok(image)
     }
 
     fn extensions(&self) -> &[&str] {
