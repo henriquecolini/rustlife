@@ -22,6 +22,11 @@ vmdl.workspace = true
 vmt-parser.workspace = true
 vtf.workspace = true
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `vbsp` -> `ahash` -> `getrandom` 0.3 needs the browser backend named in
+# `.cargo/config.toml`; this enables its cargo feature.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
 [dev-dependencies]
 # `image` matches the version the `vtf` crate re-exports, so synthetic VTF
 # fixtures built with `vtf::create` share its `DynamicImage` type. Default

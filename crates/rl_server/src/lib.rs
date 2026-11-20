@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use renet::{ClientId, RenetServer, ServerEvent};
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig as NetcodeConfig};
@@ -49,6 +49,7 @@ use rl_sim::simulation::{PlayerId, Simulation, TickEvents};
 use rl_sim::weapons::WeaponId;
 use source_fs::MountOrigin;
 use thiserror::Error;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::vote::Vote;
 

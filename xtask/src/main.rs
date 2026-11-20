@@ -2,7 +2,8 @@
 //!
 //! * `ci` runs every quality gate a change must pass before it is committed:
 //!   formatting, clippy (warnings are errors), tests, documentation, dependency
-//!   audit (when `cargo-deny` is installed) and the content-free check.
+//!   audit (when `cargo-deny` is installed), a type-check for the browser
+//!   target (when it is installed) and the content-free check.
 //! * `content-tests` runs the `#[ignore]`d tests that need a real game install.
 //! * `check-assets` verifies that no Valve content is tracked by git.
 //!
@@ -56,6 +57,25 @@ fn main() -> ExitCode {
 
 type TaskResult = Result<(), String>;
 
+/// The browser target the web build is compiled for.
+const WASM_TARGET: &str = "wasm32-unknown-unknown";
+
+/// Crates that must keep compiling for the browser. The headless server
+/// binary, the inspector and `rustlife` itself are native-only.
+const WASM_CRATES: &[&str] = &[
+    "rl_assets",
+    "rl_audio",
+    "rl_client",
+    "rl_config",
+    "rl_data",
+    "rl_level",
+    "rl_net",
+    "rl_server",
+    "rl_sim",
+    "source_formats",
+    "source_fs",
+];
+
 fn ci() -> TaskResult {
     cargo(&["fmt", "--all", "--", "--check"], &[])?;
     cargo(
@@ -82,9 +102,28 @@ fn ci() -> TaskResult {
             "xtask: cargo-deny not installed; skipping dependency audit (cargo install cargo-deny)"
         );
     }
+    wasm_check()?;
     check_assets()?;
     println!("xtask: all CI checks passed");
     Ok(())
+}
+
+/// Type-checks the web-capable crates for the browser, so native-only code
+/// cannot creep into them unnoticed. Skipped, with a note, when the target is
+/// not installed.
+fn wasm_check() -> TaskResult {
+    if !has_rust_target(WASM_TARGET) {
+        eprintln!(
+            "xtask: {WASM_TARGET} not installed; skipping the browser check \
+             (rustup target add {WASM_TARGET})"
+        );
+        return Ok(());
+    }
+    let mut args = vec!["check", "--target", WASM_TARGET];
+    for name in WASM_CRATES {
+        args.extend(["-p", name]);
+    }
+    cargo(&args, &[])
 }
 
 fn content_tests() -> TaskResult {
@@ -172,6 +211,18 @@ fn has_cargo_subcommand(name: &str) -> bool {
         .args([name, "--version"])
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+/// Whether the standard library for `target` is installed.
+fn has_rust_target(target: &str) -> bool {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+    Command::new(rustc)
+        .args(["--print", "target-libdir", "--target", target])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .is_some_and(|dir| Path::new(dir.trim()).is_dir())
 }
 
 fn workspace_root() -> Result<PathBuf, String> {

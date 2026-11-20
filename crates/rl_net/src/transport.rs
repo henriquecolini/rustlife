@@ -13,11 +13,12 @@
 //!   delayed both ways, unreliable ones dropped.
 
 use std::net::{SocketAddr, UdpSocket};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use renet::{Bytes, ClientId, RenetClient};
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use thiserror::Error;
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::conditioner::{DelayLine, Delivery, NetConditions};
 use crate::protocol::{Channel, PROTOCOL_ID};

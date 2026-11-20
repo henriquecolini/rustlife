@@ -20,6 +20,7 @@ rl_sim.workspace = true
 source_fs.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+web-time.workspace = true
 
 [dev-dependencies]
 source_formats.workspace = true

@@ -2443,6 +2443,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width 0.2.2",
 ]
 
@@ -3212,8 +3214,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3223,9 +3227,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "899def5c37c4fd7b2664648c28120ecec138e4d395b459e5ca34f9cce2dd77fd"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 5.3.0",
  "wasip2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5493,6 +5499,7 @@ dependencies = [
 name = "rl_net"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "glam",
  "postcard",
  "proptest",
@@ -5504,6 +5511,7 @@ dependencies = [
  "source_formats",
  "thiserror 2.0.21",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -5521,6 +5529,7 @@ dependencies = [
  "source_fs",
  "thiserror 2.0.21",
  "tracing",
+ "web-time",
 ]
 
 [[package]]
@@ -5901,6 +5910,7 @@ dependencies = [
 name = "source_formats"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "image",
  "proptest",
  "source_fs",
@@ -6161,6 +6171,15 @@ dependencies = [
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "termcolor"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+dependencies = [
+ "winapi-util",
 ]
 
 [[package]]
@@ -6961,12 +6980,14 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",

@@ -3,3 +3,9 @@ xtask = "run --quiet --package xtask --"
 # Bevy as a shared library: rebuilding the client after a change relinks
 # only rustlife's own code instead of the whole engine.
 dev = "run -p rustlife --features bevy/dynamic_linking"
+
+# getrandom (pulled in by several dependencies) has no entropy source on
+# wasm32-unknown-unknown unless told to use the browser's `crypto`. The
+# matching cargo features are enabled in the crates that depend on it.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]

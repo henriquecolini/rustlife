@@ -33,6 +33,17 @@ pub(crate) fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Res
         }
         Ok(())
     }
+    // Targets without positional reads (the browser has no filesystem, so
+    // every call fails with `Unsupported` anyway): seek and read through the
+    // shared cursor. Content in a browser is read through the web mounts, not
+    // through `File`.
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = file;
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buf)
+    }
 }
 
 /// A bounds-checked little-endian cursor over an in-memory byte slice.

@@ -19,6 +19,11 @@ rl_sim.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+web-time.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# netcode's cipher stack uses `getrandom` 0.2, which has its own `js` feature.
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 proptest.workspace = true

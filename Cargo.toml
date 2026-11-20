@@ -81,6 +81,9 @@ vbsp = "0.9"
 vmdl = "0.2"
 vmt-parser = "0.2"
 vtf = "0.4"
+# `std::time` for browsers, where `SystemTime::now` panics; plain `std` re-exports
+# elsewhere.
+web-time = "1"
 # WESL, the shader language Bevy compiles; the version it uses, so the
 # client's tests parse its shaders as Bevy will.
 wesl = { version = "0.6", default-features = false }
