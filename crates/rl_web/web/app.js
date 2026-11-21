@@ -17,6 +17,7 @@ const NAME_KEY = "rustlife.name";
 const debug = new URLSearchParams(location.search).get("debug") === "1";
 const logLines = [];
 let wasmMemory = null;
+let textureCountFailed = false;
 let frames = 0;
 let fps = 0;
 
@@ -101,7 +102,18 @@ if (debug) {
   setInterval(() => {
     fps = frames; frames = 0;
     const heap = wasmMemory ? Math.round(wasmMemory.buffer.byteLength / 1048576) + " MB wasm" : "";
-    const textures = Math.round(textureBytes() / 1048576);
+    // The module's exports do not exist until `init` has finished, which on a
+    // phone is many seconds into the page's life; `wasmMemory` marks that.
+    let textures = 0;
+    if (wasmMemory) {
+      try {
+        textures = Math.round(textureBytes() / 1048576);
+      } catch (error) {
+        // The module is gone (it trapped, or the game ended). Say so once.
+        if (!textureCountFailed) console.warn(`texture count unavailable: ${error}`);
+        textureCountFailed = true;
+      }
+    }
     panel.querySelector("#debug-stats").textContent = `${fps} fps · ${heap} · ${textures} MB textures`;
     if (!log.hidden) { log.textContent = logLines.join("\n"); log.scrollTop = log.scrollHeight; }
   }, 1000);
@@ -118,7 +130,8 @@ console.error = (...args) => {
 };
 
 function fatal(message) {
-  $("fatal-text").textContent = (lastPanic || message || "unknown error").slice(0, 4000);
+  const gpu = gpuErrors.length ? `\n\nGPU: ${gpuErrors.join("\n")}` : "";
+  $("fatal-text").textContent = ((lastPanic || message || "unknown error") + gpu).slice(0, 4000);
   $("fatal").hidden = false;
 }
 window.addEventListener("error", (event) => {
